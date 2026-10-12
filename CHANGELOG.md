@@ -6,6 +6,15 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-12
+
+### Changed
+- **The Android app is now `com.loamnet.app`** (it was `com.loamnet.host`), the name it has on Google Play.
+  Android treats it as a different app, so 0.6.1 does not update an installed 0.5.0 or 0.6.0 from GitHub: it
+  installs beside it. To move a host phone over, run the old app until its network is no longer needed,
+  uninstall it, and install 0.6.1, which starts with the setup screens and a new network. The web app, the
+  server and `loamnet` are unchanged.
+
 ## [0.6.0] - 2026-10-10
 
 The Play launch release: Welcome screen and network rules (18+), reports moderators can act on, Android

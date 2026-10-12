@@ -14,8 +14,8 @@ export const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/MagicZebr
 /** Where the GitHub build sends people to download a newer APK. */
 export const GITHUB_RELEASES_PAGE = 'https://github.com/MagicZebraLtd/loam/releases/latest';
 /** LOAM's Play listing: the Play Store app first, the website if no store app handles `market://`. */
-export const PLAY_STORE_URL = 'market://details?id=com.loamnet.host';
-export const PLAY_STORE_WEB_URL = 'https://play.google.com/store/apps/details?id=com.loamnet.host';
+export const PLAY_STORE_URL = 'market://details?id=com.loamnet.app';
+export const PLAY_STORE_WEB_URL = 'https://play.google.com/store/apps/details?id=com.loamnet.app';
 
 /** Give up on GitHub after this long, so a dead connection doesn't leave the button spinning. */
 export const GITHUB_CHECK_TIMEOUT_MS = 10_000;
