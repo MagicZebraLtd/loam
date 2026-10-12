@@ -331,7 +331,7 @@ and its `.node` source version must stay in lockstep (change both together).
   `apps/app/plugins/with-loam-host.js` (config plugin: cleartext localhost + arm64-only ABIs +
   hotspot/WiFi/FGS permissions + `data_extraction_rules.xml` + optional `uses-feature` + the
   stale-prebuild fingerprint), `apps/app/plugins/with-release-signing.js`, `apps/app/nodejs-assets/BUILD_NATIVE_MODULES.txt` (`0`),
-  `apps/app/app.json` (package `com.loamnet.host`, `loam://` scheme, plugin), `apps/app/src/app/index.tsx` (host WebView
+  `apps/app/app.json` (package `com.loamnet.app`, `loam://` scheme, plugin), `apps/app/src/app/index.tsx` (host WebView
   screen + host menu + overlays), `apps/app/src/app/+native-intent.tsx` (incoming-URL policy), `apps/app/src/components/{host-panel,host-share-overlay,
   qr-code}.tsx`, `apps/app/src/hooks/use-hotspot.ts`, **`apps/app/modules/loam-hotspot/`** (the local
   Expo module: `expo-module.config.json`, `index.ts`, `src/*.ts`, `android/build.gradle` +

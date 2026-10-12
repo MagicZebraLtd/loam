@@ -25,7 +25,7 @@ EMU=~/Library/Android/sdk/emulator/emulator ADB=~/Library/Android/sdk/platform-t
 $EMU -avd Medium_Phone_API_35 -no-window -no-audio -no-boot-anim -no-snapshot &
 $ADB wait-for-device
 pnpm --filter app apk && $ADB install -r apps/app/loam-host.apk
-$ADB shell pm clear com.loamnet.host
+$ADB shell pm clear com.loamnet.app
 
 # A clean status bar: 5:42, full battery, no notification icons.
 $ADB shell settings put global sysui_demo_allowed 1
@@ -35,7 +35,7 @@ for args in "enter" "clock -e hhmm 1742" "battery -e level 100 -e plugged false"
 done
 
 a() { node apps/site/scripts/android.mjs "$@"; }   # a dump | a tap <text> | a shot <name>
-$ADB shell monkey -p com.loamnet.host -c android.intent.category.LAUNCHER 1
+$ADB shell monkey -p com.loamnet.app -c android.intent.category.LAUNCHER 1
 a shot android-setup-language && a tap English
 a shot android-setup-type && a tap Community
 $ADB shell input swipe 540 1900 540 500 300 && a tap Next      # the name: type "Valley Gathering"

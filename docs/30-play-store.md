@@ -7,7 +7,7 @@
 > [docs/21](21-device-verification-checklist.md).
 > The 0.5.0 `versionCode` note below is history: 0.6.0 is `versionCode` 8.
 
-Status of publishing the Android host (`apps/app`, package `com.loamnet.host`) on Google Play. Audited
+Status of publishing the Android host (`apps/app`, package `com.loamnet.app`) on Google Play. Audited
 2026-09-19 (updated 2026-09-25 after the pre-release fixes) against the release APK (`aapt2 dump badging`, `zipalign -c -P 16`, `llvm-readelf -lW` on every
 native lib) and the generated manifest. Play's thresholds move — **confirm the current target-API level
 and declaration forms in the Play Console before submitting.** The GitHub-Releases APK stays the sideload
@@ -193,8 +193,8 @@ build if that lands.
 ## Submission order
 
 1. Take the `loam-host-aab` artifact from a tag build (or run `pnpm --filter app aab` locally) and upload
-   it to **internal testing** (this also reserves the package name — `com.loamnet.host` is permanent after
-   the first upload; be sure the identity is the one you want).
+   it to **internal testing** (the package name, `com.loamnet.app`, is permanent once the Play app exists. Releases up to 0.6.0 were
+   `com.loamnet.host`; the Play app was created as `com.loamnet.app`, so 0.6.1 renamed the package to match).
 2. Console paperwork: Play App Signing, Data safety, **Target audience = 18 and over only** (LOAM is
    adults-only: the Welcome screen's "I'm 18 or over" and ACCEPTABLE_USE.md), content rating (users
    interact, unmoderated chat), the **Child Safety Standards** declaration (the published standards page
