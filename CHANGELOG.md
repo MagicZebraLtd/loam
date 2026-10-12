@@ -11,9 +11,10 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 ### Changed
 - **The Android app is now `com.loamnet.app`** (it was `com.loamnet.host`), the name it has on Google Play.
   Android treats it as a different app, so 0.6.1 does not update an installed 0.5.0 or 0.6.0 from GitHub: it
-  installs beside it. To move a host phone over, run the old app until its network is no longer needed,
-  uninstall it, and install 0.6.1, which starts with the setup screens and a new network. The web app, the
-  server and `loamnet` are unchanged.
+  installs beside it, and nothing carries over: the new app starts with the setup screens and a new,
+  empty network. Uninstalling the old app permanently deletes everything its network stored on the phone
+  (messages, pictures, files and settings), so keep it until that network is no longer needed. The web
+  app, the server and `loamnet` are unchanged.
 
 ## [0.6.0] - 2026-10-10
 
