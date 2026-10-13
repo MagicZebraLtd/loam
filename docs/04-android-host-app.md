@@ -146,7 +146,7 @@ The host runs a `WifiManager.LocalOnlyHotspot`. Joiners **Step 1** scan the WiFi
   addresses (a browser on the host phone opening the hotspot URL is not a joiner), and a candidate whose
   subnet contains one wins outright — proof, not inference (only among *eligible*
   candidates: a laptop on the host's home Wi-Fi never promotes that upstream interface); Step 2 then shows
-  **"N phones connected"**, the one signal that the whole path works; (4) when the native check positively
+  **"N devices connected"**, the one signal that the whole path works; (4) when the native check positively
   ruled the phone's own networks out and exactly one private, not-pre-existing candidate is left, it is
   taken even under an unfamiliar interface name. Anything the launcher can't tell (`rndis`/`usb`/`ncm`
   USB tethering, `bt-pan`, `p2p*` Wi-Fi Direct, tunnels, cellular) is never a candidate. `use-hotspot.ts`
@@ -213,7 +213,7 @@ With Wi-Fi off and no wired adapter — even with a VPN tunnel (`ipsec<N>`, `tun
 tethering hotspot or a stale AP interface around — there is no URL and no QR: the card says "Connect this
 phone to Wi-Fi or a wired network first", plus any other addresses as "also at". When the address is a
 wired adapter's (`WifiJoinDisplay.wired`), the status pill reads "Hosting on a wired network" and the card
-names the connection as wired instead of showing a Wi-Fi name. "N phones connected" works in both modes
+names the connection as wired instead of showing a Wi-Fi name. "N devices connected" works in both modes
 and remains the proof that the path works.
 
 **Client isolation.** Guest, hotel, café and campus networks often stop devices from reaching each other,

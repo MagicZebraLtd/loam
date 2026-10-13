@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import { t } from "../i18n";
 import { ApiError } from "../lib/api";
 import { Avatar } from "./Avatar";
+import { IconRefresh } from "./icons";
 
 type WelcomeScreenProps = {
   /** The network's name, from its config. */
@@ -57,7 +58,8 @@ export function WelcomeScreen({ nodeName, currentUser, onAgree, onReroll }: Welc
             {currentUser.displayName}
           </strong>
           {canReroll ? (
-            <button className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => void run("reroll")} type="button">
+            <button className="btn btn-secondary btn-sm welcome-reroll" disabled={!!busy} onClick={() => void run("reroll")} type="button">
+              <IconRefresh size={16} />
               {t("welcome.tryAnother")}
             </button>
           ) : null}

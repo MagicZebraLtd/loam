@@ -17,8 +17,8 @@ export const en = {
   'reset.failed': "Couldn't erase: {error}",
 
   "host.title": "LOAM host",
-  "host.connected": "Phones connected: {n}",
-  "host.noneConnected": "No phones connected yet",
+  "host.connected": "Devices connected: {n}",
+  "host.noneConnected": "No devices connected yet",
   "host.starting": "Starting host…",
   "host.running": "Host running",
   "host.stopped": "Host stopped",

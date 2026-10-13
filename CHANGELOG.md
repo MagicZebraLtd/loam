@@ -6,6 +6,12 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **"Try another name" on the Welcome screen is now a proper button**, with a border and a refresh icon. It looked like
+  a label before.
+- **The Android host counts "Devices connected"**, not "Phones connected", since laptops and tablets join too. In
+  all 15 languages.
+
 ## [0.6.2] - 2026-10-13
 
 ### Changed
