@@ -226,6 +226,17 @@ parsing, address choice, panel projection and persistence are covered by `host-m
 redaction behaviour, the wired flag (a laptop on Ethernet) and the no-internet-router case all need a
 device test.
 
+### When the server can't start
+
+`embedded-main.ts` never calls `process.exit`: under nodejs-mobile Node shares the Android app's process, so
+exiting closed the whole app before the host screen could say why. A failed boot is reported over the bridge
+(`boot_failed`, or a typed recoverable code) and the runtime stays up. A port another app already holds is
+`port_in_use`: `startEmbeddedServer` closes everything it opened, the host screen explains in the phone's
+language, and Retry re-runs the launcher's boot in-process (the same `loam-db-unlock` path as the encryption
+retries). Readiness comes only from the server's in-process `__loamReportBootReady`, never from an HTTP answer
+on `127.0.0.1:3000`, which another app could give; main.js keeps a 5-minute `boot_timeout` watchdog, retired by
+any reported failure.
+
 ### Message notifications
 
 The host phone's own person gets Android notifications for new messages while LOAM is in the background

@@ -188,7 +188,21 @@ export async function startEmbeddedServer(launcher: EmbeddedServerOptions = {}):
     process.on("SIGTERM", shutdown);
   }
 
-  await app.server.listen({ host, port });
+  try {
+    await app.server.listen({ host, port });
+  } catch (error) {
+    // Nothing is listening (another app holds the port, say): release the database and everything else
+    // this attempt opened before reporting, so the launcher can boot again in this same process without
+    // two stores open on one file.
+    if (launcher.handleSignals !== false) {
+      process.off("SIGINT", shutdown);
+      process.off("SIGTERM", shutdown);
+    }
+    await app.close().catch((closeError: unknown) => {
+      app.server.log.error(closeError, "Error closing the embedded server after a failed listen");
+    });
+    throw error;
+  }
   app.server.log.info(`LOAM embedded server listening on ${host}:${port}`);
   return app;
 }

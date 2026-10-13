@@ -76,7 +76,8 @@ const DB_ENCRYPTION_UNREADABLE_CODE = "db_encryption_unreadable";
 
 /**
  * The set of typed boot-error `.code`s that mean boot failed NON-destructively and RECOVERABLY from within
- * this same still-alive process — so, uniquely, the process must NOT be torn down (`process.exit`) for them:
+ * this same still-alive process, from disk state the launcher can fix (no boot failure exits the process any
+more; see `runBootAttempt`):
  *  - `db_encryption_unreadable`          — an unopenable DB with no start-fresh confirmation (store-lifecycle.ts). The
  *                                          RN launcher bridge (main.js's `loam-db-start-fresh`) recovers it.
  *  - `db_encryption_plaintext_unconverted` — an existing PLAINTEXT DB under a configured encrypted mode
@@ -89,9 +90,9 @@ const DB_ENCRYPTION_UNREADABLE_CODE = "db_encryption_unreadable";
  *                                          exiting would kill the very listeners that finish it.
  *  - `db_encryption_driver_missing`      — an encrypted mode with a SQLCipher driver that won't load (the
  *                                          launcher's probe normally catches this first). store-lifecycle.ts already
- *                                          reported the code; exiting would replace it with `boot_failed`
+ *                                          reported the code; a second report would replace it with `boot_failed`
  *                                          and hide the "start without encryption" recovery.
- * In every other case boot is presumed unrecoverable without intervention outside this process, so it exits.
+ * Every other failure is reported as `boot_failed` (or `port_in_use`) and the process stays up to show it.
  */
 const STAY_ALIVE_BOOT_ERROR_CODES = new Set<string>([
   DB_ENCRYPTION_UNREADABLE_CODE,
@@ -99,6 +100,18 @@ const STAY_ALIVE_BOOT_ERROR_CODES = new Set<string>([
   "db_encryption_wipe_resume",
   "db_encryption_driver_missing",
 ]);
+
+/**
+ * Another app on the phone already listens on LOAM's port. Nothing LOAM did, and nothing to recover from
+ * disk: once that app lets go, the host screen's Retry boots again in this process (`listen` failed, and
+ * `startEmbeddedServer` closed what it had opened).
+ */
+const PORT_IN_USE_CODE = "port_in_use";
+
+/** True when `error` is the `listen` failure for a port something else already holds. */
+function isAddressInUse(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "EADDRINUSE";
+}
 
 /** True when `error` carries one of the {@link STAY_ALIVE_BOOT_ERROR_CODES}. Narrow, defensive shape check
  *  — never assumes `error` is even an object. */
@@ -116,9 +129,8 @@ function hasStayAliveBootErrorCode(error: unknown): boolean {
 // this, a double-tap of the RN launcher's "start fresh" button (or any duplicate `loam-db-start-fresh`
 // message — see main.js) could call `globalThis.__loamBootEmbeddedServer()` a second time while the
 // first retry's `buildApp()`/`server.listen()` is still mid-flight: two `listen()` calls race the same
-// port, the LOSER gets an untyped `EADDRINUSE` that falls through to the generic-failure branch below,
-// and `process.exit(1)` kills the whole process — including the FIRST attempt, even if it was about to
-// recover successfully. Tracking the in-flight promise (rather than a bare boolean) also means a
+// port, and the LOSER's `EADDRINUSE` would be reported as a failed boot (it once `process.exit`ed the whole
+// process, FIRST attempt included) while the first attempt was about to recover successfully. Tracking the in-flight promise (rather than a bare boolean) also means a
 // re-entrant caller still gets a promise that resolves/rejects in step with the attempt actually doing
 // the work, instead of resolving early and racing ahead of it.
 let bootInFlight: Promise<void> | undefined;
@@ -129,8 +141,8 @@ let bootInFlight: Promise<void> | undefined;
 // retry), but a DELAYED duplicate `loam-db-start-fresh` (e.g. two taps whose second message is still in
 // flight over the bridge when the first attempt's retry already finished and started listening) would
 // then invoke `bootEmbeddedServer()` again with nothing left to stop it — a second `buildApp()`/
-// `listen()` against the now-occupied port EADDRINUSEs into the generic-failure branch and
-// `process.exit(1)`s the very server that just recovered. Tracking the last SETTLED state (not just
+// `listen()` against the now-occupied port EADDRINUSEs and would report a failed boot over the server that
+// just recovered. Tracking the last SETTLED state (not just
 // "is an attempt in flight right now") closes this: once `bootState` is `"ready"`, a further call is a
 // pure no-op — there is nothing left to retry, healthy or not.
 type BootState = "idle" | "booting" | "ready" | "boot_recoverable" | "failed";
@@ -153,7 +165,7 @@ let bootState: BootState = "idle";
  * Re-entrant-safe: a call made while a previous call is still running does not start a second
  * concurrent attempt — it just returns the SAME in-flight promise, so both callers observe the one
  * attempt's real outcome. The guard clears once that attempt settles (success, the recoverable
- * `db_encryption_unreadable` return, or the fatal `process.exit`), so a later, genuinely separate call
+ * `db_encryption_unreadable` return, or a reported failure), so a later, genuinely separate call
  * (e.g. a second start-fresh confirmation after the first attempt already finished) still boots — UNLESS
  * the settled state is already `"ready"`, in which case this no-ops instead: a server is already up
  * and healthy, and a second `listen()` against its own port can only ever fail destructively.
@@ -182,7 +194,8 @@ async function runBootAttempt(start: () => Promise<LoamApp>): Promise<void> {
   const onUnhandledDuringBoot = (reason: unknown): void => {
     console.error("Unhandled rejection during embedded server startup:", reason);
     reportBootError(messageOf(reason), "boot_unhandled_rejection");
-    process.exit(1);
+    // No `process.exit`: see the generic failure below.
+    bootState = "failed";
   };
 
   // Registered only for the boot window (removed in `finally`) so it can never mask or mis-attribute
@@ -224,9 +237,18 @@ async function runBootAttempt(start: () => Promise<LoamApp>): Promise<void> {
       return;
     }
 
+    if (isAddressInUse(error)) {
+      bootState = "boot_recoverable";
+      reportBootError(messageOf(error), PORT_IN_USE_CODE);
+      return;
+    }
+
+    // Report and stay alive, never `process.exit`: under nodejs-mobile Node runs inside the Android app's
+    // own process, so exiting ends the whole app before the host screen can show this error, which looks
+    // like a crash to the operator (and to Play's pre-launch checks). The host screen shows the message
+    // and asks the operator to close and reopen LOAM.
     bootState = "failed";
     reportBootError(messageOf(error), "boot_failed");
-    process.exit(1);
   } finally {
     process.off("unhandledRejection", onUnhandledDuringBoot);
   }

@@ -101,6 +101,10 @@ const DB_UNREADABLE_CODE = 'db_encryption_unreadable';
 // after a transient Keystore hiccup) — see the `dbLocked` block below.
 const DB_LOCKED_CODE = 'db_encryption_locked';
 
+// Another app on the phone already listens on LOAM's port, so the embedded server couldn't start
+// (embedded-main.ts). The runtime stays alive; Retry boots again in-process once that app lets go.
+const PORT_IN_USE_CODE = 'port_in_use';
+
 /** A non-fatal boot-time notice (status `'notice'`, distinct from `'error'` — see `onStatus`). Kept in
  * its own state, separate from `status`/`errorMessage`/`errorCode`, specifically so it SURVIVES the
  * `ready` transition instead of being silently cleared by it: a downgrade to plaintext, or
@@ -367,6 +371,7 @@ function HostScreen() {
   // fatal block's visibility in the render. Computed here (rather than after the `status === 'ready'`
   // early return) so the effect that depends on it obeys the Rules of Hooks.
   const dbLocked = status === 'error' && errorCode === DB_LOCKED_CODE;
+  const portInUse = status === 'error' && errorCode === PORT_IN_USE_CODE;
   // Same hook-ordering reasoning: the unreadable-DB recovery (below the ready-return) also wants to know
   // whether the mode is `passphrase`, to offer a "mistyped it? enter it again" path (the passphrase is
   // asked for at EVERY start, so a typo lands here).
@@ -1546,11 +1551,15 @@ function HostScreen() {
               </>
             ) : (
               <>
-                <ThemedText type="subtitle">
-                  {nodeStatus === 'ready' ? t('boot.loadFailedTitle') : t('boot.startFailedTitle')}
+                <ThemedText type="subtitle" style={styles.centerText}>
+                  {nodeStatus === 'ready'
+                    ? t('boot.loadFailedTitle')
+                    : portInUse
+                      ? t('boot.portInUseTitle')
+                      : t('boot.startFailedTitle')}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.notReady')}
+                  {portInUse ? t('boot.portInUseBody') : (errorMessage ?? t('boot.notReady'))}
                 </ThemedText>
                 {nodeStatus === 'ready' ? (
                   // The server is up; a Retry just remounts the WebView for a fresh load.
@@ -1562,6 +1571,15 @@ function HostScreen() {
                     }}>
                     <ThemedView type="backgroundElement" style={styles.retry}>
                       <ThemedText type="link">{t('common.retry')}</ThemedText>
+                    </ThemedView>
+                  </Pressable>
+                ) : portInUse ? (
+                  // The runtime stayed alive and released everything it had opened: Retry boots again
+                  // in-process through the same key-resolution path as the unlock retry. The button's own
+                  // label shows the attempt; a port still taken just brings this screen back.
+                  <Pressable onPress={() => void handleRetryUnlock()} disabled={unlockBusy} accessibilityRole="button">
+                    <ThemedView type="backgroundElement" style={styles.retry}>
+                      <ThemedText type="link">{unlockBusy ? t('boot.retrying') : t('common.retry')}</ThemedText>
                     </ThemedView>
                   </Pressable>
                 ) : dbUnreadable || dbLocked || dbPlaintextUnconverted || dbDriverMissing ? null : (

@@ -212,6 +212,8 @@ export const en = {
   "boot.startingBody": "Booting the embedded server. First launch can take up to a minute.",
   "boot.loadFailedTitle": "Couldn't load LOAM",
   "boot.startFailedTitle": "Host failed to start",
+  "boot.portInUseTitle": "Another app is using LOAM's port",
+  "boot.portInUseBody": "LOAM needs network port 3000 on this phone, and another app is already using it. Close that app, or restart the phone, then tap Retry.",
   "boot.notReady": "The embedded server did not become ready.",
   "boot.closeReopen": "Close and reopen the app to try again.",
   // The notification permission prompt and the foreground service's own notification (src/lib/host-service.ts).

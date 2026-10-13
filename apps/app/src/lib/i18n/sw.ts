@@ -206,6 +206,8 @@ export const sw: Partial<AppCatalog> = {
   "boot.startingBody": "Inaanzisha seva iliyojengwa ndani. Uzinduzi wa kwanza unaweza kuchukua hadi dakika moja.",
   "boot.loadFailedTitle": "Imeshindwa kupakia LOAM",
   "boot.startFailedTitle": "Mwenyeji ameshindwa kuanza",
+  "boot.portInUseTitle": "Programu nyingine inatumia mlango wa LOAM",
+  "boot.portInUseBody": "LOAM inahitaji mlango wa mtandao 3000 kwenye simu hii, na programu nyingine tayari inautumia. Funga programu hiyo au uwashe upya simu, kisha gusa Jaribu tena.",
   "boot.notReady": "Seva iliyojengwa ndani haikuwa tayari.",
   "boot.closeReopen": "Funga programu kisha uifungue tena ili kujaribu tena.",
   "notify.title": "Ruhusu arifa?",

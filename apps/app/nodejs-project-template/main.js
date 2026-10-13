@@ -65,12 +65,12 @@ function notify(status, extra) {
 }
 
 // Boot-notice codes: these mean the server DEGRADED but kept booting (`db_encryption_recovered_fresh`: a
-// fresh DB after an unreadable one), never that boot failed. The readiness probe below
-// (`startReadinessProbe`/`probeServer`) still runs and will post 'ready' once the server actually answers.
+// fresh DB after an unreadable one), never that boot failed. The server's own `__loamReportBootReady` still
+// posts 'ready' once it is listening.
 // Reported as status 'notice', NOT 'error': the RN host screen must not treat these as fatal, and a notice
 // must survive the 'ready' that follows it (see index.tsx's persistent notice state). Any OTHER code
-// (e.g. `boot_failed`/`boot_unhandled_rejection` from embedded-main.ts, where the process exits and
-// 'ready' can never follow) stays a real 'error'.
+// (e.g. `boot_failed`/`boot_unhandled_rejection`/`port_in_use` from embedded-main.ts, where boot failed and
+// only a retry or a restart can bring 'ready') stays a real 'error'.
 //
 // `db_encryption_unreadable` is deliberately NOT in this list: the server did NOT keep booting for it —
 // `openInitialStore` threw and boot failed. It arrives as a single 'error' with the specific code, the
@@ -96,6 +96,10 @@ const DB_ENCRYPTION_NOTICE_CODES = ['db_encryption_recovered_fresh'];
 // choke point decides notice-vs-fatal for both callers.
 global.__loamReportBootError = function (message, code) {
   const isNotice = DB_ENCRYPTION_NOTICE_CODES.indexOf(code) !== -1;
+  if (!isNotice) {
+    // This attempt is over: retire its watchdog, so a timeout can't replace the real reason later.
+    readinessPollGeneration += 1;
+  }
   notify(isNotice ? 'notice' : 'error', { message: message, code: code });
 };
 
@@ -277,80 +281,41 @@ function announceReady() {
   setInterval(postHostInfo, 5000);
 }
 
-// The DIRECT signal — embedded-main.ts calls this the instant `server.listen()`
-// succeeds, independent of (and not racing) this file's own poll below. Installed on `global` BEFORE
-// requiring the server bundle, same pattern as `__loamReportBootError`/`__loamRequestWipeRestart`.
-// The poll (`probeServer`/`retry`) gives up after ~5 minutes, so without this a LATER successful boot —
-// e.g. the in-process retry after a "Preserve old database & start fresh" confirmation, possibly minutes
-// after the original poll gave up — would never tell the host screen it was ready, and the WebView would
-// never mount even though the server was healthy.
+// The ONLY readiness signal: embedded-main.ts calls this the instant its own `server.listen()` succeeds.
+// Installed on `global` BEFORE requiring the server bundle, same pattern as
+// `__loamReportBootError`/`__loamRequestWipeRestart`. Being in-process, nothing else on the phone can send
+// it (an HTTP answer on the port could come from another app; see `startReadinessProbe`), and it covers a
+// LATER successful boot too, e.g. the in-process retry after "Preserve old database & start fresh".
 global.__loamReportBootReady = announceReady;
 
-// A "singleton" generation counter for the readiness poll below — `startReadinessProbe`
-// bumps it and starts a FRESH polling chain every time it's called (once per boot attempt: the initial
-// boot, and again after every in-process retry — start-fresh recovery or a db-unlock retry), while any
-// OLDER chain still ticking away in the background self-cancels on its next tick instead of continuing
-// to run alongside the new one. Without this, a retry that starts its own poll while an earlier one
-// hasn't given up yet would leave two overlapping polling loops running concurrently.
+// A "singleton" generation counter for the boot watchdog below — `startReadinessProbe` bumps it and arms a
+// FRESH watchdog every time it's called (once per boot attempt: the initial boot, and again after every
+// in-process retry — start-fresh recovery, a db-unlock retry or a port retry), so an OLDER watchdog that
+// fires later sees it was superseded and stays quiet. A reported boot failure bumps it too (see
+// `__loamReportBootError`), so the timeout can't overwrite that failure's message.
 let readinessPollGeneration = 0;
 
-/** Start a brand-new readiness-poll chain, superseding any still-running older one. */
-function startReadinessProbe() {
-  readinessPollGeneration += 1;
-  probeServer(readinessPollGeneration, 0);
-}
+/** How long a boot may take before the host screen is told it didn't become ready (~5 minutes). */
+const READY_TIMEOUT_MS = 300_000;
 
 /**
- * Poll the embedded server until it answers, then tell the host screen it can load the WebView.
- * The server listens asynchronously after require(), so we can't await it here — polling also
- * confirms the HTTP surface is actually serving before the WebView navigates to it. `generation` ties
- * this chain to the `startReadinessProbe` call that started it (the singleton guard, see above) — a
- * newer call bumps `readinessPollGeneration`, and this chain quietly stops the moment it notices.
+ * Arm the boot watchdog for this attempt, superseding any older one. Readiness itself comes ONLY from the
+ * server's in-process `__loamReportBootReady` (embedded-main.ts, once its own `listen()` succeeded), never
+ * from an HTTP answer on 127.0.0.1:PORT: any app on the phone can listen there, and if LOAM's own listen
+ * failed (`port_in_use`) that answer would be another app's, which must never get the WebView, the host
+ * token or the transport key. This only reports a boot that never finished.
  */
-function probeServer(generation, attempt) {
-  if (generation !== readinessPollGeneration) {
-    return; // superseded by a newer probe (a later retry) — this older chain has nothing left to do
-  }
-  // Probe /api/health, NOT /api/config: config mints a session and, on a fresh node, grants the
-  // first caller `firstUser` admin — a loopback probe would silently steal admin from the operator
-  // (and its cookie is discarded here), disabling the kill switch and moderation. /api/health
-  // creates no identity.
-  const request = http.get(
-    { host: '127.0.0.1', port: PORT, path: '/api/health', timeout: 2000 },
-    (response) => {
-      response.resume();
-      if (generation !== readinessPollGeneration) {
-        return;
-      }
-      if (response.statusCode && response.statusCode < 500) {
-        announceReady();
-      } else {
-        retry(generation, attempt);
-      }
-    },
-  );
-  request.on('error', () => retry(generation, attempt));
-  request.on('timeout', () => {
-    request.destroy();
-    retry(generation, attempt);
-  });
-}
-
-/** Retry the readiness probe with a fixed backoff, giving up after ~5 minutes. */
-function retry(generation, attempt) {
-  if (generation !== readinessPollGeneration) {
-    return;
-  }
-  if (attempt > 600) {
+function startReadinessProbe() {
+  readinessPollGeneration += 1;
+  const generation = readinessPollGeneration;
+  setTimeout(function () {
+    if (generation !== readinessPollGeneration || serverReadyAnnounced) {
+      return;
+    }
     // An explicit code so index.tsx can tell THIS specific give-up apart from other generic errors and
-    // keep an active "Preserve old database & start fresh" recovery state (db_encryption_unreadable) from
-    // being clobbered when this timeout fires mid-retry. (This give-up doesn't matter for readiness itself —
-    // the direct `__loamReportBootReady` signal above doesn't depend on this poll at all — but it's still
-    // useful liveness diagnostics, and a fresh `startReadinessProbe()` call on the next retry supersedes it.)
+    // keep an active recovery state (db_encryption_unreadable and the like) from being clobbered by it.
     notify('error', { message: 'Server did not become ready in time.', code: 'boot_timeout' });
-    return;
-  }
-  setTimeout(() => probeServer(generation, attempt + 1), 500);
+  }, READY_TIMEOUT_MS);
 }
 
 // ---- On-device LLM bridge (optional) --------------------------------------------------------

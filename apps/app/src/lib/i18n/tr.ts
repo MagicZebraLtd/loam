@@ -206,6 +206,8 @@ export const tr: Partial<AppCatalog> = {
   "boot.startingBody": "Gömülü sunucu başlatılıyor. İlk açılış bir dakikaya kadar sürebilir.",
   "boot.loadFailedTitle": "LOAM yüklenemedi",
   "boot.startFailedTitle": "Sunucu başlatılamadı",
+  "boot.portInUseTitle": "LOAM'ın bağlantı noktasını başka bir uygulama kullanıyor",
+  "boot.portInUseBody": "LOAM'ın bu telefonda 3000 numaralı ağ bağlantı noktasına ihtiyacı var ve başka bir uygulama onu zaten kullanıyor. O uygulamayı kapatın veya telefonu yeniden başlatın, sonra Tekrar dene'ye dokunun.",
   "boot.notReady": "Gömülü sunucu hazır duruma gelmedi.",
   "boot.closeReopen": "Yeniden denemek için uygulamayı kapatıp yeniden açın.",
   "notify.title": "Bildirimlere izin verilsin mi?",

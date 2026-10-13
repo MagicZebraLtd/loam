@@ -206,6 +206,8 @@ export const fr: Partial<AppCatalog> = {
   "boot.startingBody": "Démarrage du serveur embarqué. Le premier lancement peut prendre jusqu'à une minute.",
   "boot.loadFailedTitle": "Impossible de charger LOAM",
   "boot.startFailedTitle": "L'hôte n'a pas démarré",
+  "boot.portInUseTitle": "Une autre application utilise le port de LOAM",
+  "boot.portInUseBody": "LOAM a besoin du port réseau 3000 de ce téléphone, et une autre application l'utilise déjà. Fermez cette application ou redémarrez le téléphone, puis touchez Réessayer.",
   "boot.notReady": "Le serveur embarqué n'a jamais été prêt.",
   "boot.closeReopen": "Fermez l'application et rouvrez-la pour réessayer.",
   "notify.title": "Autoriser les notifications ?",

@@ -206,6 +206,8 @@ export const ps: Partial<AppCatalog> = {
   "boot.startingBody": "داخلي سرور پیلېږي. لومړی پیل تر یوې دقیقې وخت نیولی شي.",
   "boot.loadFailedTitle": "LOAM خلاص نه شو",
   "boot.startFailedTitle": "کوربه پیل نه شو",
+  "boot.portInUseTitle": "بل اپ د LOAM پورټ کاروي",
+  "boot.portInUseBody": "LOAM په دې تلیفون کې د شبکې 3000 پورټ ته اړتیا لري، او بل اپ یې دمخه کاروي. هغه اپ وتړئ یا تلیفون بیا چالان کړئ، بیا «بیا هڅه وکړئ» کېکاږئ.",
   "boot.notReady": "داخلي سرور چمتو نه شو.",
   "boot.closeReopen": "د بیا هڅې لپاره اپ بند کړئ او بیا یې پرانیزئ.",
   "notify.title": "خبرتیاوو ته اجازه ورکړل شي؟",

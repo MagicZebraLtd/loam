@@ -50,7 +50,7 @@ describe("embedded-main boot-error reporting", () => {
     vi.doUnmock("./embedded.js");
   });
 
-  it("reports a rejected boot promise over the RN bridge instead of exiting silently", async () => {
+  it("reports a rejected boot promise over the RN bridge and stays alive (exiting would end the Android app)", async () => {
     const reports = installFakeBridge();
 
     vi.doMock("./embedded.js", () => ({
@@ -62,7 +62,7 @@ describe("embedded-main boot-error reporting", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(reports).toEqual([{ message: "LOAM_DATA_DIR must be set", code: "boot_failed" }]);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("reports a rejection that escapes the boot promise (unhandledRejection) while boot is still pending", async () => {
@@ -79,7 +79,32 @@ describe("embedded-main boot-error reporting", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(reports).toEqual([{ message: "stray failure mid-boot", code: "boot_unhandled_rejection" }]);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports a taken port as port_in_use, and boots on a later retry once it's free", async () => {
+    const reports = installFakeBridge();
+    const taken = Object.assign(new Error("listen EADDRINUSE: address already in use 0.0.0.0:3000"), { code: "EADDRINUSE" });
+    const start = vi.fn().mockRejectedValueOnce(taken).mockResolvedValue({});
+    vi.doMock("./embedded.js", () => ({ startEmbeddedServer: start }));
+
+    await import("./embedded-main.js");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(reports).toEqual([{ message: taken.message, code: "port_in_use" }]);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // The host screen's Retry re-runs the launcher's boot, which calls the hook again.
+    const ready = vi.fn();
+    (globalThis as { __loamReportBootReady?: () => void }).__loamReportBootReady = ready;
+    try {
+      await (globalThis as unknown as { __loamBootEmbeddedServer: () => Promise<void> }).__loamBootEmbeddedServer();
+    } finally {
+      delete (globalThis as { __loamReportBootReady?: () => void }).__loamReportBootReady;
+    }
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(ready).toHaveBeenCalledTimes(1);
+    expect(reports).toHaveLength(1);
   });
 
   it("never reports and removes its unhandledRejection listener once boot succeeds", async () => {

@@ -206,6 +206,8 @@ export const ar: Partial<AppCatalog> = {
   "boot.startingBody": "جارٍ تشغيل الخادم المضمّن. قد يستغرق التشغيل الأول حتى دقيقة.",
   "boot.loadFailedTitle": "تعذّر تحميل LOAM",
   "boot.startFailedTitle": "تعذّر بدء المضيف",
+  "boot.portInUseTitle": "تطبيق آخر يستخدم منفذ LOAM",
+  "boot.portInUseBody": "يحتاج LOAM إلى منفذ الشبكة 3000 على هذا الهاتف، وتطبيق آخر يستخدمه بالفعل. أغلق ذلك التطبيق أو أعد تشغيل الهاتف، ثم اضغط إعادة المحاولة.",
   "boot.notReady": "لم يصبح الخادم المضمّن جاهزًا.",
   "boot.closeReopen": "أغلق التطبيق ثم افتحه مجددًا لإعادة المحاولة.",
   "notify.title": "السماح بالإشعارات؟",

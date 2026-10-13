@@ -206,6 +206,8 @@ export const pt: Partial<AppCatalog> = {
   "boot.startingBody": "Iniciando o servidor integrado. A primeira inicialização pode levar até um minuto.",
   "boot.loadFailedTitle": "Não foi possível carregar o LOAM",
   "boot.startFailedTitle": "O anfitrião não conseguiu iniciar",
+  "boot.portInUseTitle": "Outro app está usando a porta do LOAM",
+  "boot.portInUseBody": "O LOAM precisa da porta de rede 3000 deste celular, e outro app já está usando essa porta. Feche esse app ou reinicie o celular e toque em Tentar novamente.",
   "boot.notReady": "O servidor integrado não ficou pronto.",
   "boot.closeReopen": "Feche e abra o app de novo para tentar novamente.",
   "notify.title": "Permitir notificações?",
