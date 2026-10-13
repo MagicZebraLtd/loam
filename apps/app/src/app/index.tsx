@@ -587,6 +587,11 @@ function HostScreen() {
     nodejs.channel.addListener('loam-message-notice', (payload: unknown) => {
       messageNotifier.notice(payload);
     });
+    // Every Emergency Reset, however it was started (the server's `__loamHostReset`, via main.js): the
+    // notifications show the network's messages, so they go even if this WebView never hears the reset.
+    nodejs.channel.addListener('loam-host-reset', () => {
+      messageNotifier.clearAll();
+    });
     // Answer optional on-device LLM requests from the embedded server (no-op unless the operator
     // enables the on-device backend and a model is wired — see docs/06).
     const cleanupLlm = registerOnDeviceLlm(nodejs.channel);
@@ -611,6 +616,7 @@ function HostScreen() {
       nodejs.channel.removeAllListeners('loam-hostinfo');
       nodejs.channel.removeAllListeners('loam-wipe-restart');
       nodejs.channel.removeAllListeners('loam-message-notice');
+      nodejs.channel.removeAllListeners('loam-host-reset');
       cleanupLlm();
       cleanupMesh();
       cleanupDbEncryption();

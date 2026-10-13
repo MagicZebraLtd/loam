@@ -118,6 +118,8 @@ export type MessageNotifier = {
   setLevel: (level: AlertLevel) => void;
   /** LOAM came to the front: the person can see the messages, so their notifications go. */
   appBecameActive: () => void;
+  /** Remove every message notification now (an Emergency Reset erased what they show). */
+  clearAll: () => void;
   level: () => AlertLevel;
 };
 
@@ -167,6 +169,10 @@ export function createMessageNotifier(deps: MessageNotifierDeps): MessageNotifie
       void deps.writeLevel(next).catch(() => undefined);
     },
     appBecameActive() {
+      counts.clear();
+      deps.clear();
+    },
+    clearAll() {
       counts.clear();
       deps.clear();
     },

@@ -146,15 +146,21 @@ function sharedAudioContext(): AudioContext | undefined {
 }
 
 /**
- * Browsers start audio suspended until the person interacts with the page. Resume it on the first tap or
- * key press (agreeing to the rules is one), so a later alert can play. Returns a function that stops
- * listening.
+ * Browsers start audio suspended until the person interacts with the page. Resume it on their taps and key
+ * presses until it is running (agreeing to the rules is one), so a later alert can play. Only some events
+ * count as that interaction: for touch it is `pointerup`/`touchend`/`click`, not `pointerdown`
+ * (https://html.spec.whatwg.org/multipage/interaction.html#activation-triggering-input-event), and a resume
+ * outside one leaves the audio suspended, so every such event tries again until one works. Returns a
+ * function that stops listening.
  */
 export function unlockAudioOnFirstGesture(target: Window = window): () => void {
-  const events = ["pointerdown", "keydown"] as const;
+  const events = ["pointerup", "touchend", "click", "mousedown", "keydown"] as const;
   const unlock = (): void => {
-    void resumeAudio();
-    stop();
+    void resumeAudio().then(() => {
+      if (sharedAudioContext()?.state === "running") {
+        stop();
+      }
+    });
   };
   function stop(): void {
     for (const name of events) {

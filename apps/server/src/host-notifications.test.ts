@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LoamApp } from "./app.js";
 import { HOST_NOTICE_BODY_MAX_LENGTH } from "./realtime.js";
@@ -10,6 +10,7 @@ const HOST_TOKEN = "host-token-notifications-0123456789abcdefghij";
 type Hooked = typeof globalThis & { __loamNotifyHost?: (notice: HostMessageNotice) => void };
 
 let notices: HostMessageNotice[] = [];
+let cleanupHook: (() => void) | undefined;
 
 beforeEach(() => {
   notices = [];
@@ -18,6 +19,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   delete (globalThis as Hooked).__loamNotifyHost;
+  cleanupHook?.();
+  cleanupHook = undefined;
   await teardownApps();
 });
 
@@ -137,14 +140,29 @@ describe("Android notifications for the host phone's person", () => {
     expect(notices.map((notice) => notice.body)).toEqual(["now"]);
   });
 
-  it("forgets the host's person in an Emergency Reset", async () => {
+  it("forgets the host's person in an Emergency Reset, and tells the launcher to clear the notifications", async () => {
+    const resets = vi.fn();
+    (globalThis as { __loamHostReset?: () => void }).__loamHostReset = resets;
+    cleanupHook = () => delete (globalThis as { __loamHostReset?: () => void }).__loamHostReset;
     const app = await makeApp({ killSwitch: { enabled: true, requireConfirmation: false } }, { hostToken: HOST_TOKEN });
     const host = await newSession(app);
     expect((await claim(app, host.cookie, HOST_TOKEN)).statusCode).toBe(200);
 
+    // Run by another admin, from a browser: the host's WebView takes no part.
+    const other = await newSession(app);
     expect(
-      (await app.server.inject({ method: "POST", url: "/api/admin/kill-switch", headers: { cookie: host.cookie }, payload: {} })).statusCode,
+      (
+        await app.server.inject({
+          method: "POST",
+          url: `/api/admin/users/${other.userId}/promote`,
+          headers: { cookie: host.cookie },
+        })
+      ).statusCode,
     ).toBe(200);
+    expect(
+      (await app.server.inject({ method: "POST", url: "/api/admin/kill-switch", headers: { cookie: other.cookie }, payload: {} })).statusCode,
+    ).toBe(200);
+    expect(resets).toHaveBeenCalledTimes(1);
 
     const member = await newSession(app);
     await post(app, member.cookie, { type: "channelPost", channelId: "general", body: "after the reset" });

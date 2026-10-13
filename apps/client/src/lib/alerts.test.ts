@@ -99,3 +99,61 @@ describe("createAlerter", () => {
     expect(vibrate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("unlockAudioOnFirstGesture", () => {
+  type FakeContext = { state: string; resume: () => Promise<void> };
+  let contexts: FakeContext[];
+  // Whether the next resume() is allowed (as inside a real activation) or leaves the audio suspended.
+  let allowed: boolean;
+
+  beforeEach(() => {
+    vi.resetModules();
+    contexts = [];
+    allowed = false;
+    (window as unknown as { AudioContext: unknown }).AudioContext = class {
+      state = "suspended";
+      constructor() {
+        contexts.push(this as unknown as FakeContext);
+      }
+      resume = vi.fn(async () => {
+        if (allowed) {
+          this.state = "running";
+        }
+      });
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { AudioContext?: unknown }).AudioContext;
+  });
+
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("ignores a touch's pointerdown, keeps trying until a tap unlocks, then stops listening", async () => {
+    const { unlockAudioOnFirstGesture } = await import("./alerts");
+    const stop = unlockAudioOnFirstGesture();
+
+    // pointerdown from a touch is not a user activation: not listened to at all.
+    window.dispatchEvent(new Event("pointerdown"));
+    await settle();
+    expect(contexts).toHaveLength(0);
+
+    // A tap whose resume() doesn't take (outside an activation) leaves the listeners in place.
+    window.dispatchEvent(new Event("touchend"));
+    await settle();
+    expect(contexts[0].state).toBe("suspended");
+
+    allowed = true;
+    window.dispatchEvent(new Event("pointerup"));
+    await settle();
+    expect(contexts[0].state).toBe("running");
+
+    const resumes = (contexts[0].resume as ReturnType<typeof vi.fn>).mock.calls.length;
+    window.dispatchEvent(new Event("click"));
+    await settle();
+    expect((contexts[0].resume as ReturnType<typeof vi.fn>).mock.calls.length).toBe(resumes);
+    stop();
+  });
+});

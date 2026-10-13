@@ -60,6 +60,16 @@ export function createKillSwitch(ctx: AppContext) {
     return attempt;
   }
 
+  /** Tell the Android launcher a reset has begun (`globalThis.__loamHostReset`, main.js), so it clears the host
+   *  phone's message notifications. Absent on every other node; never throws into the wipe. */
+  function notifyHostOfReset(): void {
+    try {
+      (globalThis as { __loamHostReset?: () => void }).__loamHostReset?.();
+    } catch (error) {
+      ctx.server.log.warn({ err: error }, "Couldn't tell the host phone to clear its message notifications");
+    }
+  }
+
   /** The actual kill-switch work, split out so {@link executeKillSwitch} can guarantee `wipeInProgress`
    *  is cleared via `finally` regardless of how this returns. */
   async function executeKillSwitchBody(): Promise<KillSwitchResult> {
@@ -70,6 +80,9 @@ export function createKillSwitch(ctx: AppContext) {
     ctx.adminClaimCodes.clear();
     // The host phone's person is about to be erased; its WebView presents the host token again as the new one.
     ctx.hostDeviceUserId = undefined;
+    // And its message notifications (their text is this network's content) go now, through the launcher,
+    // whoever ran the reset: the host's WebView may be suspended or offline and never hear the `wipe` event.
+    notifyHostOfReset();
     // Whether this run committed the `{ phase: "delete-pending", config }` wipe journal to disk. EVERY branch
     // writes it before its first destructive step, so a `wipeAll()` or reopen that throws can never leave the
     // node locked in memory only, with the next boot serving the original messages. It decides what an

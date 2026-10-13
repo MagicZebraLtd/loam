@@ -235,7 +235,8 @@ exiting closed the whole app before the host screen could say why. A failed boot
 language, and Retry re-runs the launcher's boot in-process (the same `loam-db-unlock` path as the encryption
 retries). Readiness comes only from the server's in-process `__loamReportBootReady`, never from an HTTP answer
 on `127.0.0.1:3000`, which another app could give; main.js keeps a 5-minute `boot_timeout` watchdog, retired by
-any reported failure.
+any reported failure. For the same reason main.js sends no host-token request (`meshRequest`: the mesh bridge,
+`/api/host/*`) until that signal has arrived, so a squatter on the port never sees the token.
 
 ### Message notifications
 
@@ -261,8 +262,9 @@ a tone and/or vibrates while its page is open (`apps/client/src/lib/alerts.ts`, 
   which the person changes in Android's settings for LOAM. The lock screen shows only "LOAM: New message"
   unless the person allows private content there. A tap opens LOAM at that conversation (the key rides the
   launch intent; `onOpenConversation` while running, `takeOpenedConversation` from cold). They are all
-  cleared when LOAM comes to the front, when the web client reports a reset (`loam-wipe`) and when LOAM
-  closes after an Emergency reset.
+  cleared when LOAM comes to the front, at the start of every Emergency Reset (the kill switch calls
+  `globalThis.__loamHostReset`, main.js posts `loam-host-reset`, whoever ran the reset and even with the host's
+  WebView suspended), when the web client reports a reset (`loam-wipe`) and when LOAM closes after one.
 - **Permission.** The `POST_NOTIFICATIONS` prompt the hosting notice already asks covers these; no other
   permission is involved, and nothing leaves the phone.
 

@@ -143,6 +143,16 @@ describe('createMessageNotifier', () => {
     expect(shown.at(-1)?.count).toBe(1);
   });
 
+  it('clears every notification and count on a reset', () => {
+    const { notifier, shown, clear } = harness();
+
+    notifier.notice(dm);
+    notifier.clearAll();
+    expect(clear).toHaveBeenCalledTimes(1);
+    notifier.notice(dm);
+    expect(shown.at(-1)?.count).toBe(1);
+  });
+
   it('ignores a malformed notice', () => {
     const { notifier, shown } = harness();
     expect(notifier.notice({ conversation: 'dm:x' })).toBe(false);

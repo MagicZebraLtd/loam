@@ -49,7 +49,13 @@ vi.mock('@/mesh/mesh-courier', () => ({ registerMeshCourier: () => () => undefin
 vi.mock('@/lib/message-notifications', () => ({
   alertLevelForClientMessage: () => undefined,
   conversationPath: () => undefined,
-  messageNotifier: { load: async () => 'dms', notice: () => false, setLevel: () => undefined, appBecameActive: () => undefined },
+  messageNotifier: {
+    load: async () => 'dms',
+    notice: () => false,
+    setLevel: () => undefined,
+    appBecameActive: () => undefined,
+    clearAll: () => undefined,
+  },
 }));
 vi.mock('../../modules/loam-hotspot', () => ({
   addOpenConversationListener: () => () => undefined,

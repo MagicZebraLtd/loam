@@ -144,6 +144,18 @@ global.__loamReportDbKeyMigrated = function (requestId) {
 // the text. Forward it to RN, which shows it as an Android notification while LOAM is in the background
 // (src/lib/message-notifier.ts decides). Best-effort, installed BEFORE requiring the server bundle like the
 // hooks above; the notification never leaves this phone.
+// The server's kill switch calls this at the start of EVERY Emergency Reset (`globalThis.__loamHostReset`,
+// apps/server/src/kill-switch.ts), whoever ran it and whatever the encryption mode, so RN removes the
+// message notifications (their text is the network's content) even when the host's WebView is suspended or
+// disconnected and never hears the reset itself. Best-effort, installed BEFORE requiring the server bundle.
+global.__loamHostReset = function () {
+  try {
+    rnBridge.channel.post('loam-host-reset');
+  } catch (err) {
+    console.error('Failed to post loam-host-reset to the RN host', err);
+  }
+};
+
 global.__loamNotifyHost = function (notice) {
   try {
     rnBridge.channel.post('loam-message-notice', notice);
@@ -405,8 +417,18 @@ let meshOutbound = []; // cached [{ id, base64 }] this node currently offers
 const meshSentToPeer = new Map(); // peerId -> Set(blobId) already pushed this session (bounded)
 const MESH_MAX_TRACKED_PEERS = 50;
 
-/** Loopback JSON request to the embedded server's mesh bridge endpoints. Calls back (err, status, json). */
+/**
+ * Loopback JSON request to the embedded server's launcher-only endpoints (mesh bridge, `/api/host/*`), carrying
+ * the host token. Calls back (err, status, json). Sent only once the server has said, in-process, that it is
+ * listening (`serverReadyAnnounced`, set by `__loamReportBootReady`): before that, port 3000 may belong to
+ * another app (a failed boot with `port_in_use` keeps this process alive for Retry), which would be handed a
+ * token that is still valid once LOAM's own server starts.
+ */
 function meshRequest(method, path, body, callback) {
+  if (!serverReadyAnnounced) {
+    callback(new Error('The LOAM server is not listening yet.'), 0, undefined);
+    return;
+  }
   const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   const request = http.request(
     {
