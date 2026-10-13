@@ -1,5 +1,5 @@
 import { createTransportIdentity, openTransport, sealTransport, transportServerAccept } from "@loam/crypto";
-import type { Channel, Message, NetworkConfig, User } from "@loam/schema";
+import { type Channel, MEMBER_RULES_VERSION, type Message, type NetworkConfig, type User } from "@loam/schema";
 import { IDBFactory } from "fake-indexeddb";
 import { render } from "preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,7 +48,7 @@ const networkConfig: NetworkConfig = {
 };
 
 // Agreed to the member rules, so the app opens on its content rather than the Welcome screen.
-const me: User = { id: "user.me", displayName: "Me", type: "human", isAdmin: false, createdAt: 1, ephemeral: true, rulesVersion: 1 };
+const me: User = { id: "user.me", displayName: "Me", type: "human", isAdmin: false, createdAt: 1, ephemeral: true, rulesVersion: MEMBER_RULES_VERSION };
 const troll: User = { id: "user.troll", displayName: "Troll", type: "human", isAdmin: false, createdAt: 1, ephemeral: true };
 const general = { id: "general", name: "general", visibility: "public", createdAt: 1 } as Channel;
 
@@ -350,6 +350,12 @@ describe("the Welcome screen (member rules)", () => {
     const root = await boot("/channels");
     expect(root.querySelector(".welcome-screen")).not.toBeNull();
     expect(root.querySelector(".welcome-agree")?.textContent).toContain("18");
+  });
+
+  it("greets someone again when the rules have changed since they agreed", async () => {
+    stubNode({ currentUser: { ...me, rulesVersion: MEMBER_RULES_VERSION - 1 } });
+    const root = await boot("/channels");
+    expect(root.querySelector(".welcome-screen")).not.toBeNull();
   });
 
   it("opens straight onto the network for someone who has agreed", async () => {

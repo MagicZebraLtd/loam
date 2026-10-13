@@ -347,6 +347,27 @@ describe("member rules", () => {
     expect((await request(app, cookie, "DELETE" as "POST", `/api/messages/${posted.message.id}`)).statusCode).toBe(200);
   });
 
+  it("asks someone who agreed to an earlier version of the rules to agree again", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-rules-version-"));
+    const before = await buildApp({ dataDir, logger: false });
+    const response = await before.server.inject({ method: "GET", url: "/api/config" });
+    const cookie = String(response.headers["set-cookie"]).split(";")[0]!;
+    const agreed = UserSchema.parse((await agree(before, cookie)).json());
+    before.store.upsertUser({ ...agreed, rulesVersion: MEMBER_RULES_VERSION - 1 });
+    await before.close();
+    const app = await buildApp({ dataDir, logger: false });
+    cleanups.push(async () => {
+      await app.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    const refused = await post(app, cookie, "hello");
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toMatchObject({ code: "rules_not_accepted" });
+    expect((await agree(app, cookie)).statusCode).toBe(200);
+    expect((await post(app, cookie, "hello")).statusCode).toBe(201);
+  });
+
   it("refuses an outdated rules version with its own code", async () => {
     const app = await makeApp();
     const { cookie } = await newSession(app);

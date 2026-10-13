@@ -5,6 +5,8 @@ import { t } from "../i18n";
 export const MEMBER_RULES = [
   { title: "rules.kindTitle", body: "rules.kindBody" },
   { title: "rules.childrenTitle", body: "rules.childrenBody" },
+  { title: "rules.sexualTitle", body: "rules.sexualBody" },
+  { title: "rules.violenceTitle", body: "rules.violenceBody" },
   { title: "rules.privacyTitle", body: "rules.privacyBody" },
   { title: "rules.spamTitle", body: "rules.spamBody" },
   { title: "rules.adultsTitle", body: "rules.adultsBody" },

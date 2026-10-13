@@ -6,8 +6,8 @@ when infrastructure isn't there. It is not intended to facilitate violence, abus
 exploitation or fraud, and nothing about its design should be read as an invitation to use it that way.
 
 Every member agrees to LOAM's rules before they post (the Welcome screen; the full text is at `/rules` on
-any network). They prohibit harassment, threats, hate, sexual content involving anyone under 18,
-intimate images shared without consent, posting someone's private details, scams, malware and spam. LOAM
+any network). They prohibit harassment, threats, hate, nudity and sexual content, gore, sexual content involving anyone
+under 18, intimate images shared without consent, posting someone's private details, scams, malware and spam. LOAM
 is for adults (18+). Our child safety standards are at https://loamnet.com/child-safety.
 
 LOAM has no central service, no user accounts, and no mechanism for the project's maintainers to see,
