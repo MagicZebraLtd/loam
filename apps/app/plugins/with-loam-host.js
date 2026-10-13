@@ -433,6 +433,45 @@ function withLocationCap(config) {
 }
 // -------------------------------------------------------------------------------------------------
 
+// --- No ML Kit usage reports -----------------------------------------------------------------------
+// expo-camera's barcode scanner (the setup screen's link-code scan) is Google's ML Kit, which reports
+// diagnostics and usage analytics to Google: device model and OS, package name and version, a
+// per-installation id, latency and error codes (developers.google.com/ml-kit/android-data-disclosure).
+// ML Kit has no switch for it. It queues those events in Google's datatransport library, which uploads
+// them through the one backend registered on its TransportBackendDiscovery service: `cct`, from
+// transport-backend-cct. Removing that registration leaves datatransport with no backend, and its uploader
+// then deletes each queued batch ("Unknown backend for %s, deleting event batch for it...") without a
+// network request. LOAM's privacy policy and Play Data safety say the app collects nothing, so this keeps
+// them true. Barcode detection itself runs on the phone and is unaffected.
+const TRANSPORT_BACKEND_DISCOVERY = "com.google.android.datatransport.runtime.backends.TransportBackendDiscovery";
+const CCT_BACKEND = "backend:com.google.android.datatransport.cct.CctBackendFactory";
+
+/** Mark the `cct` backend registration for removal by the manifest merger on a parsed manifest (pure,
+ * tested). The library's service stays; only its backend meta-data goes. */
+function removeTelemetryBackend(manifest) {
+  manifest.$ = manifest.$ ?? {};
+  manifest.$["xmlns:tools"] = "http://schemas.android.com/tools";
+  const application = manifest.application[0];
+  application.service = application.service ?? [];
+  let service = application.service.find((entry) => entry.$?.["android:name"] === TRANSPORT_BACKEND_DISCOVERY);
+  if (!service) {
+    service = { $: { "android:name": TRANSPORT_BACKEND_DISCOVERY, "android:exported": "false" } };
+    application.service.push(service);
+  }
+  service["meta-data"] = (service["meta-data"] ?? []).filter((entry) => entry.$?.["android:name"] !== CCT_BACKEND);
+  service["meta-data"].push({ $: { "android:name": CCT_BACKEND, "tools:node": "remove" } });
+  return manifest;
+}
+
+/** Apply `removeTelemetryBackend` to the app manifest. */
+function withoutTelemetryBackend(config) {
+  return withAndroidManifest(config, (cfg) => {
+    removeTelemetryBackend(cfg.modResults.manifest);
+    return cfg;
+  });
+}
+// -------------------------------------------------------------------------------------------------
+
 // --- Stale-prebuild guard ------------------------------------------------------------------------
 // The generated android/ is gitignored and only refreshed by `expo prebuild`. Running `./gradlew` on an
 // old one silently ships its old manifest (e.g. template permissions a later app.json blocks, or a missing
@@ -537,6 +576,7 @@ module.exports = function withLoamHost(config) {
   config = withLocationCap(config);
   config = withMeshManifest(config);
   config = withHostService(config);
+  config = withoutTelemetryBackend(config);
   config = withStalePrebuildGuard(config);
   config = withPrebuildFingerprint(config);
   return config;
@@ -552,8 +592,10 @@ module.exports._internal = {
   LOCATION_MAX_SDK,
   LOCATION_PERMISSIONS,
   NETWORK_SECURITY_CONFIG_RESOURCE,
+  CCT_BACKEND,
   OPTIONAL_FEATURES,
   STALE_GUARD_GRADLE,
+  TRANSPORT_BACKEND_DISCOVERY,
   addLegacyBluetoothPermissions,
   capLocationPermissions,
   addOptionalFeatures,
@@ -562,4 +604,5 @@ module.exports._internal = {
   dataExtractionRulesXml,
   networkSecurityConfigXml,
   prebuildFingerprint,
+  removeTelemetryBackend,
 };

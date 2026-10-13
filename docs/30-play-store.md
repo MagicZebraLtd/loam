@@ -36,9 +36,11 @@ device checks below, and size headroom before a production track.
   offline, in the network's language) and one button, "I'm 18 or over, and I agree". The server records
   `user.rulesVersion` (`POST /api/users/me/rules`, `MEMBER_RULES_VERSION`) and refuses posts, reactions,
   uploads, typed names and new channels without it (`rules_not_accepted`); reading, reporting and blocking stay
-  open. The rules name the prohibited content (harassment, threats, hate, sexual content involving anyone
-  under 18, non-consensual intimate images, private details, scams, malware, spam) without a blanket "obey
-  local law".
+  open. The rules name the prohibited content (harassment, threats, hate, nudity and sexual content, gore,
+  sexual content involving anyone under 18, non-consensual intimate images, private details, scams, malware,
+  spam) without a blanket "obey local law". Nudity, sexual content and gore were added in 0.6.2 (rules version 2),
+  because Play's UGC policy asks the rules to prohibit what Play prohibits; gore is allowed when it's to get
+  someone help, the emergency case.
 - **Moderation that works.** A message report shows moderators the reported message (text, attachment names,
   author, where), read live so it never outlives the network's own deletion/retention; the report dialog says
   moderators will see it. "Escalate" keeps the report open for admins (`status: "escalated"`). Moderators and
@@ -52,7 +54,12 @@ device checks below, and size headroom before a production track.
   and report child abuse material. **Owner:** complete the Console declarations.
 - **No dynamic code.** expo-updates absent; the server bundle is built at build time; no `eval`. The on-device
   model download is *data* (GGUF), which policy allows.
-- **No telemetry** in the app or server (PostHog is marketing-site only). For Data safety, "No data
+- **No telemetry** in the app or server (PostHog is marketing-site only). The one library that reported
+  usage, Google's ML Kit (expo-camera's barcode scanner, used for the setup screen's link-code scan), sends
+  device model and OS, package and version, a per-install id, latency and error codes to Google
+  (developers.google.com/ml-kit/android-data-disclosure), with no switch. From 0.6.2 `plugins/with-loam-host.js`
+  removes datatransport's `cct` upload backend from the merged manifest, so its uploader deletes the queued
+  events unsent; 0.6.0 and 0.6.1 did send them. For Data safety, "No data
   collected" holds **only while no path sends user data off the host device**: the default build keeps
   messages, avatars and attachments on the phone and its hotspot LAN, and the on-device LLM runs locally.
   It stops holding once the operator configures a path off the device — `llm.ollama.baseUrl` pointed at

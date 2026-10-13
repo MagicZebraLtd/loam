@@ -14,6 +14,9 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+// The server's dist/ is required anyway (see above); the schema's is built alongside it.
+import { MEMBER_RULES_VERSION } from "../../../packages/schema/dist/index.js";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..", "..");
 const PORT = Number(process.env.DEMO_PORT ?? 4310);
@@ -76,6 +79,8 @@ async function person(displayName, avatar) {
   const cookie = response.headers.get("set-cookie").split(";")[0];
   const { currentUser } = await response.json();
   const me = { cookie, id: currentUser.id };
+  // Agree to the rules first: until then the node refuses posts, reactions, uploads and typed names.
+  await api(me, "POST", "/api/users/me/rules", { version: MEMBER_RULES_VERSION });
   const update = { ...(displayName ? { displayName } : {}), ...(avatar ? { avatar } : {}) };
   if (Object.keys(update).length) {
     await api(me, "PATCH", "/api/users/me", update);

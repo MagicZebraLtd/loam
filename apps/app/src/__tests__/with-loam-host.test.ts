@@ -15,6 +15,7 @@ import { LOCATION_PERMISSION_MAX_SDK, hotspotPermissionsToRequest } from "@/lib/
 const plugin = require("../../plugins/with-loam-host.js");
 const {
   BACKUP_DOMAINS,
+  CCT_BACKEND,
   CLEARTEXT_HOSTS,
   FINGERPRINT_FILE,
   HOTSPOT_PERMISSIONS,
@@ -24,6 +25,7 @@ const {
   NETWORK_SECURITY_CONFIG_RESOURCE,
   OPTIONAL_FEATURES,
   STALE_GUARD_GRADLE,
+  TRANSPORT_BACKEND_DISCOVERY,
   addLegacyBluetoothPermissions,
   capLocationPermissions,
   addOptionalFeatures,
@@ -32,6 +34,7 @@ const {
   dataExtractionRulesXml,
   networkSecurityConfigXml,
   prebuildFingerprint,
+  removeTelemetryBackend,
 } = plugin._internal;
 
 describe("with-loam-host: cleartext only to loopback", () => {
@@ -226,6 +229,35 @@ describe("with-loam-host: large screens", () => {
   it("overrides a non-resizable declaration rather than keeping it", () => {
     const activity = applyMainActivityAttributes({ $: { "android:name": ".MainActivity", "android:resizeableActivity": "false" } });
     expect(activity.$["android:resizeableActivity"]).toBe("true");
+  });
+});
+
+describe("with-loam-host: no ML Kit usage reports", () => {
+  type Node = { $: Record<string, string>; "meta-data"?: Node[] };
+  const backendEntries = (manifest: { application: { service?: Node[] }[] }) =>
+    (manifest.application[0].service ?? [])
+      .filter((service) => service.$["android:name"] === TRANSPORT_BACKEND_DISCOVERY)
+      .flatMap((service) => service["meta-data"] ?? [])
+      .filter((entry) => entry.$["android:name"] === CCT_BACKEND);
+
+  it("tells the manifest merger to drop datatransport's cct upload backend", () => {
+    const manifest = { $: {} as Record<string, string>, application: [{ service: [] as Node[] }] };
+    removeTelemetryBackend(manifest);
+    expect(manifest.$["xmlns:tools"]).toBe("http://schemas.android.com/tools");
+    const entries = backendEntries(manifest);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].$["tools:node"]).toBe("remove");
+  });
+
+  it("reuses an existing service entry and is idempotent", () => {
+    const manifest = {
+      $: {} as Record<string, string>,
+      application: [{ service: [{ $: { "android:name": TRANSPORT_BACKEND_DISCOVERY } }] as Node[] }],
+    };
+    removeTelemetryBackend(manifest);
+    removeTelemetryBackend(manifest);
+    expect(manifest.application[0].service).toHaveLength(1);
+    expect(backendEntries(manifest)).toHaveLength(1);
   });
 });
 

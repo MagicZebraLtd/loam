@@ -6,6 +6,24 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-13
+
+### Changed
+- **Two new rules: no nudity or sexual content, and no gore.** Graphic pictures or videos of violence or
+  injuries are allowed only to get someone help. The rules are now version 2, so everyone already on a
+  network sees the Welcome screen again and agrees once more before their next post. Google Play asks an
+  app where people post to forbid what Play forbids. The Welcome screen, the full rules at `/rules` and
+  all 15 languages have both.
+
+### Fixed
+- **The Android app no longer sends Google usage reports from the QR scanner.** The scanner that reads link
+  codes in setup is Google's ML Kit, which reports the phone's model and Android version, the app's name
+  and version, a per-install id, timings and error codes to Google, with no setting to turn it off. 0.6.0
+  and 0.6.1 sent them, when the phone had internet, after the scanner was opened. 0.6.2 removes the
+  library's upload route, so the reports are discarded on the phone. Nothing from a LOAM network was ever in
+  them. Scanning works as before.
+- The website's screenshot script works again: its demo people now agree to the rules before posting.
+
 ## [0.6.1] - 2026-10-12
 
 ### Changed

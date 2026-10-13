@@ -133,9 +133,10 @@ export type User = z.infer<typeof UserSchema>;
 
 /**
  * The current version of LOAM's member rules (the client's `/rules` page and Welcome screen). Bump it when
- * the rules change in substance: everyone then agrees again before their next post.
+ * the rules change in substance: everyone then agrees again before their next post. 2 (0.6.2) added no nudity
+ * or sexual content and no gore.
  */
-export const MEMBER_RULES_VERSION = 1;
+export const MEMBER_RULES_VERSION = 2;
 
 /** `POST /api/users/me/rules`: agree to the rules at this version (must be the current one). */
 export const RulesAcceptRequestSchema = z.object({
