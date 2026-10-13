@@ -6,6 +6,8 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-13
+
 ### Added
 - **Notifications for new messages.** Settings has a Notifications section: a sound and/or a buzz for direct
   messages (the default), every message, or nothing, saved on each device. Browsers don't allow real
@@ -19,12 +21,14 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 ### Changed
 - **"Try another name" on the Welcome screen is now a proper button**, with a border and a refresh icon. It looked like
   a label before.
-- **The Android host no longer closes itself when its server can't start.** It shows why instead. When another app on
-  the phone already uses LOAM's port (3000), it says so in the phone's language and offers Retry, which starts
-  the network once that app lets go. LOAM also stopped treating any answer on that port as its own server, so it
-  can never open another app's page in its window.
 - **The Android host counts "Devices connected"**, not "Phones connected", since laptops and tablets join too. In
   all 15 languages.
+
+### Fixed
+- **The Android host no longer closes itself when its server can't start.** It shows why instead. When another app on
+  the phone already uses LOAM's port (3000), it says so in the phone's language and offers Retry, which starts
+  the network once that app lets go. LOAM also stopped treating any answer on that port as its own server, and
+  sends that app nothing, so another app can never get LOAM's window or its host token.
 
 ## [0.6.2] - 2026-10-13
 
