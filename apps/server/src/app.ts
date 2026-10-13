@@ -219,6 +219,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   let clientFiles: ClientFiles | undefined;
   let appConfig: LoamConfig = defaultLoamConfig();
   let adminSetupCode: string | undefined;
+  let hostDeviceUserId: string | undefined;
 
   /**
    * The transport-encryption posture actually ENFORCED and REPORTED right now — the *effective* value, not
@@ -426,6 +427,12 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     },
     set adminSetupCode(value) {
       adminSetupCode = value;
+    },
+    get hostDeviceUserId() {
+      return hostDeviceUserId;
+    },
+    set hostDeviceUserId(value) {
+      hostDeviceUserId = value;
     },
     get data() {
       return data;

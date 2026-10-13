@@ -5,6 +5,7 @@ import type {
   HotspotAddressCandidate,
   HotspotCredentials,
   LoamHotspotEvents,
+  MessageNotificationContent,
   WifiStationInfo,
 } from './LoamHotspot.types';
 
@@ -34,6 +35,12 @@ declare class LoamHotspotModule extends NativeModule<LoamHotspotEvents> {
   startHostService(labels?: HostServiceLabels): boolean;
   /** Stop the foreground host service. */
   stopHostService(): void;
+  /** Show (or replace) a conversation's new-message notification. False when it couldn't be handed over. */
+  showMessageNotification(content: MessageNotificationContent): boolean;
+  /** Remove every new-message notification. */
+  clearMessageNotifications(): void;
+  /** The conversation a notification opened LOAM at from cold, once; null otherwise. */
+  takeOpenedConversation(): string | null;
   /** Pin the app (Android screen pinning / lock-task) so it can't be left without the device PIN. */
   startKiosk(): void;
   /** Unpin the app (leave lock-task mode). */

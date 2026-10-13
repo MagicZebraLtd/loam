@@ -34,6 +34,7 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAppLocale } from '@/hooks/use-app-locale';
 import { useTheme } from '@/hooks/use-theme';
 import { colorSchemeForClientMessage } from '@/lib/client-theme';
+import { alertLevelForClientMessage, conversationPath, messageNotifier } from '@/lib/message-notifications';
 import { t } from '@/lib/i18n';
 import { SERVER_PORT, withInviteCode } from '@/lib/join-url';
 import {
@@ -60,7 +61,14 @@ import { parseHostClients, parseHostInterfaces, type HostInterface } from '@/lib
 import { registerOnDeviceLlm } from '@/lib/on-device-llm';
 import { clearSharedFiles, parseSaveFileMessage, shareReceivedFile } from '@/lib/save-file';
 import { registerMeshCourier } from '@/mesh/mesh-courier';
-import { closeApp, startKiosk, stopKiosk } from '../../modules/loam-hotspot';
+import {
+  addOpenConversationListener,
+  clearMessageNotifications,
+  closeApp,
+  startKiosk,
+  stopKiosk,
+  takeOpenedConversation,
+} from '../../modules/loam-hotspot';
 
 // The embedded server (main.js → loam-server.js) always listens on this port; the host phone's
 // WebView loads it over loopback. Remote joiners use the hotspot's own (discovered) address or the LAN one.
@@ -315,6 +323,9 @@ function HostScreen() {
   // The network's name from /api/bootstrap, shown above the codes in display mode.
   const [hostNodeName, setHostNodeName] = useState<string>();
   const webViewRef = useRef<WebView>(null);
+  // A conversation a message notification asked to open before the WebView could (a tap from cold, or
+  // while the WebView was remounting): opened when it next finishes loading.
+  const pendingConversationRef = useRef<string | undefined>(undefined);
   // Whether the WebView (the LOAM web client, which routes with preact-iso via the History API) has
   // in-app history to go back through. A ref, not state: the hardware-back listener reads it without
   // needing to re-subscribe on every navigation, and there's no render that depends on it.
@@ -565,6 +576,12 @@ function HostScreen() {
     nodejs.channel.addListener('loam-status', onStatus);
     nodejs.channel.addListener('loam-hostinfo', onHostInfo);
     nodejs.channel.addListener('loam-wipe-restart', onWipeRestart);
+    // A new message for the host phone's own person (the server's `__loamNotifyHost`, via main.js): an
+    // Android notification while LOAM is in the background (lib/message-notifier.ts).
+    void messageNotifier.load();
+    nodejs.channel.addListener('loam-message-notice', (payload: unknown) => {
+      messageNotifier.notice(payload);
+    });
     // Answer optional on-device LLM requests from the embedded server (no-op unless the operator
     // enables the on-device backend and a model is wired — see docs/06).
     const cleanupLlm = registerOnDeviceLlm(nodejs.channel);
@@ -588,6 +605,7 @@ function HostScreen() {
       nodejs.channel.removeAllListeners('loam-status');
       nodejs.channel.removeAllListeners('loam-hostinfo');
       nodejs.channel.removeAllListeners('loam-wipe-restart');
+      nodejs.channel.removeAllListeners('loam-message-notice');
       cleanupLlm();
       cleanupMesh();
       cleanupDbEncryption();
@@ -718,10 +736,26 @@ function HostScreen() {
     const subscription = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
         void ensureHostService();
+        // The person is looking at LOAM again: the messages are on screen, so their notifications go.
+        messageNotifier.appBecameActive();
       }
     });
     return () => subscription.remove();
   }, [status]);
+
+  // A tapped message notification opens its conversation in the WebView: at once while LOAM is running,
+  // or, from cold, once the WebView has loaded (`pendingConversationRef`, read in its `onLoadEnd`).
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    pendingConversationRef.current = takeOpenedConversation();
+    return addOpenConversationListener((conversation) => {
+      if (!openConversationInWebView(conversation)) {
+        pendingConversationRef.current = conversation;
+      }
+    });
+  }, []);
 
   // Ask the launcher for fresh addresses whenever the Share overlay opens — that's when the hotspot
   // starts and its AP interface (and address) appears. Opening the overlay is also the operator's explicit
@@ -903,6 +937,22 @@ function HostScreen() {
   // it has deleted the orphaned ciphertext and advanced its durable `.loam-wipe-phase` marker. Clearing the
   // key on this unauthenticated WebView-origin message would bypass that gate and could destroy the key
   // while a deletion survivor still exists. A malformed or foreign message is ignored.
+  /** Route the WebView to a conversation (`dm:<id>` / `channel:<id>`). False when there's no WebView yet. */
+  function openConversationInWebView(conversation: string): boolean {
+    const path = conversationPath(conversation);
+    if (!path) {
+      return true;
+    }
+    const webView = webViewRef.current;
+    if (!webView) {
+      return false;
+    }
+    webView.injectJavaScript(
+      `history.pushState(null, '', ${JSON.stringify(path)}); dispatchEvent(new PopStateEvent('popstate')); true;`,
+    );
+    return true;
+  }
+
   const handleWebViewMessage = (event: { nativeEvent: { data: string } }) => {
     const raw = event.nativeEvent.data;
     // The web client's "Invite someone" can ask the native host to open the share/invite overlay — that
@@ -918,6 +968,12 @@ function HostScreen() {
         Appearance.setColorScheme(scheme);
         return;
       }
+      // The client's Settings → Notifications level: which messages notify while LOAM is in the background.
+      const alertLevel = alertLevelForClientMessage(parsed);
+      if (alertLevel) {
+        messageNotifier.setLevel(alertLevel);
+        return;
+      }
       if (parsed && parsed.type === 'loam-open-share') {
         setShareOpen(true);
         return;
@@ -930,8 +986,9 @@ function HostScreen() {
         return;
       }
       if (parsed && parsed.type === 'loam-wipe') {
-        // A shared file's cached copy must not outlive the reset.
+        // A shared file's cached copy must not outlive the reset, and nor may a message's text in a notification.
         void clearSharedFiles();
+        clearMessageNotifications();
         // Give the client's own local purge a moment, then rejoin under the node's NEW transport key (see
         // `webViewKey`). Still a native no-op for key material — that stays with the acked protocol above.
         setTimeout(() => {
@@ -1107,6 +1164,13 @@ function HostScreen() {
             // Bridge from the LOAM web client back to this native screen, see `handleWebViewMessage`'s
             // comment.
             onMessage={handleWebViewMessage}
+            onLoadEnd={() => {
+              const pending = pendingConversationRef.current;
+              pendingConversationRef.current = undefined;
+              if (pending) {
+                openConversationInWebView(pending);
+              }
+            }}
             // Track whether the client has in-app history so the hardware Back handler (above) knows
             // whether to navigate back or let Android exit the app.
             onNavigationStateChange={(navState) => {

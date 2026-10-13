@@ -62,7 +62,17 @@ class LoamHotspotModule : Module() {
     // Fired when the SYSTEM tears the local-only hotspot down (the user enabled tethering — Android allows
     // one or the other — Wi-Fi was toggled, an OEM power policy). Without it JS would keep reporting
     // "running" and showing a dead SSID/QR until the app was killed.
-    Events("onHotspotStopped")
+    // `onOpenConversation`: the person tapped a message notification while LOAM was already running
+    // (MessageNotifications.kt); JS opens that conversation in the WebView.
+    Events("onHotspotStopped", "onOpenConversation")
+
+    OnNewIntent { intent ->
+      val conversation = intent.getStringExtra(MessageNotifications.EXTRA_CONVERSATION)
+      if (conversation != null) {
+        intent.removeExtra(MessageNotifications.EXTRA_CONVERSATION)
+        sendEvent("onOpenConversation", mapOf("conversation" to conversation))
+      }
+    }
 
     AsyncFunction("startHotspot") { promise: Promise ->
       startHotspot(promise)
@@ -121,6 +131,46 @@ class LoamHotspotModule : Module() {
       }
     }
 
+    // A new-message notification for the host phone's own person (MessageNotifications.kt), shown while
+    // LOAM is in the background. `content` is already translated (src/lib/message-notifications.ts).
+    // Returns whether it was handed to Android.
+    Function("showMessageNotification") { content: Map<String, Any?> ->
+      val context = appContext.reactContext?.applicationContext
+      val conversation = content["conversation"] as? String
+      if (context == null || conversation.isNullOrEmpty()) {
+        false
+      } else {
+        fun text(key: String): String = content[key] as? String ?: ""
+        MessageNotifications.show(
+          context,
+          MessageNotifications.Content(
+            conversation = conversation,
+            title = text("title"),
+            text = text("text"),
+            count = (content["count"] as? Number)?.toInt() ?: 1,
+            publicTitle = text("publicTitle"),
+            publicText = text("publicText"),
+            channelName = text("channelName"),
+            channelDescription = text("channelDescription"),
+          ),
+        )
+        true
+      }
+    }
+
+    Function("clearMessageNotifications") {
+      appContext.reactContext?.applicationContext?.let { MessageNotifications.clearAll(it) }
+    }
+
+    // The conversation a message notification opened LOAM at from cold, read once: the extra is removed
+    // so a later check doesn't open it again. Null when LOAM wasn't opened from one.
+    Function("takeOpenedConversation") {
+      val intent = appContext.currentActivity?.intent
+      val conversation = intent?.getStringExtra(MessageNotifications.EXTRA_CONVERSATION)
+      intent?.removeExtra(MessageNotifications.EXTRA_CONVERSATION)
+      conversation
+    }
+
     // Kiosk mode = Android screen pinning (lock-task). Pins the app so a passer-by can't wander off
     // into other apps; without device-owner provisioning, leaving requires the system Back+Recents
     // gesture, which prompts for the device's own screen-lock PIN when one is set. Best-effort and
@@ -158,6 +208,8 @@ class LoamHotspotModule : Module() {
         } catch (error: Throwable) {
           Log.w(TAG, "closeApp: stopHostService failed", error)
         }
+        // After an Emergency reset no message text may stay behind in the notification shade.
+        MessageNotifications.clearAll(context)
       }
       val activity = appContext.currentActivity
       if (activity == null) {

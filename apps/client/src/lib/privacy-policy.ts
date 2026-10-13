@@ -149,7 +149,8 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "**Nearby Wi-Fi devices and location:** Android requires these to start a hotspot. LOAM never reads " +
             "or records your location.",
           "**Camera:** only to scan another network's link code when this phone joins it. No pictures are kept.",
-          "**Notifications:** to show that the phone is hosting a network.",
+          "**Notifications:** to show that the phone is hosting a network, and new messages for you while LOAM " +
+            "is in the background. They're made on the phone and go nowhere else.",
           "**Foreground service and wake lock:** to keep the network running while the screen is off.",
           "**Bluetooth and Wi-Fi Aware** (mesh, experimental): to find nearby LOAM devices to exchange sealed " +
             "messages with.",

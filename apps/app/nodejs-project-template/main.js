@@ -135,6 +135,19 @@ global.__loamReportDbKeyMigrated = function (requestId) {
   }
 };
 
+// The server's broadcast calls this (`globalThis.__loamNotifyHost`, apps/server/src/realtime.ts
+// `notifyHostDevice`) for each new message the host phone's own person can see: who, where and the start of
+// the text. Forward it to RN, which shows it as an Android notification while LOAM is in the background
+// (src/lib/message-notifier.ts decides). Best-effort, installed BEFORE requiring the server bundle like the
+// hooks above; the notification never leaves this phone.
+global.__loamNotifyHost = function (notice) {
+  try {
+    rnBridge.channel.post('loam-message-notice', notice);
+  } catch (err) {
+    // The RN side isn't listening (a restart in progress): this message just doesn't notify.
+  }
+};
+
 // Interface NAME prefixes that belong to a VPN/tunnel/virtual adapter rather than the real hotspot/LAN:
 // an address on one of these is never reachable by a nearby device scanning the join QR, so
 // picking one would silently break joining. Mirrors the exclusions in apps/server/src/net.ts's

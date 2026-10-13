@@ -68,6 +68,8 @@ export function createKillSwitch(ctx: AppContext) {
     // And every "Link a node" code shown: a photo of one must not link a node to the fresh network.
     ctx.linkCodes.clear();
     ctx.adminClaimCodes.clear();
+    // The host phone's person is about to be erased; its WebView presents the host token again as the new one.
+    ctx.hostDeviceUserId = undefined;
     // Whether this run committed the `{ phase: "delete-pending", config }` wipe journal to disk. EVERY branch
     // writes it before its first destructive step, so a `wipeAll()` or reopen that throws can never leave the
     // node locked in memory only, with the next boot serving the original messages. It decides what an

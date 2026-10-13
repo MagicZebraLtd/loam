@@ -2,12 +2,12 @@
 // the `/ws` route with its reflection-safe key-confirmation, registered over the shared AppContext.
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { openTransport, sealTransport } from "@loam/crypto";
-import type { StreamEvent } from "@loam/schema";
+import type { Message, StreamEvent } from "@loam/schema";
 import type { AppContext } from "./app-context.js";
 import { errorBody } from "./errors.js";
 import { addressKey, ipv6SubnetKey } from "./rate-limit.js";
 import { originMatchesHost } from "./transport-server.js";
-import type { ClientEvent, SocketClient, SocketSession } from "./types.js";
+import type { ClientEvent, HostMessageNotice, SocketClient, SocketSession } from "./types.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 /** Direction-separated AADs for the reflection-safe WS key-confirmation (docs/20 §7): the challenge
@@ -45,6 +45,9 @@ export const WS_MAX_INBOUND_FRAME_BYTES = 16 * 1024;
  */
 export const WS_HEARTBEAT_INTERVAL_MS = 25_000;
 const WS_HEARTBEAT_FRAME = JSON.stringify({ type: "ping" });
+
+/** How much of a message's text the host phone's notification gets: enough for a lock-screen preview. */
+export const HOST_NOTICE_BODY_MAX_LENGTH = 280;
 
 /** Build the live-event layer over the app context: socket set, audience filtering, sealed frames, presence, `/ws`. */
 export function createRealtime(ctx: AppContext) {
@@ -233,6 +236,53 @@ export function createRealtime(ctx: AppContext) {
       if (session.socket.readyState === session.socket.OPEN && socketCanReceiveEvent(session.userId, event)) {
         wsSend(session, payload);
       }
+    }
+
+    if (event.type === "messageCreated") {
+      notifyHostDevice(event.message);
+    }
+  }
+
+  /**
+   * Hand a new message to the Android launcher, which shows it as an Android notification on the host phone
+   * while LOAM is in the background (apps/app/src/lib/message-notifications.ts decides whether to, from the
+   * level chosen in Settings). Only for the host phone's own person (`hostDeviceUserId`), and only a message
+   * their socket would receive: the same audience, shadow-ban and private-channel filter as `broadcast`.
+   * Never their own message, a reaction, a bot's or one from someone they blocked. A no-op on every node
+   * but the Android host, which is the only one that installs the hook. Never throws into the caller.
+   */
+  function notifyHostDevice(message: Message): void {
+    const hook = (globalThis as { __loamNotifyHost?: (notice: HostMessageNotice) => void }).__loamNotifyHost;
+    const hostUserId = ctx.hostDeviceUserId;
+    if (typeof hook !== "function" || !hostUserId || message.authorId === hostUserId) {
+      return;
+    }
+    if (message.type !== "channelPost" && message.type !== "channelReply" && message.type !== "dm") {
+      return;
+    }
+    const author = ctx.data.users.find((candidate) => candidate.id === message.authorId);
+    if (!author || author.type !== "human" || !socketCanReceiveEvent(hostUserId, { type: "messageCreated", message })) {
+      return;
+    }
+    try {
+      if (ctx.store.isUserBlocked(hostUserId, author.id)) {
+        return;
+      }
+      const body = message.body.trim();
+      const notice: HostMessageNotice = {
+        conversation: message.type === "dm" ? `dm:${author.id}` : `channel:${message.channelId}`,
+        direct: message.type === "dm",
+        author: author.displayName,
+        body: body.length > HOST_NOTICE_BODY_MAX_LENGTH ? `${body.slice(0, HOST_NOTICE_BODY_MAX_LENGTH - 1)}…` : body,
+        attachment: !!message.attachments?.length,
+        location: !!message.location,
+      };
+      if (message.type !== "dm") {
+        notice.channel = ctx.ensureChannel(message.channelId)?.name ?? message.channelId;
+      }
+      hook(notice);
+    } catch (error) {
+      ctx.server.log.warn({ err: error }, "Couldn't pass a new message to the host phone's notifications");
     }
   }
 

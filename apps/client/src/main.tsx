@@ -6,6 +6,7 @@ import { captureInviteCode } from "./lib/invite.ts";
 import { captureLinkCodeFragment } from "./lib/link-code-fragment.ts";
 import { captureJoinKey } from "./lib/transport.ts";
 import { recoverPendingWipe } from "./lib/local-store.ts";
+import { installAlerts } from "./lib/alerts.ts";
 import { installTheme } from "./lib/theme.ts";
 import { installViewportSync } from "./lib/viewport.ts";
 
@@ -25,6 +26,9 @@ captureJoinKey();
 
 // Pin the saved colour theme (System / Light / Dark, set in Settings) before anything renders.
 installTheme();
+
+// Let new-message tones play after the first tap, and tell the Android host app which messages notify.
+installAlerts();
 
 // Size the fixed app shell to the visible viewport (keyboard-aware) before the first paint.
 installViewportSync();

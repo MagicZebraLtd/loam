@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useState } from "preact/hooks";
 
 import { Avatar } from "../components/Avatar";
 import { AppearancePanel } from "../components/AppearancePanel";
+import { NotificationsPanel } from "../components/NotificationsPanel";
 import { AvatarImageEditor } from "../components/AvatarImageEditor";
 import { BlockedUsersPanel } from "../components/BlockedUsersPanel";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -251,6 +252,7 @@ export function SettingsView({
           )}
 
           <AppearancePanel />
+          <NotificationsPanel />
 
           <div className="card join-card">
             <CardHeader title={t("settings.joinTitle")} />

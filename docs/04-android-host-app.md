@@ -226,6 +226,35 @@ parsing, address choice, panel projection and persistence are covered by `host-m
 redaction behaviour, the wired flag (a laptop on Ethernet) and the no-internet-router case all need a
 device test.
 
+### Message notifications
+
+The host phone's own person gets Android notifications for new messages while LOAM is in the background
+(the foreground service keeps the process, and so the embedded server, alive). Joiners' browsers can't:
+the Notification and Push APIs need a secure context and a node is plain HTTP, so the web client only plays
+a tone and/or vibrates while its page is open (`apps/client/src/lib/alerts.ts`, Settings → Notifications).
+
+- **Who the host is.** The host's WebView presents the launcher's per-boot host token to
+  `POST /api/admin/claim` on every page load, even when it is already admin; the server keeps that
+  session's user as `hostDeviceUserId` (in memory, cleared by the kill switch).
+- **Which messages.** `broadcast()` hands each `messageCreated` to `notifyHostDevice` (realtime.ts), which
+  passes `globalThis.__loamNotifyHost` (installed by main.js) a `HostMessageNotice` only for a message the
+  host's own socket would receive (the same audience, shadow-ban and private-channel filter), never the
+  host's own, a reaction, a bot's, or one from someone the host blocked. Text is cut to 280 characters.
+- **When.** main.js posts it to RN as `loam-message-notice`; `src/lib/message-notifier.ts` shows it only
+  while `AppState` isn't `active`, and only at the level the person chose in the web client's Settings
+  (Direct messages, the default / Every message / Nothing), which the WebView posts as `loam-alerts` and
+  RN keeps in SecureStore (`loam.alertLevel`). The in-page alert stays quiet in a hidden host WebView, so
+  nothing plays twice.
+- **How it looks.** `MessageNotifications.kt`: one notification per conversation (replaced by the next,
+  with a count), on a "Messages" channel at high importance with Android's default sound and vibration,
+  which the person changes in Android's settings for LOAM. The lock screen shows only "LOAM: New message"
+  unless the person allows private content there. A tap opens LOAM at that conversation (the key rides the
+  launch intent; `onOpenConversation` while running, `takeOpenedConversation` from cold). They are all
+  cleared when LOAM comes to the front, when the web client reports a reset (`loam-wipe`) and when LOAM
+  closes after an Emergency reset.
+- **Permission.** The `POST_NOTIFICATIONS` prompt the hosting notice already asks covers these; no other
+  permission is involved, and nothing leaves the phone.
+
 ### Setup screens
 
 The host app opens on its setup screens (`src/components/setup-wizard.tsx`) every launch, and the
