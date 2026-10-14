@@ -169,6 +169,25 @@ describe("Android notifications for the host phone's person", () => {
     expect(notices).toEqual([]);
   });
 
+  it("stops notifying for the host's identity once the host phone ends that session", async () => {
+    const { app, host, member } = await hostedNode();
+
+    expect((await app.server.inject({ method: "POST", url: "/api/session/end", headers: { cookie: host.cookie } })).statusCode).toBe(200);
+    await post(app, member.cookie, { type: "dm", recipientUserId: host.userId, body: "to the forgotten identity" });
+
+    expect(notices).toEqual([]);
+  });
+
+  it("keeps the host's identity when someone else ends their session", async () => {
+    const { app, host, member } = await hostedNode();
+    const other = await newSession(app);
+
+    expect((await app.server.inject({ method: "POST", url: "/api/session/end", headers: { cookie: other.cookie } })).statusCode).toBe(200);
+    await post(app, member.cookie, { type: "dm", recipientUserId: host.userId, body: "still here" });
+
+    expect(notices.map((notice) => notice.body)).toEqual(["still here"]);
+  });
+
   it("does nothing on a node without the launcher's hook", async () => {
     delete (globalThis as Hooked).__loamNotifyHost;
     const { app, host, member } = await hostedNode();

@@ -1143,6 +1143,10 @@ export function registerTransportRoutes(ctx: AppContext): void {
     // Only a bound session has a secure token to revoke; a cookie session logs out via /api/session/end.
     if (activeSession.authMode === "bound" && activeSession.identityTokenHash) {
       ctx.revokeIdentityToken(activeSession.identityTokenHash);
+      // The host phone forgetting its own identity: stop notifying it for that person.
+      if (ctx.hostDeviceUserId !== undefined && activeSession.userId === ctx.hostDeviceUserId) {
+        ctx.hostDeviceUserId = undefined;
+      }
     }
     return { ok: true };
   });
