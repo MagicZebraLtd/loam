@@ -6,6 +6,11 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **The web client runs on Preact 11** (from 10.29). Refs now start explicitly empty, and the crash screen's alert
+  role moved onto its card so the page keeps its `main` landmark. `preact-render-to-string` is pinned to 6.8, which
+  Preact 11 needs.
+
 ## [0.6.4] - 2026-10-15
 
 ### Changed

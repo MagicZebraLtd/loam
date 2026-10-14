@@ -35,8 +35,8 @@ export class ErrorBoundary extends Component<{ children: ComponentChildren }, Er
     }
 
     return (
-      <main className="gate-screen wiped-screen" role="alert">
-        <div className="gate-card">
+      <main className="gate-screen wiped-screen">
+        <div className="gate-card" role="alert">
           <img alt="LOAM" className="gate-mark" src={loamMark} />
           <h1>{t("app.crashTitle")}</h1>
           <p>{t("app.crashBody")}</p>

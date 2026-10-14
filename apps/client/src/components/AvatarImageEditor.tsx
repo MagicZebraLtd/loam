@@ -153,17 +153,20 @@ function blobFromCanvas(canvas: HTMLCanvasElement): Promise<Blob> {
 export function AvatarImageEditor({ disabled, onUpload }: AvatarImageEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageRef = useRef<HTMLImageElement>();
+  const imageRef = useRef<HTMLImageElement | undefined>(undefined);
   const pointersRef = useRef(new Map<number, CanvasPointer>());
-  const dragRef = useRef<{ point: CanvasPointer; offsetX: number; offsetY: number }>();
-  const gestureRef = useRef<{
-    angle: number;
-    distance: number;
-    rotation: number;
-    zoom: number;
-  }>();
-  const objectUrlRef = useRef<string>();
-  const loadingImageRef = useRef<HTMLImageElement>();
+  const dragRef = useRef<{ point: CanvasPointer; offsetX: number; offsetY: number } | undefined>(undefined);
+  const gestureRef = useRef<
+    | {
+        angle: number;
+        distance: number;
+        rotation: number;
+        zoom: number;
+      }
+    | undefined
+  >(undefined);
+  const objectUrlRef = useRef<string | undefined>(undefined);
+  const loadingImageRef = useRef<HTMLImageElement | undefined>(undefined);
   const mountedRef = useRef(true);
   const [crop, setCrop] = useState<AvatarCrop>({ offsetX: 0, offsetY: 0, rotation: 0, zoom: 1 });
   const [hasImage, setHasImage] = useState(false);

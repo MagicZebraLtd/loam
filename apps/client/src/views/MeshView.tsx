@@ -114,7 +114,7 @@ export function MeshView() {
 
   // Clear the "Copied" flash timer on unmount (the file's cleanup discipline; Preact tolerates a
   // late setState but we match the surrounding effects).
-  const copyTimerRef = useRef<number>();
+  const copyTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(copyTimerRef.current), []);
 
   async function copyCard(): Promise<void> {

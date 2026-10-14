@@ -12,7 +12,7 @@ catalog:
   "@types/node": ^24.13.6
   esbuild: ^0.28.2
   jsdom: ^30.1.1
-  preact: ^10.29.8
+  preact: ^11.0.0
   tsx: ^4.23.15
   typescript: ~7.0.2
   vite: ^8.3.0
@@ -26,6 +26,11 @@ onlyBuiltDependencies:
   # prebuilt libs, gradle silently produces NO librnllama_jni.so, and the on-device LLM fails at runtime
   # with "JSI bindings not installed". (build-apk.mjs also runs the downloader explicitly as a backstop.)
   - llama.rn
+
+# Preact 11 needs preact-render-to-string 6.7 or later, an optional peer nothing here asks for directly (it is
+# only resolved through preact-iso and posthog-js), so pin the one copy everything shares.
+overrides:
+  preact-render-to-string: ^6.8.0
 
 # Wait a day before installing a newly published version: most malicious releases are caught and
 # pulled within hours. Applies when pnpm resolves (pnpm add / update, Dependabot); a frozen-lockfile

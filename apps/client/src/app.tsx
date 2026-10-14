@@ -450,7 +450,7 @@ function LoamApp() {
   // the epoch moved on meanwhile (an identity purge, a newer boot fetch), so a late answer for an older
   // state — e.g. the previous identity's — can never land.
   const inboxEpochRef = useRef(0);
-  const inboxRefreshTimerRef = useRef<number>();
+  const inboxRefreshTimerRef = useRef<number | undefined>(undefined);
   const invalidateInboxRequests = useCallback(() => {
     inboxEpochRef.current += 1;
     window.clearTimeout(inboxRefreshTimerRef.current);
@@ -518,7 +518,7 @@ function LoamApp() {
   const hostClaimInFlightRef = useRef(false);
   // The identity the host token was last presented for, so the host's WebView tells the node once per page
   // load and identity who the host phone's notifications are for, even when it's already admin.
-  const hostTokenPresentedForRef = useRef<string>();
+  const hostTokenPresentedForRef = useRef<string | undefined>(undefined);
   // Bumped to force a full server re-sync: on WebSocket reconnect (missed events don't replay) and
   // on a failed boot fetch (retry with backoff instead of stranding the app offline).
   const [syncTick, setSyncTick] = useState(0);
