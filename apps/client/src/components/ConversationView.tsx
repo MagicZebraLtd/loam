@@ -662,10 +662,10 @@ function useArrivalAnnouncements(
   usersById: Map<string, User>,
 ): Announcement | undefined {
   const [announcement, setAnnouncement] = useState<Announcement>();
-  const seenRef = useRef<{ ids: Set<string>; newest: number }>();
+  const seenRef = useRef<{ ids: Set<string>; newest: number } | undefined>(undefined);
   const usersByIdRef = useRef(usersById);
   usersByIdRef.current = usersById;
-  const coalescerRef = useRef<ArrivalCoalescer<Message>>();
+  const coalescerRef = useRef<ArrivalCoalescer<Message> | undefined>(undefined);
   if (!coalescerRef.current) {
     coalescerRef.current = new ArrivalCoalescer<Message>((arrivals) => {
       const last = arrivals[arrivals.length - 1]!;

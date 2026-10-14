@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@preact/preset-vite": "catalog:",
+    "preact-render-to-string": "^6.8.1",
     "@types/node": "catalog:",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "catalog:",

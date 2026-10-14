@@ -20,6 +20,9 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 - **A website page for the desktop app** (`/desktop`) and the code signing policy (`/code-signing`).
 
 ### Changed
+- **The web client runs on Preact 11** (from 10.29). Refs now start explicitly empty, and the crash screen's alert
+  role moved onto its card so the page keeps its `main` landmark. `preact-render-to-string` is pinned to 6.8, which
+  Preact 11 needs.
 - **The first-run setup choices (Private, Community, Choose every setting myself) now live in
   `@loam/schema`**, so the Android app and the desktop app set up a network from the same code and cannot
   drift apart. Nothing changes for the phone.
