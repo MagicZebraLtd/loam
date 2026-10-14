@@ -50,6 +50,26 @@ export type AppData = {
   messages: Message[];
 };
 
+/**
+ * A new message for the Android host phone's own person, handed to the launcher (`globalThis.__loamNotifyHost`,
+ * realtime.ts `notifyHostDevice`), which shows it as an Android notification while LOAM is in the background.
+ * Only what the notification shows: who, where, and the start of the text.
+ */
+export type HostMessageNotice = {
+  /** The client's conversation key: `dm:<authorId>` or `channel:<channelId>`. */
+  conversation: string;
+  /** A direct message to the host's person (not a channel post or reply). */
+  direct: boolean;
+  /** The author's display name. */
+  author: string;
+  /** The channel's name, for a channel post or reply. */
+  channel?: string;
+  /** The text, cut to `HOST_NOTICE_BODY_MAX_LENGTH` characters; empty for a picture or location alone. */
+  body: string;
+  attachment: boolean;
+  location: boolean;
+};
+
 export type ClientEvent =
   | {
       type: "messageCreated";

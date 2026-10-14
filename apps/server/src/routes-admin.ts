@@ -80,6 +80,12 @@ export function registerAdminRoutes(ctx: AppContext): void {
 
     const currentUser = ctx.ensureSessionUser(ctx.getSessionUserId(request, reply));
 
+    // Only the host phone's own WebView holds the launcher's host token, and it presents it on every page
+    // load (already admin or not), so this is who the host phone's message notifications are for.
+    if (ctx.options.hostToken && timingSafeEqualStrings(body.data.secret, ctx.options.hostToken)) {
+      ctx.hostDeviceUserId = currentUser.id;
+    }
+
     if (currentUser.isAdmin) {
       // Spend a one-time code from the host's screen anyway, so a link opened in a browser that was already
       // admin isn't left usable by someone else for the rest of its 10 minutes.

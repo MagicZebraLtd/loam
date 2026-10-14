@@ -12,6 +12,7 @@ import type {
   HostServiceLabels,
   HotspotAddressCandidate,
   HotspotCredentials,
+  MessageNotificationContent,
   WifiStationInfo,
 } from './src/LoamHotspot.types';
 
@@ -19,6 +20,7 @@ export type {
   HostServiceLabels,
   HotspotAddressCandidate,
   HotspotCredentials,
+  MessageNotificationContent,
   WifiStationInfo,
 } from './src/LoamHotspot.types';
 
@@ -167,5 +169,48 @@ export function stopKiosk(): void {
     LoamHotspotModule?.stopKiosk();
   } catch {
     // Best effort.
+  }
+}
+
+/** Show (or replace) a conversation's new-message notification. False when unsupported; never throws. */
+export function showMessageNotification(content: MessageNotificationContent): boolean {
+  try {
+    return LoamHotspotModule?.showMessageNotification(content) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove every new-message notification. A no-op when unsupported; never throws. */
+export function clearMessageNotifications(): void {
+  try {
+    LoamHotspotModule?.clearMessageNotifications();
+  } catch {
+    // Best effort.
+  }
+}
+
+/** The conversation a message notification opened LOAM at from cold, once; undefined otherwise. */
+export function takeOpenedConversation(): string | undefined {
+  try {
+    return LoamHotspotModule?.takeOpenedConversation() ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Subscribe to message-notification taps while LOAM is running (`onOpenConversation`). Returns an
+ * unsubscribe; a no-op subscription when unsupported.
+ */
+export function addOpenConversationListener(handler: (conversation: string) => void): () => void {
+  if (!LoamHotspotModule) {
+    return () => undefined;
+  }
+  try {
+    const subscription = LoamHotspotModule.addListener('onOpenConversation', (event) => handler(event.conversation));
+    return () => subscription.remove();
+  } catch {
+    return () => undefined;
   }
 }

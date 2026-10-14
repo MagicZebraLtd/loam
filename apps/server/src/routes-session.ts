@@ -45,6 +45,10 @@ export function registerSessionRoutes(ctx: AppContext): void {
   ctx.server.post("/api/session/end", async (request, reply) => {
     const token = readCookie(request.headers.cookie, sessionCookieName);
     if (token) {
+      // The host phone forgetting its own identity: stop notifying it for that person.
+      if (ctx.hostDeviceUserId !== undefined && ctx.sessions.get(token) === ctx.hostDeviceUserId) {
+        ctx.hostDeviceUserId = undefined;
+      }
       ctx.sessions.delete(token);
       ctx.store.deleteSession(token);
     }

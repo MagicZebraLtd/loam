@@ -67,8 +67,29 @@ export type HostServiceLabels = {
   text: string;
 };
 
+/**
+ * One new-message notification, already in the app's language (`src/lib/message-notifications.ts` builds
+ * it). Shown by `MessageNotifications.kt`, one per conversation.
+ */
+export type MessageNotificationContent = {
+  /** The web client's conversation key (`dm:<id>` / `channel:<id>`): a tap opens LOAM there. */
+  conversation: string;
+  title: string;
+  text: string;
+  /** How many messages it stands for, since LOAM was last in front. */
+  count: number;
+  /** What the lock screen shows when private content is hidden there. */
+  publicTitle: string;
+  publicText: string;
+  /** The "Messages" channel's name and description in Android's notification settings. */
+  channelName: string;
+  channelDescription: string;
+};
+
 /** Native → JS events. `onHotspotStopped` fires when the SYSTEM tears the hotspot down (tethering
- * enabled, Wi-Fi toggled, OEM power policy) — never for our own `stopHotspot()`. */
+ * enabled, Wi-Fi toggled, OEM power policy) — never for our own `stopHotspot()`. `onOpenConversation`
+ * fires when a message notification is tapped while LOAM is running. */
 export type LoamHotspotEvents = {
   onHotspotStopped: () => void;
+  onOpenConversation: (event: { conversation: string }) => void;
 };

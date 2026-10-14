@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -187,5 +189,57 @@ describe("regression: main.js's encrypted-driver-unavailable downgrade must not 
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("startEmbeddedServer when its port is taken", () => {
+  const envKeys = ["LOAM_DATA_DIR", "LOAM_CLIENT_DIST", "PORT", "HOST"] as const;
+  const saved: Record<string, string | undefined> = {};
+  const cleanup: (() => Promise<void> | void)[] = [];
+  const quiet = { write: () => undefined };
+
+  afterEach(async () => {
+    while (cleanup.length) {
+      await cleanup.pop()?.();
+    }
+    for (const key of envKeys) {
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
+    }
+  });
+
+  it("rejects with EADDRINUSE having closed what it opened, so a later attempt on the same data dir boots", async () => {
+    for (const key of envKeys) {
+      saved[key] = process.env[key];
+    }
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-port-taken-test-"));
+    const clientDir = mkdtempSync(join(tmpdir(), "loam-port-taken-client-"));
+    cleanup.push(() => {
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(clientDir, { recursive: true, force: true });
+    });
+
+    // Another program already listening on the port.
+    const squatter = createServer();
+    await new Promise<void>((resolve) => squatter.listen(0, "127.0.0.1", resolve));
+    const port = (squatter.address() as AddressInfo).port;
+    process.env.LOAM_DATA_DIR = dataDir;
+    process.env.LOAM_CLIENT_DIST = clientDir;
+    process.env.HOST = "127.0.0.1";
+    process.env.PORT = String(port);
+    const signalListeners = process.listeners("SIGINT").length;
+
+    await expect(startEmbeddedServer({ logStream: quiet })).rejects.toMatchObject({ code: "EADDRINUSE" });
+    // The failed attempt left no SIGINT handler behind to shut down a server that never started.
+    expect(process.listeners("SIGINT")).toHaveLength(signalListeners);
+
+    // Once the other program lets go, the same process boots on the same data dir.
+    await new Promise<void>((resolve) => squatter.close(() => resolve()));
+    const app = await startEmbeddedServer({ logStream: quiet, handleSignals: false });
+    cleanup.push(() => app.close());
+    expect((await app.server.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
   });
 });

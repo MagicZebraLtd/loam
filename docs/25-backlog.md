@@ -80,7 +80,7 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 | P12 | Per-channel retention TTL (only global today) | 07,12 | S | — |
 | P13 | Lock / pin channels | 07 | S | — |
 | P14 | Typing indicators (presence dots exist) | 07 | S | — |
-| P15 | **Web-push / PWA notifications** — and wire the dead `notifyIfHidden` (`Notification.requestPermission` is never called → notifications never fire) | 07,15#22 | S–M | — |
+| P15 | ~~**Web-push / PWA notifications**~~ — **built for what a plain-HTTP node allows (0.6.3):** in-page tone/vibration in the web client (Settings → Notifications) and Android notifications for the host phone's own person (docs/04 "Message notifications"). Real browser notifications for joiners stay impossible without a secure context. | 07,15#22 | — | — |
 | P16 | Backup / export / import (team continuity; config-gated, off by default) | 07 | S–M | Product decision |
 | P17 | Identity/key verification (safety numbers/QR) — only meaningful post-E2EE/accounts | 07 | M | Dep S2/S3 |
 | P18 | In-band mesh contact-request flow (cards are out-of-band today) | 16 | M | — |

@@ -146,7 +146,7 @@ The host runs a `WifiManager.LocalOnlyHotspot`. Joiners **Step 1** scan the WiFi
   addresses (a browser on the host phone opening the hotspot URL is not a joiner), and a candidate whose
   subnet contains one wins outright — proof, not inference (only among *eligible*
   candidates: a laptop on the host's home Wi-Fi never promotes that upstream interface); Step 2 then shows
-  **"N phones connected"**, the one signal that the whole path works; (4) when the native check positively
+  **"N devices connected"**, the one signal that the whole path works; (4) when the native check positively
   ruled the phone's own networks out and exactly one private, not-pre-existing candidate is left, it is
   taken even under an unfamiliar interface name. Anything the launcher can't tell (`rndis`/`usb`/`ncm`
   USB tethering, `bt-pan`, `p2p*` Wi-Fi Direct, tunnels, cellular) is never a candidate. `use-hotspot.ts`
@@ -213,7 +213,7 @@ With Wi-Fi off and no wired adapter — even with a VPN tunnel (`ipsec<N>`, `tun
 tethering hotspot or a stale AP interface around — there is no URL and no QR: the card says "Connect this
 phone to Wi-Fi or a wired network first", plus any other addresses as "also at". When the address is a
 wired adapter's (`WifiJoinDisplay.wired`), the status pill reads "Hosting on a wired network" and the card
-names the connection as wired instead of showing a Wi-Fi name. "N phones connected" works in both modes
+names the connection as wired instead of showing a Wi-Fi name. "N devices connected" works in both modes
 and remains the proof that the path works.
 
 **Client isolation.** Guest, hotel, café and campus networks often stop devices from reaching each other,
@@ -225,6 +225,48 @@ parsing, address choice, panel projection and persistence are covered by `host-m
 `host-mode-store.test.ts`. It has not yet been run on a physical phone: the station read, the SSID
 redaction behaviour, the wired flag (a laptop on Ethernet) and the no-internet-router case all need a
 device test.
+
+### When the server can't start
+
+`embedded-main.ts` never calls `process.exit`: under nodejs-mobile Node shares the Android app's process, so
+exiting closed the whole app before the host screen could say why. A failed boot is reported over the bridge
+(`boot_failed`, or a typed recoverable code) and the runtime stays up. A port another app already holds is
+`port_in_use`: `startEmbeddedServer` closes everything it opened, the host screen explains in the phone's
+language, and Retry re-runs the launcher's boot in-process (the same `loam-db-unlock` path as the encryption
+retries). Readiness comes only from the server's in-process `__loamReportBootReady`, never from an HTTP answer
+on `127.0.0.1:3000`, which another app could give; main.js keeps a 5-minute `boot_timeout` watchdog, retired by
+any reported failure. For the same reason main.js sends no host-token request (`meshRequest`: the mesh bridge,
+`/api/host/*`) until that signal has arrived, so a squatter on the port never sees the token.
+
+### Message notifications
+
+The host phone's own person gets Android notifications for new messages while LOAM is in the background
+(the foreground service keeps the process, and so the embedded server, alive). Joiners' browsers can't:
+the Notification and Push APIs need a secure context and a node is plain HTTP, so the web client only plays
+a tone and/or vibrates while its page is open (`apps/client/src/lib/alerts.ts`, Settings → Notifications).
+
+- **Who the host is.** The host's WebView presents the launcher's per-boot host token to
+  `POST /api/admin/claim` on every page load, even when it is already admin; the server keeps that
+  session's user as `hostDeviceUserId` (in memory, cleared by the kill switch).
+- **Which messages.** `broadcast()` hands each `messageCreated` to `notifyHostDevice` (realtime.ts), which
+  passes `globalThis.__loamNotifyHost` (installed by main.js) a `HostMessageNotice` only for a message the
+  host's own socket would receive (the same audience, shadow-ban and private-channel filter), never the
+  host's own, a reaction, a bot's, or one from someone the host blocked. Text is cut to 280 characters.
+- **When.** main.js posts it to RN as `loam-message-notice`; `src/lib/message-notifier.ts` shows it only
+  while `AppState` isn't `active`, and only at the level the person chose in the web client's Settings
+  (Direct messages, the default / Every message / Nothing), which the WebView posts as `loam-alerts` and
+  RN keeps in SecureStore (`loam.alertLevel`). The in-page alert stays quiet in a hidden host WebView, so
+  nothing plays twice.
+- **How it looks.** `MessageNotifications.kt`: one notification per conversation (replaced by the next,
+  with a count), on a "Messages" channel at high importance with Android's default sound and vibration,
+  which the person changes in Android's settings for LOAM. The lock screen shows only "LOAM: New message"
+  unless the person allows private content there. A tap opens LOAM at that conversation (the key rides the
+  launch intent; `onOpenConversation` while running, `takeOpenedConversation` from cold). They are all
+  cleared when LOAM comes to the front, at the start of every Emergency Reset (the kill switch calls
+  `globalThis.__loamHostReset`, main.js posts `loam-host-reset`, whoever ran the reset and even with the host's
+  WebView suspended), when the web client reports a reset (`loam-wipe`) and when LOAM closes after one.
+- **Permission.** The `POST_NOTIFICATIONS` prompt the hosting notice already asks covers these; no other
+  permission is involved, and nothing leaves the phone.
 
 ### Setup screens
 

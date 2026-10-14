@@ -46,7 +46,21 @@ vi.mock('@/hooks/use-theme', () => ({ useTheme: () => ({}) }));
 vi.mock('@/lib/on-device-llm', () => ({ registerOnDeviceLlm: () => () => undefined }));
 vi.mock('@/lib/save-file', () => ({ clearSharedFiles: async () => undefined, parseSaveFileMessage: () => undefined, shareReceivedFile: async () => undefined }));
 vi.mock('@/mesh/mesh-courier', () => ({ registerMeshCourier: () => () => undefined }));
+vi.mock('@/lib/message-notifications', () => ({
+  alertLevelForClientMessage: () => undefined,
+  conversationPath: () => undefined,
+  messageNotifier: {
+    load: async () => 'dms',
+    notice: () => false,
+    setLevel: () => undefined,
+    appBecameActive: () => undefined,
+    clearAll: () => undefined,
+  },
+}));
 vi.mock('../../modules/loam-hotspot', () => ({
+  addOpenConversationListener: () => () => undefined,
+  clearMessageNotifications: vi.fn(),
+  takeOpenedConversation: () => undefined,
   closeApp: vi.fn(),
   startHostService: vi.fn(),
   startKiosk: vi.fn(),

@@ -37,6 +37,7 @@ import { bytesToBase64, exceededAttachmentLimit, formatByteLimit, prepareImageAt
 import { cachedBlockListFor, fetchBlockList, persistBlockList, setUserBlocked, withoutBlockedAuthors } from "./lib/blocks";
 import { confirmIdentity, forgetConfirmedIdentity, listenForIdentityChange, readConfirmedIdentity } from "./lib/identity";
 import { takeAdminClaimCode } from "./lib/admin-link";
+import { createAlerter, inHostApp, readAlertPreferences, shouldAlert } from "./lib/alerts";
 import { takeInviteCode } from "./lib/invite";
 import { linkCodePresentAtStartup } from "./lib/link-code-fragment";
 import {
@@ -373,8 +374,9 @@ function conversationKey(conversation: Conversation): string {
 const TYPING_TTL_MS = 5000;
 const TYPING_THROTTLE_MS = 2500;
 
-// No OS notifications: web-push needs a secure context that a plain-HTTP LAN origin doesn't provide, so the
-// in-app `pushToast` is the new-message signal. OS push for the Android host is future work (docs/25 P15).
+// No browser notifications: the Notification and Push APIs need a secure context that a plain-HTTP LAN origin
+// doesn't provide, so a new message shows as an in-app toast plus the tone/vibration chosen in Settings
+// (lib/alerts.ts). The Android host app posts real notifications for its own person (docs/04).
 
 /**
  * Tell the Android host app (if this page is running inside its WebView) that the node was just
@@ -514,6 +516,9 @@ function LoamApp() {
   const [openReports, setOpenReports] = useState(0);
   // Guards the Android host's one-at-a-time admin claim (see the boot effect).
   const hostClaimInFlightRef = useRef(false);
+  // The identity the host token was last presented for, so the host's WebView tells the node once per page
+  // load and identity who the host phone's notifications are for, even when it's already admin.
+  const hostTokenPresentedForRef = useRef<string>();
   // Bumped to force a full server re-sync: on WebSocket reconnect (missed events don't replay) and
   // on a failed boot fetch (retry with backoff instead of stranding the app offline).
   const [syncTick, setSyncTick] = useState(0);
@@ -574,6 +579,8 @@ function LoamApp() {
   routeRef.current = location.route;
   const currentUserIdRef = useRef(currentUser.id);
   currentUserIdRef.current = currentUser.id;
+  // One alerter for the page, so a burst of messages plays one tone.
+  const playAlertRef = useRef(createAlerter());
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   const messagesRef = useRef(messages);
@@ -650,9 +657,10 @@ function LoamApp() {
   );
 
   /**
-   * Surface a live incoming message in a non-active conversation (and, best effort, as an OS
-   * notification) so people notice traffic elsewhere. Skips own messages and reactions. Reads the
-   * latest UI state through refs since the WebSocket handler is a stable long-lived closure.
+   * Surface a live incoming message in a non-active conversation, and play the new-message alert the
+   * person chose in Settings (lib/alerts.ts), so people notice traffic elsewhere. Skips own messages and
+   * reactions. Reads the latest UI state through refs since the WebSocket handler is a stable long-lived
+   * closure.
    */
   const maybeToastForMessage = useCallback(
     (message: Message) => {
@@ -670,6 +678,19 @@ function LoamApp() {
       }
 
       const active = activeConversationRef.current;
+      const alertPreferences = readAlertPreferences();
+
+      if (
+        shouldAlert({
+          preferences: alertPreferences,
+          direct: message.type === "dm",
+          inActiveConversation: !!active && conversationKey(active) === key,
+          pageVisible: document.visibilityState === "visible",
+          hostApp: inHostApp(),
+        })
+      ) {
+        playAlertRef.current(alertPreferences);
+      }
 
       if (active && conversationKey(active) === key) {
         return;
@@ -1709,15 +1730,22 @@ function LoamApp() {
         // token: claim admin with it (`hostDevice` bootstrap). It is kept for the life of
         // the page: a failed claim (a rate limit, a blip) retries on the next boot pass, and a new
         // identity (after a wipe) claims again, since with `hostDevice` there is no other way for this node to
-        // gain an admin. One claim at a time; the server treats a claim by an existing admin as a no-op. Boot
+        // gain an admin. An admin presents it too, once per page load: the server treats that claim as a
+        // no-op except to note who the host phone's message notifications are for. One claim at a time. Boot
         // then carries on as the claimed admin: the snapshot it started from still says pending on an
         // approval-only network, and acting on that would skip loading the channels.
         const hostToken = window.__loamHostDeviceToken;
-        if (typeof hostToken === "string" && hostToken.length > 0 && !nextConfig.currentUser.isAdmin && !hostClaimInFlightRef.current) {
+        if (
+          typeof hostToken === "string" &&
+          hostToken.length > 0 &&
+          (!nextConfig.currentUser.isAdmin || hostTokenPresentedForRef.current !== nextConfig.currentUser.id) &&
+          !hostClaimInFlightRef.current
+        ) {
           hostClaimInFlightRef.current = true;
           try {
             const claimed = await claimAdmin(hostToken);
             nextConfig = { ...nextConfig, currentUser: claimed };
+            hostTokenPresentedForRef.current = claimed.id;
           } catch {
             // Keep the token; retried on the next resync (WS reconnect / boot retry).
           } finally {

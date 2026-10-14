@@ -344,6 +344,24 @@ describe("the host terminal's one-time admin link", () => {
   });
 });
 
+describe("the Android host's own WebView", () => {
+  const HOST_TOKEN = "host-token-0123456789abcdefghijklmnopq";
+
+  afterEach(() => {
+    delete (window as { __loamHostDeviceToken?: string }).__loamHostDeviceToken;
+  });
+
+  it("presents the host token even when already admin, so the node knows who the phone's notifications are for", async () => {
+    (window as { __loamHostDeviceToken?: string }).__loamHostDeviceToken = HOST_TOKEN;
+    const fetchMock = stubNode({ currentUser: { ...me, isAdmin: true } });
+    await boot("/channels");
+
+    const claims = fetchMock.mock.calls.filter(([url]) => url === "/api/admin/claim");
+    expect(claims).toHaveLength(1);
+    expect(JSON.parse(String(claims[0]![1]?.body))).toEqual({ secret: HOST_TOKEN });
+  });
+});
+
 describe("the Welcome screen (member rules)", () => {
   it("greets someone who hasn't agreed yet instead of opening the network", async () => {
     stubNode({ currentUser: { ...me, rulesVersion: undefined } });

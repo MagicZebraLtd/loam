@@ -58,7 +58,7 @@ export type HostState = {
   wired?: boolean;
 };
 
-/** "Phones connected: 3": a count after a label reads naturally in every language, with no plural rules. */
+/** "Devices connected: 3": a count after a label reads naturally in every language, with no plural rules. */
 export function connectedLabel(count: number): string {
   return t('host.connected', { n: count });
 }

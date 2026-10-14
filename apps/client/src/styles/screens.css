@@ -422,6 +422,24 @@
   padding: 0;
 }
 
+/* Notifications card (components/NotificationsPanel.tsx): the level radios, then the switches and Try it. */
+.alert-level-field {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.alert-level-field > legend {
+  margin-bottom: var(--space-1);
+  padding: 0;
+}
+
+.notifications-card .switch-list {
+  margin: var(--space-2) 0 var(--space-3);
+}
+
 /* A miniature conversation: page background with one bubble each side. The colours are the palettes'
    own (tokens.css --bg-app / --bubble-theirs / --bubble-mine), fixed on purpose so every tile shows its
    theme whatever the page is using; `system` splits diagonally between the two. */

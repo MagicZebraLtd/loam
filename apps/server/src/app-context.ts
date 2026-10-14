@@ -79,6 +79,10 @@ export type AppContext = {
   staticFilesRegistered: boolean;
   appConfig: LoamConfig;
   adminSetupCode: string | undefined;
+  /** The person the Android host's own WebView signed in as (it presented the launcher's host token this
+   * boot); their messages raise Android notifications on the host phone (realtime.ts `notifyHostDevice`).
+   * In memory only: the WebView presents the token again on every page load. Cleared by the kill switch. */
+  hostDeviceUserId: string | undefined;
   data: AppData;
   store: LoamStore;
   /** Ids of stored rows that no longer validate and couldn't be repaired (live: `store.quarantine()`). */
