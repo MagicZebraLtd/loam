@@ -6,6 +6,14 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-15
+
+### Changed
+- **Google Play and GitHub installs of the Android host are now signed with the same key**, so either one can
+  update the other. Google Play now signs LOAM with Magic Zebra's own release key, the key that signs the APK
+  on GitHub. The app is otherwise the same as 0.6.3. Anyone who installed an earlier test build from Google
+  Play needs to uninstall it once and install again.
+
 ## [0.6.3] - 2026-10-13
 
 ### Added
