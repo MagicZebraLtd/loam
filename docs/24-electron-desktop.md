@@ -171,7 +171,9 @@ Honest caveats:
   Any program running as the same user can ask the OS to unseal the item, subject to the OS's prompts.
 - **What the database encryption does not cover.** As for the CLI, pictures, files and avatars are stored
   beside the database unencrypted. And the host's own client window keeps a browser copy of what it shows on
-  disk (next section) outside the database's key, for every network except `ephemeral`.
+  disk (next section) outside the database's key, for every network except `ephemeral`; that copy is erased
+  by Emergency Reset (both the in-process reset and the fixed-key handoff), by "Start a new network" and by
+  setup, never left behind for a later network. Chromium's own on-disk logs are not securely erased.
 - **SQLCipher is a Node-API addon** (`better-sqlite3-multiple-ciphers` ^13, NAPI_VERSION 10), which is ABI-stable
   across Node and Electron. Nothing is compiled: `scripts/native.mjs` copies the prebuild for the target
   platform and architecture into `dist/main/node_modules/`, where the server bundle's `createRequire` finds it.
@@ -333,7 +335,7 @@ Names carry no version, so the website can link `releases/latest/download/<name>
 |---|---|
 | `LOAM-mac-arm64.dmg`, `LOAM-mac-x64.dmg` | macOS, Apple Silicon and Intel |
 | `LOAM-win-x64.exe` | Windows, NSIS (per-user by default, choice of folder, not one-click) |
-| `LOAM-linux-x64.AppImage`, `LOAM-linux-x64.deb` | Linux |
+| `LOAM-linux-x64.AppImage`, `LOAM-linux-x64.deb` | Linux. On Ubuntu 24.04 and newer, AppArmor stops an AppImage from using Chromium's user-namespace sandbox (the same reason CI's smoke passes `--no-sandbox`), so the `.deb`, whose post-install sets up the `chrome-sandbox` helper, is the one to recommend there; the site's /desktop page says so. Not yet run on a real Ubuntu desktop. |
 
 There is **no Windows arm64 and no Linux arm64 artifact**; the driver prebuilds exist for them, but nothing
 builds or tests them. Each release file also gets a `.sha256`.
@@ -352,6 +354,13 @@ State today: **nothing is signed or notarized.**
   contents of the App Store Connect `AuthKey_XXXX.p8`), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The next tag
   build then signs and notarizes with no workflow change (`notarize: true` is skipped without the API key).
   `CSC_LINK` without the API key signs but does not notarize, and the build warns.
+  **Entitlements** (`build/entitlements.mac.plist`) grant only `allow-jit` and `allow-unsigned-executable-memory`,
+  which V8 needs under the hardened runtime. `allow-dyld-environment-variables` and `disable-library-validation`
+  are deliberately absent: with them, any local process could start LOAM with an injected library and ask the
+  keychain for "LOAM Safe Storage", which is the device secret, and that is exactly what the fuses are there to
+  stop. The unpacked SQLCipher `.node` is signed with the bundle, so library validation passes. Entitlements only
+  take effect on a signed build, so the **first signed build must re-test launch and the encrypted `--smoke`**
+  before it is released.
 - **Windows.** Free signing for open source from **SignPath Foundation**. Setup, when the owner has an
   account: a project with slug `loam`, a signing policy `release-signing` (with manual approval by the
   organization owners), and an artifact configuration `installer` whose root element is `<zip-file>` holding

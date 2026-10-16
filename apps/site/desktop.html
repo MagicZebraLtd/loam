@@ -112,9 +112,14 @@
 
         <h3>Linux</h3>
         <p>
-          For the AppImage, make it runnable and start it: <code>chmod +x LOAM-linux-x64.AppImage</code>, then
-          <code>./LOAM-linux-x64.AppImage</code>. For the .deb, install it with
-          <code>sudo apt install ./LOAM-linux-x64.deb</code> and open LOAM from your applications menu.
+          On Ubuntu and Debian, install the .deb with <code>sudo apt install ./LOAM-linux-x64.deb</code> and
+          open LOAM from your applications menu. For the AppImage, make it runnable and start it:
+          <code>chmod +x LOAM-linux-x64.AppImage</code>, then <code>./LOAM-linux-x64.AppImage</code>.
+        </p>
+        <p>
+          Ubuntu 24.04 and newer stop an AppImage from setting up the sandbox that LOAM's windows run in, so on
+          those systems use the .deb, which installs the sandbox helper properly. Running the AppImage there with
+          <code>--no-sandbox</code> works but turns that protection off, so it is not recommended.
         </p>
 
         <h2 id="verify">Verify your download</h2>

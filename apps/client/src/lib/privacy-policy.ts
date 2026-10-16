@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "7 October 2026";
+export const PRIVACY_POLICY_UPDATED = "16 October 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -55,7 +55,9 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "The Android app from Google Play asks the Play Store app on the phone whether a newer LOAM exists, " +
           "when LOAM opens. The Android app from GitHub checks only when you tap **Check for updates**: it asks " +
           "GitHub for LOAM's latest version number, and GitHub sees your phone's internet address. Neither " +
-          "check sends anything from your LOAM network, and neither downloads or installs anything by itself.",
+          "check sends anything from your LOAM network, and neither downloads or installs anything by itself. " +
+          "The desktop app for Mac, Windows and Linux works the same way as the GitHub Android app: it checks " +
+          "only when you tap **Check for updates**, never on its own.",
       },
     ],
   },
