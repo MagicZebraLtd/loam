@@ -138,6 +138,14 @@ export type User = z.infer<typeof UserSchema>;
  */
 export const MEMBER_RULES_VERSION = 2;
 
+/**
+ * The version of the host's "You run this network" note (what people post is stored on the host's device, check
+ * reports, remove what breaks the rules, report child sexual abuse material). Every host UI shows the same note
+ * once (the terminal UI, the desktop app; the Android app keeps its own record) and records this number when it
+ * is acknowledged. Bump it when the note changes in substance, so every host sees it again.
+ */
+export const HOST_ACK_VERSION = 1;
+
 /** `POST /api/users/me/rules`: agree to the rules at this version (must be the current one). */
 export const RulesAcceptRequestSchema = z.object({
   version: z.number().int().min(1).max(1_000_000),

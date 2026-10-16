@@ -81,7 +81,16 @@ soil. We picked the word first and worked out the letters afterwards.)*
 The host phone is the network's admin automatically. Needs Android 7 or newer; hosting a hotspot needs
 Android 8 or newer.
 
-### On a Mac, Linux or Windows computer, or a Raspberry Pi
+### On a Mac, Linux or Windows computer
+
+**The desktop app** is the double-click way: download LOAM for your system from
+[loamnet.com/desktop](https://loamnet.com/desktop), open it, answer a few questions, and it shows the code
+to scan. Closing its window keeps the network running; Quit stops it. It is not signed yet, so the first
+launch needs an extra click on each system (the page says which), and it has not yet been run on every
+system it targets. It is unreleased: the first version ships with 0.7.0. [docs/24](docs/24-electron-desktop.md)
+has the details.
+
+### In a terminal, on a computer or a Raspberry Pi
 
 ```bash
 npx loamnet
@@ -263,6 +272,7 @@ and the build says so. A debug-signed APK can't update a release-signed install.
 | [`apps/server`](apps/server) | The server: REST and WebSocket, SQLite (optionally SQLCipher), sync, mesh, assistant. |
 | [`apps/client`](apps/client) | The web app everyone uses (Preact, Vite). |
 | [`apps/app`](apps/app) | The Android host app (Expo, React Native, embedded Node.js). |
+| [`apps/desktop`](apps/desktop) | The desktop host app for Mac, Windows and Linux (Electron). |
 | [`apps/site`](apps/site) | [loamnet.com](https://loamnet.com). |
 | [`cli`](cli) | The `loamnet` npm package. |
 | [`packages/*`](packages) | The shared schemas, names, avatars, QR codes and crypto. |
@@ -274,7 +284,7 @@ packed CLI on every push and pull request to `master`.
 ## Documentation
 
 - [Operator's guide](docs/12-operators-guide.md): running a network, from setup to emergency.
-- [Android host app](docs/04-android-host-app.md) · [The `loamnet` package](docs/14-distribution.md)
+- [Android host app](docs/04-android-host-app.md) · [Desktop app](docs/24-electron-desktop.md) · [The `loamnet` package](docs/14-distribution.md)
 - [Transport security](docs/08-transport-security.md) · [Security profiles](docs/09-security-profiles.md)
   · [Emergency reset](docs/02-kill-switch.md) · [`SECURITY.md`](SECURITY.md)
 - [Linking networks](docs/11-node-sync.md) · [Opportunistic mesh](docs/16-opportunistic-mesh.md)

@@ -6,7 +6,7 @@
  * leaves 21 rows of body in an 80×24 terminal: exactly the join QR's height.
  * Locked in kiosk mode, the whole terminal shows only the join QR and how to unlock.
  */
-import type { HostStatus } from "@loam/schema";
+import { HOST_ACK_VERSION, type HostStatus } from "@loam/schema";
 
 import { type Line, lineWidth, text } from "./ansi.js";
 import { createKeyReader, isChar, type Key } from "./keys.js";
@@ -35,10 +35,10 @@ export const MIN_ROWS = 12;
 
 const TOAST_MS = 4_000;
 /**
- * The host's "You run this network" note (the Android app shows the same one): shown once when the terminal
- * UI first starts, until acknowledged, then recorded in cli.json. Bump it when the text changes in substance.
+ * The host's "You run this network" note (the Android and desktop apps show the same one): shown once when the
+ * terminal UI first starts, until acknowledged, then recorded in cli.json. Its version is shared in @loam/schema.
  */
-export const HOST_ACK_VERSION = 1;
+export { HOST_ACK_VERSION };
 /** How long a lone Escape waits for the rest of a key sequence before it counts as Escape. */
 const ESCAPE_WAIT_MS = 40;
 const REFRESH_MS = 1_000;

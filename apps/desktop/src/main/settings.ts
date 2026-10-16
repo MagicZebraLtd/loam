@@ -7,7 +7,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { DbEncryptionModeSchema, SETUP_PRESETS, type HostLogLevel, type SetupPreset } from "@loam/schema";
+import { DbEncryptionModeSchema, HOST_ACK_VERSION, SETUP_PRESETS, type HostLogLevel, type SetupPreset } from "@loam/schema";
 import { z } from "zod";
 
 import { JoinHostSchema, MAX_NODE_NAME, type DesktopSettingsView, type NetworkRecord } from "../shared/ipc.js";
@@ -22,11 +22,8 @@ export type DesktopSettings = {
 
 export const SETTINGS_FILE = "desktop.json";
 
-/**
- * The version of the host's "You run this network" note. The same note, and the same number, as the terminal
- * UI's `HOST_ACK_VERSION` (packages/tui/src/app.ts), which @loam/tui doesn't export: bump both together.
- */
-export const HOST_ACK_VERSION = 1;
+/** The version of the host's "You run this network" note, shared with every host UI through @loam/schema. */
+export { HOST_ACK_VERSION };
 
 const NetworkRecordSchema = z.object({
   preset: z.enum(SETUP_PRESETS as unknown as [SetupPreset, ...SetupPreset[]]),

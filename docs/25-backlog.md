@@ -19,6 +19,9 @@
 | O7 | **The app's own "Show the hosting notification?" prompt** did not appear on a first start on the emulator (the system dialog asked directly). Check on a phone whether that is intended. | 04 | Hardware |
 | O8 | **Template packages still linked through expo-router**: removing the unused Expo template dependencies left reanimated, gesture-handler and worklets in the APK, because expo-router depends on or optionally peers them. Revisit with Expo SDK 58, which also clears the `decode-uri-component` advisory. | 04 | Expo SDK 58 |
 | O9 | **A LAN neighbour can still tire the claim and panic limits for a network**: each address is counted on its own now, but the looser per-/64 bound (40 attempts per 5 minutes) can still be used up by one device cycling IPv6 addresses. That is the price of bounding guesses at all; revisit if it matters in practice. | 08, 12 | Decision |
+| O10 | **Desktop app on real machines**: only the Mac arm64 build has been produced locally. Run the Windows installer, the Linux AppImage and `.deb` (with and without a secret service), and the Intel Mac build; drive the real `safeStorage` flow, the firewall prompts, a phone joining and Emergency Reset on every key mode (the checks are docs/21 §5). | 24, 21 §5 | Hardware |
+| O11 | **Desktop signing**: add the five Apple secrets once the developer enrolment completes (the Mac build then signs and notarizes with no workflow change, and the keychain stops re-prompting after each update); create the SignPath Foundation project (`loam`, `release-signing`, `installer`) and add its two secrets. | 24 | Process (owner) |
+| O12 | **Desktop: Linux desktops with no tray**: closing the window leaves the network running with no icon to bring it back (a second launch focuses the window). Decide on a fallback (a notice on close, or Quit instead of hide when no tray is available). | 24 | Product decision |
 
 ## Earlier notes
 
@@ -85,6 +88,19 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 | P17 | Identity/key verification (safety numbers/QR) — only meaningful post-E2EE/accounts | 07 | M | Dep S2/S3 |
 | P18 | In-band mesh contact-request flow (cards are out-of-band today) | 16 | M | — |
 | P19 | Group/broadcast sealed fan-out + sealed attachments in the envelope | 16 | L | — |
+
+**Desktop app (docs/24)**
+
+| # | Item | Doc | Size | Needs |
+|---|------|-----|------|-------|
+| P20 | Windows arm64 and Linux arm64 installers (the SQLCipher prebuilds exist; nothing builds or tests them) | 24 | S | Hardware |
+| P21 | A Flatpak (Flathub), Microsoft Store or Mac App Store build. The Mac App Store's sandbox would stop the app serving the LAN. | 24 | M–L | Product decision |
+| P22 | Translations of the host shell (English only; strings are in one table, `src/renderer/lib/strings.ts`) | 13,24 | M | Translators |
+| P23 | A guided hotspot step in the app (today the app shows the address and the website's /desktop page explains the OS hotspot; there is no cross-platform hotspot API) | 24 | M | Product decision |
+| P24 | Encrypt pictures, files and avatars on the host (the same gap as the CLI and Android) | 24,25 | M | None |
+| P25 | Smoke-test the packaged macOS and Windows apps in CI (only the Linux AppImage is today) | 24 | S | CI runners |
+
+An auto-updater is deliberately not on this list: the app never checks by itself (LOAM phones nowhere); Check for updates is tap-only.
 
 ## 3. Opportunistic mesh / transport (hardware epics)
 

@@ -1,3 +1,5 @@
+import { HOST_ACK_VERSION } from "@loam/schema";
+
 /**
  * The limits and fixed values the renderer checks against. They mirror `src/shared/ipc.ts` and @loam/tui,
  * which the renderer imports for types only (their runtime pulls in zod and Node built-ins): `limits.test.ts`
@@ -13,8 +15,8 @@ export const MAX_PASSPHRASE = 1024;
  * as the passphrase, so a new network asks for a little more. Unlocking accepts whatever was set.
  */
 export const MIN_NEW_PASSPHRASE = 8;
-/** `HOST_ACK_VERSION` in packages/tui/src/app.ts: the version of the "You run this network" note. */
-export const HOST_ACK_VERSION = 1;
+/** The version of the "You run this network" note, shared with every host UI through @loam/schema. */
+export { HOST_ACK_VERSION };
 /** Where a person downloads LOAM again (the GitHub releases page, as in apps/app/src/lib/app-updates.ts). */
 export const RELEASES_PAGE = "https://github.com/MagicZebraLtd/loam/releases/latest";
 /** The port the node prefers when none is set (DesktopSettingsView.port). */

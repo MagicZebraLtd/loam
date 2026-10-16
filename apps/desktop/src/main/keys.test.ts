@@ -23,6 +23,10 @@ function fakeBox(available = true, backend?: string): SecretBox {
     isEncryptionAvailable: () => available,
     encryptString: (text) => Buffer.from(`sealed:${[...text].reverse().join("")}`),
     decryptString: (data) => {
+      // Electron's safeStorage throws here when encryption isn't available.
+      if (!available) {
+        throw new Error("encryption unavailable");
+      }
       const text = data.toString();
       if (!text.startsWith("sealed:")) {
         throw new Error("not ours");
@@ -62,7 +66,7 @@ describe("keychainProtects", () => {
     try {
       const store = fileDeviceSecretStore(dir, box);
       store.destroy();
-      expect(() => store.get()).toThrow(KeyError);
+      expect(() => store.get("persistent")).toThrow(expect.objectContaining({ code: "keychain_unavailable" }));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -118,30 +122,54 @@ describe("fileDeviceSecretStore", () => {
   });
 
   it("keeps the secret sealed by the keychain and reads it back", () => {
-    const secret = fileDeviceSecretStore(dir, fakeBox()).get();
+    const secret = fileDeviceSecretStore(dir, fakeBox()).get("persistent");
     expect(secret).toMatch(/^[0-9a-f]{64}$/);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8").startsWith("sealed:")).toBe(true);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).not.toContain(secret);
-    expect(fileDeviceSecretStore(dir, fakeBox()).get()).toBe(secret);
+    expect(fileDeviceSecretStore(dir, fakeBox()).get("persistent")).toBe(secret);
   });
 
   it("mints a new secret after destroy", () => {
     const store = fileDeviceSecretStore(dir, fakeBox());
-    const first = store.get();
+    const first = store.get("persistent");
     store.destroy();
     expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
-    expect(store.get()).not.toBe(first);
+    expect(store.get("persistent")).not.toBe(first);
   });
 
   it("never mints over a secret the keychain won't open", () => {
     writeFileSync(join(dir, DEVICE_SECRET_FILE), "someone else's");
-    expect(() => fileDeviceSecretStore(dir, fakeBox()).get()).toThrow(KeyError);
+    expect(() => fileDeviceSecretStore(dir, fakeBox()).get("persistent")).toThrow(KeyError);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).toBe("someone else's");
   });
 
-  it("falls back to a private plain file with no keychain", () => {
-    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get();
+  it("keeps a sealed secret locked, not re-minted, when the keychain is away", () => {
+    const secret = fileDeviceSecretStore(dir, fakeBox()).get("passphrase");
+    expect(() => fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase")).toThrow(
+      expect.objectContaining({ code: "db_encryption_locked" }),
+    );
+    expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
+  });
+
+  it("keeps a passphrase network's secret in a private plain file with no keychain", () => {
+    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase");
     expect(readFileSync(join(dir, DEVICE_SECRET_PLAIN_FILE), "utf8").trim()).toBe(secret);
-    expect(fileDeviceSecretStore(dir, fakeBox(false)).get()).toBe(secret);
+    expect(fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase")).toBe(secret);
+  });
+
+  it("never keeps a persistent key in the clear", () => {
+    expect(() => fileDeviceSecretStore(dir, fakeBox(false)).get("persistent")).toThrow(
+      expect.objectContaining({ code: "keychain_unavailable" }),
+    );
+    expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(false);
+    expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
+  });
+
+  it("seals a plain secret once this computer has a keychain", () => {
+    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase");
+    expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
+    expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(false);
+    expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).not.toContain(secret);
+    expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
   });
 });

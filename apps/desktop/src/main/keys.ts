@@ -77,10 +77,17 @@ export class KeyError extends Error {
   }
 }
 
+/** What guards a network's data besides the device secret: nothing (`persistent`) or the host's passphrase. */
+export type SecretProtection = "persistent" | "passphrase";
+
 /** The device secret's storage, behind an interface so the controller's tests never touch the keychain. */
 export type DeviceSecretStore = {
-  /** The secret, minted (and stored) on first use. Throws {@link KeyError}. */
-  get(): string;
+  /**
+   * The secret, minted (and stored) on first use. A `persistent` network has nothing but the secret, so it is
+   * minted only where the keychain can seal it; a `passphrase` network's secret may live in a private plain
+   * file on a computer with no keychain. Throws {@link KeyError}.
+   */
+  get(protection: SecretProtection): string;
   /** Delete the secret, proven gone. The next `get` mints a new one. */
   destroy(): void;
 };
@@ -108,45 +115,104 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
   const plainPath = join(userData, DEVICE_SECRET_PLAIN_FILE);
   let cached: string | undefined;
 
-  function read(): string | undefined {
-    let raw: string;
-    try {
-      raw = box.isEncryptionAvailable() ? box.decryptString(readFileSync(sealedPath)) : readFileSync(plainPath, "utf8").trim();
-    } catch (error) {
-      if (isMissing(error)) {
-        return undefined;
-      }
-      // The file is there but the keychain won't open it (another user, a reset keychain): the database it
-      // protects is as good as locked. Never mint over it, which would lose it for good.
-      throw new KeyError("db_encryption_locked", `The stored device secret couldn't be read: ${String(error)}`);
-    }
+  /** A stored secret must be exactly what {@link mintDeviceSecret} writes. */
+  function checked(raw: string): string {
     if (!/^[0-9a-f]{64}$/.test(raw)) {
       throw new KeyError("db_encryption_locked", "The stored device secret is damaged.");
     }
     return raw;
   }
 
+  /** The sealed secret, or undefined when there is none. A sealed file the keychain won't open is a lock, not a miss. */
+  function readSealed(): string | undefined {
+    let sealed: Buffer;
+    try {
+      sealed = readFileSync(sealedPath);
+    } catch (error) {
+      if (isMissing(error)) {
+        return undefined;
+      }
+      throw new KeyError("db_encryption_locked", `The stored device secret couldn't be read: ${String(error)}`);
+    }
+    try {
+      return checked(box.decryptString(sealed));
+    } catch (error) {
+      if (error instanceof KeyError) {
+        throw error;
+      }
+      // The file is there but the keychain won't open it (another user, a reset keychain, no keychain today): the
+      // database it protects is as good as locked. Never mint over it, which would lose it for good.
+      throw new KeyError("db_encryption_locked", `The keychain couldn't open the stored device secret: ${String(error)}`);
+    }
+  }
+
+  /** The plain-file secret (a passphrase network set up with no keychain), or undefined when there is none. */
+  function readPlain(): string | undefined {
+    try {
+      return checked(readFileSync(plainPath, "utf8").trim());
+    } catch (error) {
+      if (isMissing(error)) {
+        return undefined;
+      }
+      throw error instanceof KeyError ? error : new KeyError("db_encryption_locked", `The stored device secret couldn't be read: ${String(error)}`);
+    }
+  }
+
+  /** Whether the keychain can seal a secret right now. Asking can itself fail (a keychain that won't answer): that counts as no. */
+  function canSeal(): boolean {
+    try {
+      return box.isEncryptionAvailable();
+    } catch {
+      return false;
+    }
+  }
+
+  /** Seal `secret` into the keychain-protected file. Throws {@link KeyError} when the keychain refuses. */
+  function seal(secret: string): void {
+    let sealed: Buffer;
+    try {
+      sealed = box.encryptString(secret);
+    } catch (error) {
+      throw new KeyError("keychain_unavailable", `The keychain refused to keep the network's key: ${String(error)}`);
+    }
+    writePrivate(sealedPath, sealed);
+  }
+
   return {
-    get() {
+    get(protection) {
       if (cached !== undefined) {
         return cached;
       }
-      const stored = read();
+      let stored = readSealed();
+      if (stored === undefined) {
+        const plain = readPlain();
+        if (plain !== undefined && canSeal()) {
+          // Kept in the clear from a time this computer had no keychain; it has one now, so seal it. Best effort:
+          // the plain copy stays if sealing fails, since the network must still open.
+          try {
+            seal(plain);
+            rmSync(plainPath, { force: true });
+          } catch {
+            // Sealing is an improvement, not a requirement, for a secret that already exists.
+          }
+        }
+        stored = plain;
+      }
       if (stored !== undefined) {
         cached = stored;
         return stored;
       }
       const secret = mintDeviceSecret();
-      let sealed: Buffer | undefined;
-      try {
-        sealed = box.isEncryptionAvailable() ? box.encryptString(secret) : undefined;
-      } catch (error) {
-        throw new KeyError("keychain_unavailable", `The keychain refused to keep the network's key: ${String(error)}`);
-      }
-      if (sealed) {
-        writePrivate(sealedPath, sealed);
-      } else {
+      if (canSeal()) {
+        seal(secret);
+      } else if (protection === "passphrase") {
         writePrivate(plainPath, `${secret}\n`);
+      } else {
+        // Never a persistent key in the clear: without the keychain there is nothing protecting it at all.
+        throw new KeyError(
+          "keychain_unavailable",
+          "This computer's keychain isn't available, so the network's key can't be kept here between starts.",
+        );
       }
       cached = secret;
       return secret;
@@ -196,11 +262,11 @@ export function resolveDbKey(
           "This computer has no keychain to keep the network's key in, so it can't be kept between starts.",
         );
       }
-      return secrets.get();
+      return secrets.get("persistent");
     case "passphrase":
       if (!options.passphrase) {
         throw new KeyError("db_encryption_locked", "The passphrase is needed to open this network.");
       }
-      return passphraseKey(options.passphrase, secrets.get());
+      return passphraseKey(options.passphrase, secrets.get("passphrase"));
   }
 }

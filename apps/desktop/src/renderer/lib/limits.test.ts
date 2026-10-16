@@ -18,8 +18,7 @@ describe("limits", () => {
     expect(CopyRequestSchema.safeParse({ text: "x".repeat(MAX_COPY_LENGTH + 1) }).success).toBe(false);
   });
 
-  it("keeps the host note's version and words in step with the TUI's", () => {
-    expect(tuiApp).toContain(`export const HOST_ACK_VERSION = ${HOST_ACK_VERSION};`);
+  it("keeps the host note's words in step with the TUI's", () => {
     for (const key of ["hostNote.title", "hostNote.stored", "hostNote.reports", "hostNote.child", "hostNote.more"] as const) {
       expect(tuiApp, key).toContain(`"${en[key]}"`);
     }

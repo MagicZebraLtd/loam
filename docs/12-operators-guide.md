@@ -14,7 +14,7 @@ network unless you link it to another LOAM network.
 | Host | How | Good for |
 |---|---|---|
 | **Android phone** | the LOAM app ([latest release](https://github.com/MagicZebraLtd/loam/releases/latest)) | Anywhere: the phone makes its own Wi-Fi, so no router or internet is needed. |
-| **Mac, Linux or Windows computer** | `npx loamnet` | A laptop already on a Wi-Fi network, or one sharing its own hotspot. |
+| **Mac, Linux or Windows computer** | the desktop app ([loamnet.com/desktop](https://loamnet.com/desktop)), or `npx loamnet` | A laptop already on a Wi-Fi network, or one sharing its own hotspot. |
 | **Raspberry Pi** (or any always-on box) | `npx loamnet` | A fixed spot that stays up; a good partner for a phone network to link with. |
 
 iPhones can join any network but can't host one: iOS doesn't let an app start a hotspot, and pauses apps
@@ -56,6 +56,18 @@ has ended just shows setup again.
 **The host menu** (top right) has **Invite people** (the join codes), **Encryption**, **AI assistant**,
 **Network rules**, **Privacy policy**, **About LOAM** (version, website, email) and, last and in red,
 **Emergency reset**.
+
+### Running LOAM from a desktop app
+
+If you would rather double-click than open a terminal, download the desktop app for your Mac, Windows PC or
+Linux laptop from [loamnet.com/desktop](https://loamnet.com/desktop). It asks for a name, the kind of network
+and how to keep its data (in the computer's keychain, behind a passphrase, or only while it runs), then shows
+the code to scan, and you are the admin. Closing its window keeps the network running; **Quit** stops it.
+Say yes to the firewall question the first time, or phones cannot reach it, and put the computer and the
+phones on the same network (for no router at all, turn on the computer's own hotspot first; the page says
+how). The app is not signed yet, so the first launch needs an extra click, and it has not yet been run on
+every system it targets. [docs/24](24-electron-desktop.md) has the details, including how Emergency Reset
+works with each way of keeping the data.
 
 ### On a computer or Raspberry Pi
 
