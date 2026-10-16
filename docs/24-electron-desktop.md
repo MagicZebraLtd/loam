@@ -152,7 +152,9 @@ computer has no keychain.
 
 **The passphrase** is typed at Setup (minimum 8 characters) and on every start, held in memory only and dropped
 on Stop. The hash includes the device secret, so the passphrase alone opens nothing, and destroying the secret
-makes the database unreadable even to someone who knows the passphrase. A wrong passphrase maps to the Unlock
+makes the database unreadable even to someone who knows the passphrase. The SHA-256 only mixes the secret in:
+the server hands that value to SQLCipher as a text key, and SQLCipher derives the real key from it with its own
+PBKDF2, so guessing a passphrase costs the driver's key derivation per guess, not one hash. A wrong passphrase maps to the Unlock
 screen saying so; a lost device secret under a device-held mode maps to `db_encryption_locked`.
 
 **The keychain is touched lazily.** `capabilities.keychain` is decided at launch **without** asking the OS
