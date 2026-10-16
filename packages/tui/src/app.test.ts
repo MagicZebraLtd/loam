@@ -303,6 +303,34 @@ describe("moving around", () => {
     expect(screenText()).toContain("switch screens");
   });
 
+  it("opens a Support LOAM panel on $ from any screen, and o opens its link", async () => {
+    const { tui, screenText, system } = setup();
+    expect(screenText()).toContain("$ support");
+    await tui.input("3");
+    await tui.input("$");
+    expect(screenText()).toContain("Support LOAM");
+    expect(screenText()).toContain("https://ko-fi.com/magiczebra");
+    expect(screenText()).toContain("o opens it in your browser, Esc closes");
+    await tui.input("o");
+    expect(system.openUrl).toHaveBeenCalledWith("https://ko-fi.com/magiczebra");
+    expect(screenText()).toContain("Support LOAM");
+    await pressEscape(tui);
+    expect(screenText()).not.toContain("Support LOAM");
+    await tui.input("?");
+    expect(screenText()).toContain("support LOAM");
+  });
+
+  it("just shows the link when no browser opens", async () => {
+    const { tui, screenText, system } = setup();
+    vi.mocked(system.openUrl).mockResolvedValue(false);
+    await tui.input("$");
+    await tui.input("o");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await tui.input("x");
+    expect(screenText()).toContain("https://ko-fi.com/magiczebra");
+    expect(screenText()).toContain("Couldn't open a browser");
+  });
+
   it("asks before stopping, and stops on yes", async () => {
     const { tui, quit, screenText } = setup();
     await tui.input("q");

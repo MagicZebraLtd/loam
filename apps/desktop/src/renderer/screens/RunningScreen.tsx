@@ -4,6 +4,7 @@ import type { DesktopBridge, DesktopState } from "../../shared/ipc";
 import { HoldToConfirm } from "../components/HoldToConfirm";
 import { HostNote } from "../components/HostNote";
 import { QrCode } from "../components/QrCode";
+import { SupportDialog } from "../components/SupportDialog";
 import { attempt } from "../lib/attempt";
 import { connectedText, peopleText, typedAddress } from "../lib/format";
 import { needsHostAck } from "../lib/limits";
@@ -159,6 +160,7 @@ export function RunningScreen({ bridge, state }: { bridge: DesktopBridge; state:
             </p>
           ) : null}
           <p className="muted">{t("running.closeNote")}</p>
+          <SupportDialog bridge={bridge} />
         </section>
       </div>
     </main>

@@ -10,11 +10,14 @@ describe("isKnownExternalUrl", () => {
     expect(isKnownExternalUrl("https://github.com/MagicZebraLtd/loam/releases/latest", node)).toBe(true);
     expect(isKnownExternalUrl("https://github.com/MagicZebraLtd/loam", node)).toBe(true);
     expect(isKnownExternalUrl("https://loamnet.com/child-safety", node)).toBe(true);
+    expect(isKnownExternalUrl("https://ko-fi.com/magiczebra", node)).toBe(true);
   });
 
   it("refuses look-alikes", () => {
     expect(isKnownExternalUrl("https://github.com/MagicZebraLtd/loamevil", node)).toBe(false);
     expect(isKnownExternalUrl("https://loamnet.com.evil.example/", node)).toBe(false);
+    expect(isKnownExternalUrl("https://ko-fi.com/magiczebraevil", node)).toBe(false);
+    expect(isKnownExternalUrl("https://ko-fi.com/someoneelse", node)).toBe(false);
     expect(isKnownExternalUrl("http://loamnet.com/", node)).toBe(false);
     expect(isKnownExternalUrl("https://user:pw@loamnet.com/", node)).toBe(false);
     expect(isKnownExternalUrl("https://example.com/", node)).toBe(false);

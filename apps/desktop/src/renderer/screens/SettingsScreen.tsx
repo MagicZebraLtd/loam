@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import type { DesktopBridge, DesktopState } from "../../shared/ipc";
 import { HoldToConfirm } from "../components/HoldToConfirm";
 import { NewNetworkCard } from "../components/NewNetworkCard";
+import { SupportDialog } from "../components/SupportDialog";
 import { UpdateCheck } from "../components/UpdateCheck";
 import { attempt } from "../lib/attempt";
 import { DEFAULT_PORT } from "../lib/limits";
@@ -184,6 +185,7 @@ export function SettingsScreen({ bridge, state }: { bridge: DesktopBridge; state
             {t("update.title")}
           </h2>
           <UpdateCheck bridge={bridge} />
+          <SupportDialog bridge={bridge} />
         </section>
 
         <section aria-labelledby="settings-data" className="card">

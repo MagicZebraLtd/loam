@@ -576,3 +576,14 @@ code,
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+
+/* ---------- Support dialog (the client's .dialog look, centred) ---------- */
+
+.support-link {
+  align-self: flex-start;
+}
+
+.support-url {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}

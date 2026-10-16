@@ -15,6 +15,7 @@ export const en = {
   "tabs.settings": "Settings",
   "common.cancel": "Cancel",
   "common.back": "Back",
+  "common.close": "Close",
   "common.copy": "Copy",
   "common.copied": "Copied",
   "common.save": "Save",
@@ -128,6 +129,11 @@ export const en = {
   "running.stopping": "Stopping…",
   "running.stopEphemeral": "This network keeps its messages only while it runs: stopping it erases them for good.",
   "running.stopHold": "Hold to stop and erase",
+  "support.open": "Support LOAM",
+  "support.title": "Support LOAM",
+  "support.body":
+    "LOAM is free and open source, and always will be. Building it costs money all the same: test phones and laptops, app store fees, code signing, and the time to keep it working. If LOAM is useful to you, a coffee on Ko-fi helps keep it going.",
+  "support.kofi": "Open Ko-fi",
   "running.closeNote": "Closing this window keeps the network running. Quit LOAM to stop it.",
 
   // Display mode

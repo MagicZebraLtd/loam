@@ -1,12 +1,12 @@
 /**
  * Which web pages the desktop app will open in the computer's browser. The host window may ask only for pages
- * LOAM knows (its website, its GitHub releases, and the running node's own pages); the client window's links
+ * LOAM knows (its website, its GitHub releases, its Ko-fi page, and the running node's own pages); the client window's links
  * (a message's link, opened with target=_blank) may be any http(s) page, as in any browser, but never another
  * scheme: a `file:` or custom-protocol link could start a program. Pure, so it is unit-tested.
  */
 
 /** Pages under these prefixes are LOAM's own. */
-const KNOWN_PREFIXES = ["https://loamnet.com/", "https://www.loamnet.com/", "https://github.com/MagicZebraLtd/loam"];
+const KNOWN_PREFIXES = ["https://loamnet.com/", "https://www.loamnet.com/", "https://github.com/MagicZebraLtd/loam", "https://ko-fi.com/magiczebra"];
 
 /** The URL parsed, or undefined. */
 function parse(url: string): URL | undefined {
