@@ -20,6 +20,10 @@ catalog:
 
 onlyBuiltDependencies:
   - better-sqlite3-multiple-ciphers
+  # The desktop app (apps/desktop): electron's postinstall downloads the Electron binary for this platform
+  # (~100 MB, checksum-verified by @electron/get). Set ELECTRON_SKIP_BINARY_DOWNLOAD=1 to skip it where the
+  # desktop app isn't run (CI's main job does).
+  - electron
   - esbuild
   # llama.rn ships no native libs in its npm tarball — it downloads the prebuilt librnllama*.so via a
   # postinstall script. Without this allow-list entry pnpm skips that script, the Android build finds no

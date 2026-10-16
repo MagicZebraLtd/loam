@@ -1640,3 +1640,13 @@ export type HostApi = {
    */
   emergencyReset(): Promise<{ complete: boolean; journaled: boolean }>;
 };
+
+export {
+  DEFAULT_NODE_NAME,
+  SETUP_PRESETS,
+  cleanNodeName,
+  presetConfig,
+  presetDbMode,
+  type SetupPeer,
+  type SetupPreset,
+} from "./setup-presets.js";
