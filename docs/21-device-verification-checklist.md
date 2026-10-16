@@ -102,6 +102,62 @@ adb install -r apps/app/loam-host.apk
   mode after a manual change). The app shows the locked / recovery screen rather than crashing, and the
   "preserve old DB and start fresh" option round-trips (old data set aside recoverably, fresh DB opens).
 
+## 5. Desktop app (macOS / Windows / Linux)
+
+The desktop app ([docs/24](24-electron-desktop.md)) is covered by 202 Vitest tests, a CI typecheck and, for
+the Linux AppImage only, a packaged `--smoke` run. Everything below needs a real machine. Download the
+installers from the tag build (or run `pnpm --filter @loam/desktop dist` on the machine), start from a clean
+user account or delete the app's `LOAM` data folder first, and note the OS version, architecture and build with
+each result. Machines to cover: a Mac on Apple Silicon and one on Intel, a Windows 10 or 11 PC, and a Linux
+desktop with a secret service (GNOME Keyring or KWallet) and one without.
+
+- [ ] **Packaged `--smoke` on each OS.** `LOAM.app/Contents/MacOS/LOAM --smoke`, `LOAM.exe --smoke` (from an
+  installed copy), `./LOAM-linux-x64.AppImage --smoke`, each with `LOAM_SMOKE_REQUIRE_ENCRYPTION=1`. Prints one
+  JSON line with `"ok":true` and `"driver":"better-sqlite3-multiple-ciphers"`, exits 0, leaves no `loam-smoke-*`
+  folder and no keychain prompt.
+- [ ] **Unsigned Gatekeeper path (macOS).** Download the `.dmg` through a browser (so it is quarantined), drag
+  LOAM to Applications, open it: macOS refuses, System Settings, Privacy & Security, **Open Anyway** works once,
+  and the app is not reported as "damaged" on Apple Silicon. Repeat on Intel.
+- [ ] **Windows SmartScreen.** The unsigned installer shows "Windows protected your PC", More info, Run anyway
+  installs; with SignPath configured, the publisher reads SignPath Foundation.
+- [ ] **Linux install.** The AppImage runs after `chmod +x`; the `.deb` installs with `sudo apt install` and
+  appears in the applications menu; the tray icon is visible (note the desktop environment).
+- [ ] **Firewall prompts.** On first start the macOS Application Firewall asks about incoming connections
+  (Allow), and Windows Defender Firewall asks which networks (Private, Allow access). With Allow, a phone on the
+  same Wi-Fi reaches the join URL; refused, it cannot, and nothing in the app crashes.
+- [ ] **A phone joins.** Scan the on-screen QR with a phone on the same network: it loads LOAM, encrypts
+  (the `#k=` key), posts a message the host sees via **Open LOAM**, and "devices connected" counts it. Repeat on
+  the computer's own hotspot (macOS Internet Sharing, Windows Mobile hotspot, a NetworkManager hotspot): the
+  shown address is the hotspot's, and a phone on it can join.
+- [ ] **Keychain prompt behaviour.** A **Private** network (ephemeral) and an unencrypted one raise no keychain
+  prompt at any point. A **Community** network (persistent) raises it once at setup and once per start as the OS
+  decides; on an unsigned macOS build it asks again after installing a newer build ("Always Allow" covered the old
+  one only). Denying it ends in the Failed screen (`keychain_unavailable` or `db_encryption_locked`), never a
+  silent plaintext start. Check `device-secret.enc` exists and `device-secret.key` does not.
+- [ ] **No keychain (Linux without a secret service).** Setup does not offer the keychain mode, says why, and
+  defaults Community to a passphrase; a passphrase network starts, restarts through the Unlock screen, and
+  keeps its secret in `device-secret.key`. A wrong passphrase says so and leaves the data intact.
+- [ ] **Emergency Reset on each key mode** (packaged build, with a phone joined and a few messages sent).
+  *Off and ephemeral:* the node keeps running empty, the phone shows the neutral disconnected screen and purges.
+  *Persistent and passphrase:* the node restarts under a fresh secret (`device-secret.enc` is new), the old
+  database is gone, no `.loam-wipe-phase` is left, and the same passphrase opens the new empty network. Kill
+  the app at a few points during the reset (after the journal appears, between deleting the secret and the
+  journal) and start it again: it finishes the reset and never serves the old data. In every mode the host
+  window's Activity screen keeps nothing from before the reset (one line says the log went with the network),
+  with the Activity tab open during the reset and when opened afterwards.
+- [ ] **Stop, Quit and reopen.** Closing the window keeps the phone connected; Quit stops the node within 10 s;
+  reopening a persistent network restores its messages, an ephemeral one starts empty, and the host is still
+  admin in **Open LOAM** (the client window keeps its identity on disk except for ephemeral networks). Press
+  Stop while a phone is mid-upload: it stops within 10 s all the same. On an encrypted network, with messages
+  shown in **Open LOAM**, quit and look in the profile folder (`Partitions/loam-client/IndexedDB` under
+  `userData`): no `loam-poc` database exists; on an unencrypted network it does.
+- [ ] **A reset from the web client that cannot finish.** Make the data folder read-only mid-run (or fill the
+  disk), run Emergency Reset from the web admin screen: within 30 s the host window shows "Emergency Reset
+  didn't finish" (or restarts to finish a journaled one), never a Running screen over a node answering 503.
+- [ ] **Start a new network** from Settings erases the old network (devices purge), the keychain item or secret
+  file, and the client window's stored copy, and returns to Setup.
+- [ ] **Windows durable writes.** The same crash and power-cut check as docs/25 O3, with the packaged app.
+
 ## Reporting
 
 Note the device model, Android version, and build SHA with each result. A failure on any

@@ -20,6 +20,9 @@ jobs:
     name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # The desktop package depends on Electron; this job never launches it, so skip the ~100 MB download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
 
     steps:
       - name: Checkout
@@ -65,6 +68,11 @@ jobs:
       - name: Android host typecheck
         run: pnpm --filter app typecheck
 
+      # The desktop's Vitest suites already ran under `pnpm test`; its TypeScript (main process and
+      # renderer) is validated here.
+      - name: Desktop typecheck
+        run: pnpm --filter @loam/desktop typecheck
+
       # The server build excludes its test files (and src/test-support/), and Vitest strips types without
       # checking them, so typecheck the server's tests on their own.
       - name: Server test typecheck
@@ -83,6 +91,8 @@ jobs:
     name: loamnet on Node 22.14
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
 
     steps:
       - name: Checkout

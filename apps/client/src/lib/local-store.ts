@@ -71,8 +71,19 @@ export function resetLocalStoreForTests(): void {
   clearWipePending();
 }
 
+/**
+ * A host app's own window may say that no copy of the network belongs on this device's storage: the desktop
+ * app sets `window.__loamHostNoLocalCache` before the page's scripts run (apps/desktop/src/preload/client.cts)
+ * on every encrypted network, since this IndexedDB copy would sit on disk outside the database's key. The app
+ * then holds what it shows in memory only and loads it from the node (on loopback) on every page load.
+ * localStorage (the identity token, preferences) is untouched: it holds no messages.
+ */
+function localCacheRefused(): boolean {
+  return typeof window !== "undefined" && window.__loamHostNoLocalCache === true;
+}
+
 function hasIndexedDb(): boolean {
-  return typeof indexedDB !== "undefined";
+  return typeof indexedDB !== "undefined" && !localCacheRefused();
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {

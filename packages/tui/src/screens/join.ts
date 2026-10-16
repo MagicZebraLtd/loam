@@ -54,7 +54,7 @@ export const joinScreen: Screen = {
   id: "join",
   title: "Join",
   hints: (view) =>
-    `h ${view.state.qrHidden ? "show" : "hide"} QR · a join address · o open as admin · ? help · q quit`,
+    `h ${view.state.qrHidden ? "show" : "hide"} QR · a join address · o open as admin · $ support · ? help · q quit`,
   render(view, width, height) {
     const qr = view.state.qrHidden ? undefined : qrFor(view.joinLink());
     const gap = 4;

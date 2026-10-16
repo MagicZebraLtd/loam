@@ -6,7 +6,7 @@
  * leaves 21 rows of body in an 80×24 terminal: exactly the join QR's height.
  * Locked in kiosk mode, the whole terminal shows only the join QR and how to unlock.
  */
-import type { HostStatus } from "@loam/schema";
+import { HOST_ACK_VERSION, type HostStatus } from "@loam/schema";
 
 import { type Line, lineWidth, text } from "./ansi.js";
 import { createKeyReader, isChar, type Key } from "./keys.js";
@@ -14,12 +14,18 @@ import { createKioskGuard, hashKioskPassword, KIOSK_PASSWORD_MIN_LENGTH, verifyK
 import { type Modal, modalKey, modalLines, textField } from "./modal.js";
 import { activityScreen } from "./screens/activity.js";
 import { debugScreen } from "./screens/debug.js";
-import { joinScreen, qrFor } from "./screens/join.js";
+import { joinScreen, paragraph, qrFor } from "./screens/join.js";
 import { peopleScreen } from "./screens/people.js";
 import { settingsScreen } from "./screens/settings.js";
 import type { CliSettings } from "./settings.js";
 import { createPainter } from "./terminal.js";
 import type { Screen, ScreenId, ScreenState, TuiOptions, View } from "./types.js";
+
+/** LOAM's Ko-fi page (also in .github/FUNDING.yml). */
+export const SUPPORT_URL = "https://ko-fi.com/magiczebra";
+
+const SUPPORT_TEXT =
+  "LOAM is free and open source, and always will be. Building it costs money all the same: test phones and laptops, app store fees, code signing, and the time to keep it working. If LOAM is useful to you, a coffee on Ko-fi helps keep it going.";
 
 export const SCREENS: Screen[] = [joinScreen, activityScreen, peopleScreen, settingsScreen, debugScreen];
 
@@ -29,10 +35,10 @@ export const MIN_ROWS = 12;
 
 const TOAST_MS = 4_000;
 /**
- * The host's "You run this network" note (the Android app shows the same one): shown once when the terminal
- * UI first starts, until acknowledged, then recorded in cli.json. Bump it when the text changes in substance.
+ * The host's "You run this network" note (the Android and desktop apps show the same one): shown once when the
+ * terminal UI first starts, until acknowledged, then recorded in cli.json. Its version is shared in @loam/schema.
  */
-export const HOST_ACK_VERSION = 1;
+export { HOST_ACK_VERSION };
 /** How long a lone Escape waits for the rest of a key sequence before it counts as Escape. */
 const ESCAPE_WAIT_MS = 40;
 const REFRESH_MS = 1_000;
@@ -447,6 +453,7 @@ export function createTui(options: TuiOptions): Tui {
       lines: [
         text("1 to 5, Tab   switch screens"),
         text("?             this help"),
+        text("$             support LOAM"),
         text("k             lock in kiosk mode"),
         text("q, Ctrl-C     stop LOAM"),
         text("Ctrl-L        redraw the screen"),
@@ -459,6 +466,36 @@ export function createTui(options: TuiOptions): Tui {
         [],
         text("Messages, approvals and moderation are in the web app.", { dim: true }),
       ],
+    };
+  }
+
+  /** "Support LOAM": a read-only panel with the Ko-fi link; o opens it where a browser can be opened. */
+  function support(): Modal {
+    let failed = false;
+    return {
+      kind: "panel",
+      title: "Support LOAM",
+      footer: "o opens it in your browser, Esc closes",
+      lines: (width) => [
+        ...paragraph(SUPPORT_TEXT, width),
+        [],
+        text(SUPPORT_URL, { bold: true, fg: "cyan" }),
+        ...(failed ? [[], ...paragraph("Couldn't open a browser on this computer. Open the link above on any device.", width, { fg: "yellow" })] : []),
+      ],
+      onKey(key) {
+        if (!isChar(key, "o")) {
+          return false;
+        }
+        void options.system.openUrl(SUPPORT_URL).then(
+          (opened) => {
+            failed = !opened;
+          },
+          () => {
+            failed = true;
+          },
+        );
+        return true;
+      },
     };
   }
 
@@ -522,6 +559,8 @@ export function createTui(options: TuiOptions): Tui {
       screen = SCREENS[(index + (key.name === "tab" ? 1 : SCREENS.length - 1)) % SCREENS.length]!;
     } else if (isChar(key, "?")) {
       setModal(help());
+    } else if (isChar(key, "$")) {
+      setModal(support());
     } else if (isChar(key, "k")) {
       lockKiosk();
     } else if (isChar(key, "q") || key.name === "ctrl-c" || key.name === "ctrl-d") {

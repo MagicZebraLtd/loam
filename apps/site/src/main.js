@@ -124,6 +124,6 @@ if (posthogKey) {
     if (host !== "github.com" && !host.endsWith(".github.com")) {
       return;
     }
-    posthog.capture(url.pathname.includes("/releases/latest/download") ? "download_apk_click" : "github_click");
+    posthog.capture(url.pathname.includes("/releases/latest/download") ? url.pathname.endsWith("loam-host.apk") ? "download_apk_click" : "download_desktop_click" : "github_click");
   });
 }

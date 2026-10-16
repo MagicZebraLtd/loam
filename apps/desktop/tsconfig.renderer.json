@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.renderer.tsbuildinfo",
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+    // The renderer takes only types from @loam/tui (LogEntry), and the package's index pulls in Node-only
+    // modules, so it resolves to the one dependency-free file those types live in.
+    "paths": {
+      "@client-assets/*": ["../client/src/assets/*"],
+      "@client-styles/*": ["../client/src/styles/*"],
+      "@loam/crypto": ["../../packages/crypto/src/index.ts"],
+      "@loam/qr": ["../../packages/qr/src/index.ts"],
+      "@loam/schema": ["../../packages/schema/src/index.ts"],
+      "@loam/tui": ["../../packages/tui/src/log.ts"]
+    },
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src/renderer", "src/shared"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

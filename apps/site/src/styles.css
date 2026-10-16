@@ -1538,6 +1538,29 @@ code {
   font-weight: 500;
 }
 
+.legal-body a.btn {
+  font-weight: 600;
+}
+
+.legal-body a.btn-primary {
+  color: #fff;
+}
+
+.legal-body a.btn-ghost {
+  color: var(--ink);
+}
+
+.dl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.legal-body code {
+  overflow-wrap: anywhere;
+}
+
 .legal-body strong {
   color: var(--ink);
 }

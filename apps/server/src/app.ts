@@ -124,6 +124,12 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     // per-route (`LARGE_BODY_LIMIT`); a blanket 4 MiB would hand every endpoint (including the
     // unauthenticated ones) a 4× transient-allocation amplifier on a Pi/phone host.
     serverFactory: (handler) => createServer(handler),
+    // `close()` must end: a launcher that restarts the node in-process (the desktop app, the Android host after
+    // a fixed-key reset) opens the next store only once this one is closed, and the store closes only after the
+    // listener has. Fastify's default waits for every in-flight request, which a stalled upload or a slow client
+    // could hold open for ever; destroying the connections instead loses, at worst, a response whose write
+    // already went through (every mutation is written through before it is answered).
+    forceCloseConnections: true,
   });
   // Per-route body ceiling for the upload paths: the advertised 1 MiB attachment cap
   // base64-inflates (×4/3) inside its JSON envelope, and a tunnelled upload wraps that AGAIN in a

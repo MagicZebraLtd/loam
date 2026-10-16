@@ -63,7 +63,7 @@ None of these are built. Each links to the design or briefing it comes from.
 | **Long-range radio (LoRa)**, possibly through Reticulum | Investigated ([docs/28](28-prior-art-reticulum.md)); the sync protocol is what a radio link would carry. |
 | **Offline maps** for shared locations | Location messages exist; the map is designed but not built ([docs/10](10-maps-location-sharing.md)). |
 | **A smarter assistant**: search over the network's own messages, more model choices | Listed in [docs/06](06-llm.md). |
-| **A desktop app** for hosts who don't want a terminal | Feasibility study ([docs/24](24-electron-desktop.md)). |
+| **A desktop app** for hosts who don't want a terminal | Built, first release with 0.7.0. It has not yet been run on real Windows and Linux machines, and its installers are not signed yet ([docs/24](24-electron-desktop.md)). |
 
 ## What LOAM won't do
 

@@ -53,6 +53,11 @@ esbuild over `cli/cli-entry.ts`:
   **`optionalDependency`** — so encryption is opt-in and a native build failure never aborts
   `npm i -g loamnet`.
 
+The esbuild recipe itself (the banner, the ESM target, the external drivers, the check that the
+packages are built) lives in `scripts/lib/bundle-server.mjs`, which `build-cli.mjs` calls and the desktop app
+(`apps/desktop/scripts/build.mjs`, [docs/24](24-electron-desktop.md)) calls too, with its own entry file and a
+`node24` target. The Android host keeps its own CommonJS recipe. Change the shared file and both outputs move.
+
 Build it locally with `pnpm build:cli` (assumes `pnpm -r build` and `pnpm --filter client build` have
 run). Output lands in `cli/dist/` and `cli/client/`, both gitignored.
 

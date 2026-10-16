@@ -6,6 +6,32 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **A desktop app for Mac, Windows and Linux** (`apps/desktop`, Electron). Open it, answer a few questions,
+  and it shows the code people nearby scan to join; you are the network's admin, and closing the window keeps
+  the network running until you quit. It has the same screens as the phone host (the code, display mode,
+  linking another LOAM node, people, activity, settings, Emergency Reset) and keeps its network's key in the
+  computer's keychain, or behind a passphrase, or only in memory. Installers: `LOAM-mac-arm64.dmg`,
+  `LOAM-mac-x64.dmg`, `LOAM-win-x64.exe`, `LOAM-linux-x64.AppImage` and `LOAM-linux-x64.deb`, each with a
+  checksum and a signed build record on the release. It never checks for updates by itself and sends nothing
+  anywhere. Not yet signed or notarized (Apple enrolment is pending; Windows signing is set up through
+  SignPath Foundation), and not yet run on real Windows and Linux machines. Unreleased: the first release
+  ships with 0.7.0. See `docs/24-electron-desktop.md`.
+- **A website page for the desktop app** (`/desktop`) and the code signing policy (`/code-signing`).
+
+### Changed
+- **The first-run setup choices (Private, Community, Choose every setting myself) now live in
+  `@loam/schema`**, so the Android app and the desktop app set up a network from the same code and cannot
+  drift apart. Nothing changes for the phone.
+- **The server bundle recipe is shared**: `scripts/lib/bundle-server.mjs` is used by both the `loamnet`
+  package build and the desktop app. The `loamnet` output is unchanged.
+- **Stopping the node no longer waits for a request that never finishes.** The embedded server (the desktop
+  app, the Android host, `loamnet` on Ctrl-C) closes its connections when it shuts down instead of waiting
+  for every in-flight request, so a stalled upload can't hold a stop open for ever.
+- **The web client keeps no local copy when the host app says not to** (`window.__loamHostNoLocalCache`):
+  the desktop app sets it on every encrypted network, so the host's own window never writes messages to the
+  disk outside the database's key. Nothing changes for phones joining a network.
+
 ## [0.6.4] - 2026-10-15
 
 ### Changed

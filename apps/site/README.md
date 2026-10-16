@@ -24,6 +24,9 @@ pins the build command, output directory, and a few security headers. Set the pr
   `.html`). Play requires a public policy URL; keep it in step with what the app actually does.
 - `child-safety.html`: the child safety (CSAE) standards at `/child-safety`, a third Vite entry. Play's
   Child Safety Standards policy requires a public page with a named point of contact.
+- `desktop.html` (`/desktop`) and `code-signing.html` (`/code-signing`): the desktop app downloads
+  (links to `releases/latest/download/LOAM-<os>-<arch>.<ext>`, built by `build-desktop.yml`) and the
+  code signing policy SignPath Foundation requires for free Windows signing. More Vite entries.
 - `src/styles.css`: the design system. Warm paper and deep moss with an ember accent, light and dark,
   Bricolage Grotesque for headings, Inter for text and JetBrains Mono for code. The fonts are
   self-hosted from `@fontsource-variable` packages (the CSP allows no font host), split by script, so a

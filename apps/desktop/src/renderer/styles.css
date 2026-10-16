@@ -1,0 +1,589 @@
+/* The host shell: the client's design tokens, base and components (apps/client/DESIGN.md), then the few
+   rules that are this window's own (the top bar and tabs, screen columns, choice cards, the hold button,
+   the QR panels and the log). Colours only ever come from the tokens, except the QR (fixed black on white). */
+@import "@client-styles/tokens.css";
+@import "@client-styles/base.css";
+@import "@client-styles/components.css";
+
+/* ---------- Shell ---------- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--header-h);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  padding: 0 var(--space-4);
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-inline-end: auto;
+}
+
+.topbar-mark {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
+.topbar-name {
+  overflow: hidden;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.tab.is-current {
+  background: var(--bg-active);
+  color: var(--fg);
+}
+
+/* ---------- Screens ---------- */
+
+.screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-6) var(--space-4) var(--space-8);
+}
+
+.screen-column {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.screen-centred {
+  display: grid;
+  place-items: center;
+}
+
+.screen h1 {
+  font-size: var(--text-2xl);
+}
+
+.hero {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.hero h1 {
+  font-size: var(--text-3xl);
+}
+
+.lead {
+  color: var(--fg-muted);
+  font-size: var(--text-lg);
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+.stack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.card-danger {
+  border-color: var(--danger);
+}
+
+.card-danger .card-title {
+  color: var(--danger);
+}
+
+.busy {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  max-width: 420px;
+  text-align: center;
+}
+
+.busy .status-dot {
+  width: 12px;
+  height: 12px;
+}
+
+code,
+.path {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+}
+
+.path {
+  display: block;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  padding: var(--space-2) var(--space-3);
+}
+
+.input-short {
+  max-width: 180px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.about {
+  text-align: center;
+}
+
+.failed-detail summary {
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.failed-detail code {
+  display: block;
+  margin-top: var(--space-2);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ---------- Setup: choice cards ---------- */
+
+.choice-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+}
+
+.choice:hover {
+  border-color: var(--border-strong);
+}
+
+.choice.is-selected {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.choice input {
+  width: 18px;
+  height: 18px;
+  margin: 3px 0 0;
+  accent-color: var(--primary);
+}
+
+.choice-text {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.choice-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+.choice-body {
+  color: var(--fg-muted);
+}
+
+.choice-note {
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  padding-top: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.field-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 599.98px) {
+  .field-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.host-note {
+  border-color: var(--border-strong);
+}
+
+/* ---------- Hold to confirm ---------- */
+
+.hold-button {
+  position: relative;
+  overflow: hidden;
+  min-height: 52px;
+  border: 2px solid currentColor;
+  background: transparent;
+  touch-action: none;
+}
+
+.hold-danger {
+  color: var(--danger);
+}
+
+.hold-neutral {
+  color: var(--link);
+}
+
+/* A bar along the bottom edge rather than a full fill, so the label always sits on one background. */
+.hold-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  height: 6px;
+  background: currentColor;
+}
+
+.hold-button.is-holding .hold-fill {
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hold-button.is-holding .hold-fill {
+    transition: width var(--hold-ms, 1500ms) linear;
+  }
+}
+
+/* Without motion the bar can't sweep, so it shows half-strength the whole time the button is held. */
+@media (prefers-reduced-motion: reduce) {
+  .hold-button.is-holding .hold-fill {
+    opacity: 0.5;
+  }
+}
+
+.hold-label {
+  position: relative;
+}
+
+.hold-fallback {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ---------- QR codes (fixed black on white in both themes) ---------- */
+
+.qr {
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #ffffff;
+  line-height: 0;
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ---------- Running ---------- */
+
+.running-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.running-head h1 {
+  overflow-wrap: anywhere;
+}
+
+.running-join {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-5);
+}
+
+@media (max-width: 639.98px) {
+  .running-join {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+}
+
+.running-qr {
+  width: 240px;
+}
+
+.running-info {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.join-url {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.join-url code {
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-lg);
+}
+
+.running-count {
+  display: grid;
+  gap: 2px;
+}
+
+/* ---------- Display mode: the code filling the window ---------- */
+
+.display-mode {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-dialog);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  justify-items: center;
+  align-items: center;
+  gap: var(--space-4);
+  background: var(--bg-app);
+  padding: var(--space-6) var(--space-4);
+}
+
+.display-heading {
+  font-size: var(--text-3xl);
+  text-align: center;
+}
+
+/* As large as the window allows: the height left after the heading, address and button, or the width. */
+.display-qr {
+  width: min(92vw, calc(100vh - 230px));
+  min-width: 160px;
+}
+
+.display-url {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xl);
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.display-exit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+/* ---------- Link another node ---------- */
+
+.link-code {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
+.link-qr {
+  width: 260px;
+}
+
+.link-node h1:focus {
+  outline: none;
+}
+
+/* ---------- People ---------- */
+
+.person {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.person-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.person-dot.is-online {
+  background: var(--online);
+}
+
+.row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.row-title {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.row-detail {
+  grid-column: 1 / -1;
+}
+
+.row-detail.confirm {
+  display: grid;
+  gap: var(--space-2);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  padding: var(--space-3);
+}
+
+/* ---------- Activity ---------- */
+
+.screen-fill .screen-column {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
+}
+
+.activity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.activity-head h1 {
+  margin-inline-end: auto;
+}
+
+.log {
+  min-height: 160px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: 9ch 6ch minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 1px 0;
+}
+
+.log-time {
+  color: var(--fg-faint);
+}
+
+.log-level {
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.log-warn .log-level {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.log-error .log-level,
+.log-error .log-text {
+  color: var(--danger);
+}
+
+.log-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ---------- Support dialog (the client's .dialog look, centred) ---------- */
+
+.support-link {
+  align-self: flex-start;
+}
+
+.support-url {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}

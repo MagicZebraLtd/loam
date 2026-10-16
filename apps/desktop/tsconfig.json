@@ -1,0 +1,23 @@
+{
+  // The main process, the preloads and the shared contract: Node + Electron, no DOM (the renderer has its own
+  // tsconfig.renderer.json). NodeNext like apps/server. esbuild (scripts/build.mjs) does the emitting, so this
+  // only checks. The workspace packages resolve through their built dist/ types, as the server sees them; the
+  // server bundle's entry (src/server-entry.ts) is left to esbuild, so the whole server isn't checked twice.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/main", "src/preload", "src/shared"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}
