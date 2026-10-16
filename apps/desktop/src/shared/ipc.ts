@@ -133,8 +133,12 @@ export type NodeInfo = HostStatus & {
 export type DesktopPhase =
   /** First run: no network has been set up on this computer. */
   | { phase: "setup" }
-  /** A passphrase-encrypted network exists and needs its passphrase. */
-  | { phase: "locked"; wrongPassphrase: boolean }
+  /**
+   * A passphrase-encrypted network needs its passphrase. `fresh` means its data was erased (an Emergency Reset
+   * that finished at this launch) and the passphrase typed now becomes the new network's: the screen asks for
+   * it twice, as Setup does, since nothing old is left to check it against.
+   */
+  | { phase: "locked"; wrongPassphrase: boolean; fresh: boolean }
   | { phase: "starting" }
   | { phase: "running"; node: NodeInfo }
   /** The host stopped the node; it can be started again. */

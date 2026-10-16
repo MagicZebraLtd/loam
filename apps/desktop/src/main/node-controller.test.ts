@@ -9,7 +9,7 @@ import { clean, createLogBook } from "@loam/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopState } from "../shared/ipc.js";
-import { passphraseKey, memoryDeviceSecretStore } from "./keys.js";
+import { memoryDeviceSecretStore, mintDeviceSecret, passphraseKey } from "./keys.js";
 import { createLogFeed } from "./log-feed.js";
 import { NodeController, type ControllerDeps } from "./node-controller.js";
 import type { EmbeddedNode, EmbeddedServerOptions } from "./server-module.js";
@@ -33,12 +33,21 @@ type FakeNode = EmbeddedNode & {
 };
 
 /** A fake server factory. `failures` makes the next starts throw, in order; `reset` picks what a reset does. */
-function fakeServer(context: { env: NodeJS.ProcessEnv; dataDir: string; hook: () => (() => void) | undefined }) {
+function fakeServer(context: {
+  env: NodeJS.ProcessEnv;
+  dataDir: string;
+  hook: () => (() => void) | undefined;
+  resetHook?: () => (() => void) | undefined;
+}) {
   const nodes: FakeNode[] = [];
   const failures: (Error | (() => Error))[] = [];
   let reset: ResetBehaviour = "in-process";
+  let gate: Promise<void> | undefined;
 
   async function start(options: EmbeddedServerOptions): Promise<EmbeddedNode> {
+    if (gate) {
+      await gate;
+    }
     const failure = failures.shift();
     if (failure) {
       throw typeof failure === "function" ? failure() : failure;
@@ -90,6 +99,8 @@ function fakeServer(context: { env: NodeJS.ProcessEnv; dataDir: string; hook: ()
       transportPublicKey: () => `key-of-boot-${nodes.length}`,
       emergencyReset: async () => {
         calls.push("reset");
+        // The kill switch announces every reset, the launcher's own included.
+        context.resetHook?.()?.();
         node.status = { ...node.status, resets: node.status.resets + 1 };
         if (reset === "fixed-key") {
           // As kill-switch.ts's hooked branch: journal key-clear-ready, then ask the launcher for the key clear.
@@ -119,6 +130,31 @@ function fakeServer(context: { env: NodeJS.ProcessEnv; dataDir: string; hook: ()
     onReset(behaviour: ResetBehaviour) {
       reset = behaviour;
     },
+    /** Hold the next starts until the returned function is called (a boot in progress). */
+    hold(): () => void {
+      let release = (): void => undefined;
+      gate = new Promise((resolve) => {
+        release = () => {
+          gate = undefined;
+          resolve();
+        };
+      });
+      return release;
+    },
+    /**
+     * A reset the launcher didn't start (the web client's admin screen, /api/panic), as the kill switch runs it:
+     * the reset-started hook, then for a fixed key the journal and the key-clear handoff (the node stays locked).
+     */
+    externalReset(kind: "fixed-key" | "in-process") {
+      const node = nodes.at(-1)!;
+      node.calls.push("external-reset");
+      context.resetHook?.()?.();
+      node.status = { ...node.status, resets: node.status.resets + 1, resetting: kind === "fixed-key" };
+      if (kind === "fixed-key") {
+        writeFileSync(join(context.dataDir, WIPE_PHASE_FILE), JSON.stringify({ phase: "key-clear-ready" }));
+        context.hook()?.();
+      }
+    },
   };
 }
 
@@ -142,12 +178,15 @@ afterEach(() => {
 function makeController(options: { settings?: DesktopSettings; keychain?: boolean; driver?: boolean; freePort?: number | null } = {}) {
   const env: NodeJS.ProcessEnv = { LOAM_DEV_MODE: "1", LOAM_CONFIG_FILE: "/elsewhere.json" };
   let hook: (() => void) | undefined;
-  const server = fakeServer({ env, dataDir, hook: () => hook });
+  let resetHook: (() => void) | undefined;
+  const server = fakeServer({ env, dataDir, hook: () => hook, resetHook: () => resetHook });
   const settings = memorySettingsStore(options.settings);
-  const secrets = memoryDeviceSecretStore();
+  // A network that already exists has its device secret; a new one gets it at setup.
+  const secrets = memoryDeviceSecretStore(options.settings?.network ? mintDeviceSecret() : undefined);
   const states: DesktopState[] = [];
   const nodeChanges: (string | undefined)[] = [];
   let discarded = 0;
+  let cleared = 0;
   const log = createLogFeed(createLogBook(), clean);
   const findFreePort = vi.fn(async (preferred: number) => (options.freePort === null ? undefined : (options.freePort ?? preferred)));
   const deps: ControllerDeps = {
@@ -164,6 +203,9 @@ function makeController(options: { settings?: DesktopSettings; keychain?: boolea
     findFreePort,
     lanAddresses: () => ["192.168.1.20", "10.0.0.5"],
     env,
+    installHostResetHook: (installed) => {
+      resetHook = installed;
+    },
     installWipeRestartHook: (installed) => {
       hook = installed;
     },
@@ -172,11 +214,14 @@ function makeController(options: { settings?: DesktopSettings; keychain?: boolea
     onNetworkDiscarded: async () => {
       discarded += 1;
     },
+    clearClientData: async () => {
+      cleared += 1;
+    },
     now: () => 1_000,
     closeTimeoutMs: 50,
   };
   const controller = new NodeController(deps);
-  return { controller, server, settings, secrets, states, nodeChanges, env, log, findFreePort, discarded: () => discarded };
+  return { controller, server, settings, secrets, states, nodeChanges, env, log, findFreePort, discarded: () => discarded, cleared: () => cleared };
 }
 
 const community = { preset: "community", nodeName: "Kitchen", encryption: "persistent", createdAt: 5 } as const;
@@ -444,10 +489,13 @@ describe("running", () => {
 
 describe("Emergency Reset", () => {
   it("keeps running when the server wiped in-process", async () => {
-    const { controller, server, nodeChanges } = makeController({ settings: { logLevel: "info", network: community } });
+    const { controller, server, nodeChanges, cleared } = makeController({ settings: { logLevel: "info", network: community } });
     await controller.initialize();
     expect(await controller.emergencyReset()).toEqual({ ok: true, value: { complete: true, journaled: false } });
     expect(server.nodes).toHaveLength(1);
+    // Erased once, by the reset itself: the reset-started hook leaves the launcher's own resets alone.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(cleared()).toBe(1);
     expect(controller.phaseName()).toBe("running");
     expect(nodeChanges.at(-1)).toBe("http://127.0.0.1:3000");
   });
@@ -507,7 +555,7 @@ describe("Emergency Reset", () => {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, WIPE_PHASE_FILE), JSON.stringify({ phase: "key-clear-ready" }));
     const { controller, server, secrets } = makeController({ settings: { logLevel: "info", network: community } });
-    const before = secrets.get();
+    const before = secrets.current();
     await controller.initialize();
     expect(server.nodes[0]!.env.LOAM_DB_KEY).not.toBe(before);
     expect(existsSync(join(dataDir, WIPE_PHASE_FILE))).toBe(false);
@@ -515,7 +563,7 @@ describe("Emergency Reset", () => {
 
   it("treats a resume that stopped without asking for the key clear as a reset that can't finish", async () => {
     const { controller, server, secrets } = makeController({ settings: { logLevel: "info", network: community } });
-    const oldSecret = secrets.get();
+    const oldSecret = secrets.current();
     server.fail(coded("db_encryption_wipe_resume"));
     await controller.initialize();
     expect(controller.getState()).toMatchObject({ phase: "failed", error: { code: "reset_incomplete" } });
@@ -532,8 +580,8 @@ describe("Emergency Reset", () => {
       hook?.();
       return coded("db_encryption_wipe_resume");
     });
-    const secrets = memoryDeviceSecretStore();
-    const oldSecret = secrets.get();
+    const secrets = memoryDeviceSecretStore(mintDeviceSecret());
+    const oldSecret = secrets.current();
     const controller = new NodeController({
       capabilities: { platform: "linux", keychain: true },
       version: "0.6.4",
@@ -548,18 +596,130 @@ describe("Emergency Reset", () => {
       findFreePort: async (preferred) => preferred,
       lanAddresses: () => [],
       env,
+      installHostResetHook: () => undefined,
       installWipeRestartHook: (installed) => {
         hook = installed;
       },
       onState: () => undefined,
       onNodeChanged: () => undefined,
       onNetworkDiscarded: async () => undefined,
+      clearClientData: async () => undefined,
     });
     await controller.initialize();
     expect(controller.phaseName()).toBe("running");
     expect(secrets.current()).not.toBe(oldSecret);
     expect(server.nodes[0]!.env.LOAM_DB_KEY).toBe(secrets.current());
     expect(existsSync(join(dataDir, WIPE_PHASE_FILE))).toBe(false);
+  });
+});
+
+describe("resets the launcher didn't start", () => {
+  it("finishes a fixed-key reset from the web client: locked node closed, key destroyed, client copy erased, booted again", async () => {
+    const { controller, server, secrets, states, cleared, nodeChanges } = makeController({
+      settings: { logLevel: "info", network: community },
+    });
+    await controller.initialize();
+    const oldSecret = secrets.current();
+    const pushes = states.length;
+    server.externalReset("fixed-key");
+    await vi.waitFor(() => expect(server.nodes).toHaveLength(2));
+    await vi.waitFor(() => expect(controller.phaseName()).toBe("running"));
+    expect(server.nodes[0]!.closed).toBe(true);
+    expect(secrets.current()).toBeDefined();
+    expect(secrets.current()).not.toBe(oldSecret);
+    expect(server.nodes[1]!.env.LOAM_DB_KEY).toBe(secrets.current());
+    expect(existsSync(join(dataDir, WIPE_PHASE_FILE))).toBe(false);
+    expect(cleared()).toBe(1);
+    // The window follows: resetting, then starting, then running again.
+    expect(states.slice(pushes).map((state) => state.phase)).toEqual(["resetting", "starting", "running"]);
+    expect(nodeChanges.at(-1)).toBe("http://127.0.0.1:3000");
+  });
+
+  it("erases the client copy and reloads the window after an in-process reset from the web client", async () => {
+    const { controller, server, cleared, nodeChanges } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    const reloads = nodeChanges.length;
+    server.externalReset("in-process");
+    await vi.waitFor(() => expect(cleared()).toBe(1));
+    expect(nodeChanges.slice(reloads)).toEqual(["http://127.0.0.1:3000"]);
+    expect(server.nodes).toHaveLength(1);
+    expect(controller.phaseName()).toBe("running");
+  });
+
+  it("leaves its own resets to itself", async () => {
+    const { controller, server, cleared } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    server.onReset("fixed-key");
+    await controller.emergencyReset();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    // One boot after the reset, one erase: no second handoff queued by the hook.
+    expect(server.nodes).toHaveLength(2);
+    expect(cleared()).toBe(1);
+  });
+});
+
+describe("keys that went missing", () => {
+  it("reports a missing device secret for a network with a database, and never mints over it", async () => {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "loam.db"), "ciphertext");
+    const { controller, secrets, server, states } = makeController({ settings: { logLevel: "info", network: community } });
+    secrets.destroy();
+    await controller.initialize();
+    expect(states.at(-1)).toMatchObject({ phase: "failed", error: { code: "db_encryption_locked", detail: expect.stringContaining("missing") } });
+    expect(secrets.current()).toBeUndefined();
+    expect(server.nodes).toHaveLength(0);
+  });
+
+  it("mints for a network with no database yet (nothing a new key could lock out)", async () => {
+    const { controller, secrets } = makeController({ settings: { logLevel: "info", network: community } });
+    secrets.destroy();
+    await controller.initialize();
+    expect(controller.phaseName()).toBe("running");
+    expect(secrets.current()).toBeDefined();
+  });
+
+  it("finishes a passphrase network's interrupted reset first, then asks for a new passphrase", async () => {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, WIPE_PHASE_FILE), JSON.stringify({ phase: "key-clear-ready" }));
+    const { controller, secrets, server, states, cleared } = makeController({ settings: { logLevel: "info", network: passphraseNetwork } });
+    const oldSecret = secrets.current();
+    await controller.initialize();
+    expect(states.at(-1)).toMatchObject({ phase: "locked", wrongPassphrase: false, fresh: true });
+    expect(secrets.current()).toBeUndefined();
+    expect(existsSync(join(dataDir, WIPE_PHASE_FILE))).toBe(false);
+    expect(await controller.unlock({ passphrase: "new" })).toEqual({ ok: true, value: undefined });
+    expect(secrets.current()).not.toBe(oldSecret);
+    expect(server.nodes[0]!.env.LOAM_DB_KEY).toBe(passphraseKey("new", secrets.current()!));
+    expect(cleared()).toBe(0);
+  });
+
+  it("asks an ordinary passphrase network for its passphrase, not a fresh one", async () => {
+    const { controller, states } = makeController({ settings: { logLevel: "info", network: passphraseNetwork } });
+    await controller.initialize();
+    expect(states.at(-1)).toMatchObject({ phase: "locked", wrongPassphrase: false, fresh: false });
+  });
+});
+
+describe("Quit", () => {
+  it("waits for a boot in progress, then closes the node it made", async () => {
+    const { controller, server } = makeController({ settings: { logLevel: "info", network: community } });
+    const release = server.hold();
+    const booting = controller.initialize();
+    await vi.waitFor(() => expect(controller.phaseName()).toBe("starting"));
+    const quitting = controller.shutdown();
+    release();
+    await booting;
+    await quitting;
+    expect(server.nodes).toHaveLength(1);
+    expect(server.nodes[0]!.closed).toBe(true);
+    expect(controller.localOrigin()).toBeUndefined();
+  });
+
+  it("boots nothing after Quit", async () => {
+    const { controller, server } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.shutdown();
+    await controller.start();
+    expect(server.nodes).toHaveLength(0);
   });
 });
 
@@ -576,7 +736,7 @@ describe("a new network", () => {
     expect(server.nodes[0]!.closed).toBe(true);
     expect(existsSync(join(dataDir, "loam.db"))).toBe(false);
     expect(secrets.current()).toBeUndefined();
-    expect(secrets.get()).not.toBe(oldSecret);
+    expect(secrets.get("persistent", { mayMint: true })).not.toBe(oldSecret);
     expect(settings.read()).toEqual({ logLevel: "info", port: 3001 });
     expect(states.at(-1)).toMatchObject({ phase: "setup" });
     // The host's own client window kept a copy of the network: erased too.

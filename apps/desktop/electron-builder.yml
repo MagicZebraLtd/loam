@@ -8,11 +8,14 @@
 #
 # Signing: unsigned unless the CI provides credentials. macOS signs with CSC_LINK / CSC_KEY_PASSWORD, and
 # notarizes only when APPLE_API_KEY (path to the .p8), APPLE_API_KEY_ID and APPLE_API_ISSUER are all set:
-# `notarize: true` is skipped without them. With no certificate, build with `-c.mac.identity=-` (and
-# CSC_IDENTITY_AUTO_DISCOVERY=false on a Mac that has a keychain identity): that ad-hoc signs the whole
-# bundle, without which Apple Silicon reports a downloaded copy as "damaged" instead of offering Open Anyway.
-# Not set here, because it would override a real certificate. Windows signs with CSC_LINK / CSC_KEY_PASSWORD
-# (or WIN_CSC_LINK) when present.
+# `notarize: true` is skipped without them. With no certificate, build with
+# `-c.mac.identity=- -c.mac.hardenedRuntime=false` (and CSC_IDENTITY_AUTO_DISCOVERY=false on a Mac that has a
+# keychain identity): that ad-hoc signs the whole bundle, without which Apple Silicon reports a downloaded copy
+# as "damaged" instead of offering Open Anyway. The hardened runtime has to go with it: its library validation
+# needs a Team ID, which an ad-hoc signature hasn't got, so the app couldn't load its own Electron framework
+# (tested: dyld refuses it). Neither is set here, because they would override a real certificate. A plain
+# unsigned build (no flags) also launches: the fuse step re-signs the binary ad hoc. Windows signs with
+# CSC_LINK / CSC_KEY_PASSWORD (or WIN_CSC_LINK) when present.
 
 appId: com.loamnet.desktop
 productName: LOAM

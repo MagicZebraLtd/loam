@@ -77,18 +77,24 @@ export class KeyError extends Error {
   }
 }
 
+const MISSING_SECRET =
+  "This network's stored key is missing from this computer (its device secret file is gone), so its data can't be opened.";
+
 /** What guards a network's data besides the device secret: nothing (`persistent`) or the host's passphrase. */
 export type SecretProtection = "persistent" | "passphrase";
 
 /** The device secret's storage, behind an interface so the controller's tests never touch the keychain. */
 export type DeviceSecretStore = {
   /**
-   * The secret, minted (and stored) on first use. A `persistent` network has nothing but the secret, so it is
-   * minted only where the keychain can seal it; a `passphrase` network's secret may live in a private plain
-   * file on a computer with no keychain. Throws {@link KeyError}.
+   * The stored secret. With `mayMint`, one is minted (and stored) when there is none: only the controller knows
+   * when that is safe (a network just set up, or one whose old key a reset destroyed, or one with no database
+   * yet). Without it a missing secret is `db_encryption_locked`: minting a new one would only make the existing
+   * database report a wrong key, and hide that the stored one went missing. A `persistent` network has nothing
+   * but the secret, so it is minted only where the keychain can seal it; a `passphrase` network's secret may live
+   * in a private plain file on a computer with no keychain. Throws {@link KeyError}.
    */
-  get(protection: SecretProtection): string;
-  /** Delete the secret, proven gone. The next `get` mints a new one. */
+  get(protection: SecretProtection, options?: { mayMint?: boolean }): string;
+  /** Delete the secret, proven gone. The next `get` with `mayMint` mints a new one. */
   destroy(): void;
 };
 
@@ -179,7 +185,7 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
   }
 
   return {
-    get(protection) {
+    get(protection, options) {
       if (cached !== undefined) {
         return cached;
       }
@@ -201,6 +207,9 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
       if (stored !== undefined) {
         cached = stored;
         return stored;
+      }
+      if (options?.mayMint !== true) {
+        throw new KeyError("db_encryption_locked", MISSING_SECRET);
       }
       const secret = mintDeviceSecret();
       if (canSeal()) {
@@ -226,12 +235,17 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
   };
 }
 
-/** An in-memory secret store, for tests and the smoke run (which never touches the keychain). */
-export function memoryDeviceSecretStore(): DeviceSecretStore & { current(): string | undefined } {
-  let secret: string | undefined;
+/** An in-memory secret store, for tests and the smoke run (which never touches the keychain). Same minting rule. */
+export function memoryDeviceSecretStore(initial?: string): DeviceSecretStore & { current(): string | undefined } {
+  let secret: string | undefined = initial;
   return {
-    get() {
-      secret ??= mintDeviceSecret();
+    get(_protection, options) {
+      if (secret === undefined) {
+        if (options?.mayMint !== true) {
+          throw new KeyError("db_encryption_locked", MISSING_SECRET);
+        }
+        secret = mintDeviceSecret();
+      }
       return secret;
     },
     destroy() {
@@ -243,12 +257,13 @@ export function memoryDeviceSecretStore(): DeviceSecretStore & { current(): stri
 
 /**
  * The LOAM_DB_KEY value for `mode` (undefined: no encryption). `keychain` says whether a persistent key can be
- * kept safely; `passphrase` is what the host typed this start (never stored). Throws {@link KeyError}.
+ * kept safely; `passphrase` is what the host typed this start (never stored); `mayMint` lets a missing secret be
+ * created (see {@link DeviceSecretStore.get}). Throws {@link KeyError}.
  */
 export function resolveDbKey(
   mode: DbEncryptionMode,
   secrets: DeviceSecretStore,
-  options: { keychain: boolean; passphrase?: string },
+  options: { keychain: boolean; passphrase?: string; mayMint?: boolean },
 ): string | undefined {
   switch (mode) {
     case "off":
@@ -262,11 +277,11 @@ export function resolveDbKey(
           "This computer has no keychain to keep the network's key in, so it can't be kept between starts.",
         );
       }
-      return secrets.get("persistent");
+      return secrets.get("persistent", { mayMint: options.mayMint === true });
     case "passphrase":
       if (!options.passphrase) {
         throw new KeyError("db_encryption_locked", "The passphrase is needed to open this network.");
       }
-      return passphraseKey(options.passphrase, secrets.get("passphrase"));
+      return passphraseKey(options.passphrase, secrets.get("passphrase", { mayMint: options.mayMint === true }));
   }
 }

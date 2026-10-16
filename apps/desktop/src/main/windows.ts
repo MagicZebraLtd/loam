@@ -13,21 +13,13 @@ import type { LogEntry } from "@loam/tui";
 import { app, BrowserWindow, nativeImage, session, shell, type Session, type WebContents } from "electron";
 
 import { IPC, type DesktopState } from "../shared/ipc.js";
-import { isSameOrigin, isWebUrl } from "./external-links.js";
+import { isWebUrl } from "./external-links.js";
 import { appPaths } from "./paths.js";
 import { strings } from "./strings.js";
+import { CLIENT_PARTITIONS, clientPartition as partitionFor, navigationDecision } from "./trust.js";
 
 /** The only permission a page gets: writing to the clipboard (the client's "Copy" buttons). */
 const ALLOWED_PERMISSION = "clipboard-sanitized-write";
-
-/**
- * The client window's own browser storage, apart from the host shell's. The web client keeps a copy of what it
- * shows (IndexedDB, localStorage) and its session; on disk that copy would sit outside the network's
- * encryption, so for a network kept only while LOAM runs (ephemeral) it lives in memory and is gone on Quit.
- * Any other network keeps it on disk (so the host stays the same person across restarts), and it is erased
- * when the network is discarded.
- */
-const CLIENT_PARTITION = { kept: "persist:loam-client", memory: "loam-client-memory" } as const;
 
 /** Open `url` in the computer's browser if it is a web page; anything else is dropped. */
 function openInBrowser(url: string): void {
@@ -55,6 +47,8 @@ export type WindowManager = {
   openClient(origin: string, inMemory: boolean): void;
   /** The network was discarded: close the client window and erase what it stored. */
   discardClient(): Promise<void>;
+  /** An Emergency Reset erased the network: erase the client window's copy too (the window stays; it reloads). */
+  clearClientData(): Promise<void>;
   /** The node moved (a new boot, a reset) or stopped: reload or close the client window to match. */
   nodeChanged(origin: string | undefined): void;
   /** From now on, closing the host window really closes it (Quit). */
@@ -78,8 +72,8 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     return target;
   }
   harden(session.defaultSession);
-  harden(session.fromPartition(CLIENT_PARTITION.kept));
-  harden(session.fromPartition(CLIENT_PARTITION.memory));
+  harden(session.fromPartition(CLIENT_PARTITIONS.kept));
+  harden(session.fromPartition(CLIENT_PARTITIONS.memory));
 
   // Every page this app creates, whichever window it's in: no new windows, no navigation away.
   app.on("web-contents-created", (_event, contents) => {
@@ -90,11 +84,15 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     contents.on("will-attach-webview", (event) => event.preventDefault());
     // The client window stays on the node it was opened for; the host shell is one page and never navigates.
     const guard = (event: { preventDefault(): void }, url: string): void => {
-      if (client && !client.isDestroyed() && contents === client.webContents && isSameOrigin(url, clientOrigin)) {
+      const isClientWindow = client !== undefined && !client.isDestroyed() && contents === client.webContents;
+      const decision = navigationDecision(url, { isClientWindow, clientOrigin });
+      if (decision === "allow") {
         return;
       }
       event.preventDefault();
-      openInBrowser(url);
+      if (decision === "open-in-browser") {
+        openInBrowser(url);
+      }
     };
     contents.on("will-navigate", guard);
     contents.on("will-redirect", guard);
@@ -109,6 +107,14 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     webviewTag: false,
     spellcheck: false,
   });
+
+  /** Erase what the client window stored, in both partitions (the network may have changed kind). */
+  async function clearClientStorage(): Promise<void> {
+    for (const name of Object.values(CLIENT_PARTITIONS)) {
+      await session.fromPartition(name).clearStorageData();
+      await session.fromPartition(name).clearCache();
+    }
+  }
 
   function createHost(): BrowserWindow {
     const window = new BrowserWindow({
@@ -180,7 +186,7 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
       }
     },
     openClient(origin, inMemory) {
-      const partition = inMemory ? CLIENT_PARTITION.memory : CLIENT_PARTITION.kept;
+      const partition = partitionFor(inMemory);
       // A window on the other kind of storage (the network changed) is replaced, never reused.
       if (client && !client.isDestroyed() && clientPartition !== partition) {
         client.destroy();
@@ -208,11 +214,9 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
       }
       client = undefined;
       clientOrigin = undefined;
-      for (const name of Object.values(CLIENT_PARTITION)) {
-        await session.fromPartition(name).clearStorageData();
-        await session.fromPartition(name).clearCache();
-      }
+      await clearClientStorage();
     },
+    clearClientData: () => clearClientStorage(),
     nodeChanged(origin) {
       clientOrigin = origin ?? clientOrigin;
       if (!client || client.isDestroyed()) {

@@ -201,8 +201,10 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     },
     async unlock(request) {
       record("unlock");
-      if (request.passphrase === FAKE_WRONG_PASSPHRASE) {
-        phase({ phase: "locked", wrongPassphrase: true });
+      // A fresh network takes whatever passphrase it is given: there is nothing old to check it against.
+      const fresh = state.phase === "locked" && state.fresh;
+      if (!fresh && request.passphrase === FAKE_WRONG_PASSPHRASE) {
+        phase({ phase: "locked", wrongPassphrase: true, fresh: false });
         return ok;
       }
       boot();
@@ -211,7 +213,7 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     async start() {
       record("start");
       if (state.network?.encryption === "passphrase") {
-        phase({ phase: "locked", wrongPassphrase: false });
+        phase({ phase: "locked", wrongPassphrase: false, fresh: false });
         return ok;
       }
       boot();
@@ -330,14 +332,15 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
 
 /**
  * Put the fake on `window.loamDesktop` for a browser preview (no preload there), with a little activity so
- * the screens have something to show. Starts on the setup screen; `?phase=running` (or locked, failed…)
+ * the screens have something to show. Starts on the setup screen; `?phase=running` (or locked, locked-fresh, failed…)
  * in the address starts elsewhere.
  */
 export function installFakeBridge(): FakeBridge {
   const wanted = new URLSearchParams(window.location.search).get("phase");
   const start: Record<string, DesktopState> = {
     running: sampleState({ phase: "running", node: sampleNode() }),
-    locked: sampleState({ phase: "locked", wrongPassphrase: false }, { network: sampleNetwork({ encryption: "passphrase" }) }),
+    locked: sampleState({ phase: "locked", wrongPassphrase: false, fresh: false }, { network: sampleNetwork({ encryption: "passphrase" }) }),
+    "locked-fresh": sampleState({ phase: "locked", wrongPassphrase: false, fresh: true }, { network: sampleNetwork({ encryption: "passphrase" }) }),
     stopped: sampleState({ phase: "stopped" }),
     failed: sampleState({ phase: "failed", error: { code: "port_in_use", detail: "EADDRINUSE 0.0.0.0:3000" } }),
   };

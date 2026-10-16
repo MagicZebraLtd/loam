@@ -44,6 +44,8 @@ import type { EmbeddedNode, StartServer } from "./server-module.js";
 import { HOST_ACK_VERSION, settingsView, type DesktopSettings, type SettingsStore } from "./settings.js";
 import { clearWipePhase, readWipePhase } from "./wipe-phase.js";
 
+/** The node's database file in its data folder (the server's `loam.db`). */
+const DATABASE_FILE = "loam.db";
 /** The address the node listens on: every interface, so phones on the LAN can join. */
 export const LISTEN_HOST = "0.0.0.0";
 /** The port preferred when the host hasn't picked one. */
@@ -52,6 +54,8 @@ export const DEFAULT_PORT = 3000;
 export const STATUS_POLL_MS = 2_000;
 /** How long stopping the node may take before the launcher gives up waiting (Quit must not hang). */
 export const CLOSE_TIMEOUT_MS = 10_000;
+/** How long a reset the launcher didn't start may take before its aftermath (the client copy) is dealt with anyway. */
+const OUTSIDE_RESET_WAIT_MS = 30_000;
 /** A boot that keeps handing the key clear back (it never should) stops after this many rounds. */
 const MAX_KEY_CLEAR_ROUNDS = 2;
 
@@ -106,12 +110,22 @@ export type ControllerDeps = {
    * persistent/passphrase network's data is deleted and the key must now be destroyed.
    */
   installWipeRestartHook(hook: () => void): void;
+  /**
+   * Install the server's reset-started hook (`globalThis.__loamHostReset`, apps/server/src/kill-switch.ts), called
+   * at the start of EVERY Emergency Reset, whoever ran it: the web client's admin screen and `/api/panic` included.
+   */
+  installHostResetHook(hook: () => void): void;
   /** Push the state to the host window. */
   onState(state: DesktopState): void;
   /** The node (re)started on `origin`, or an Emergency Reset finished: an open client window must reload. */
   onNodeChanged(origin: string | undefined): void;
   /** The network was discarded (or a new one is being set up): erase what the host's client window stored. */
   onNetworkDiscarded(): Promise<void>;
+  /**
+   * An Emergency Reset erased the network: erase the host client window's copy of it (its IndexedDB lives outside
+   * the database's encryption), leaving the window open to reload.
+   */
+  clearClientData(): Promise<void>;
   now?: () => number;
   pollMs?: number;
   closeTimeoutMs?: number;
@@ -140,6 +154,15 @@ export class NodeController {
   private passphrase: string | undefined;
   /** Set by the server's fixed-key reset hook during a reset or a boot. */
   private wipeRestartRequested = false;
+  /**
+   * The device secret may be minted at the next boot: the network was just set up, or a reset destroyed its old
+   * key. Otherwise a missing secret is a lock, never a reason to mint (keys.ts). Cleared once a boot succeeds.
+   */
+  private freshKey = false;
+  /** The launcher itself is running a reset (resetNow, newNetwork): the server's hooks are its business then. */
+  private launcherReset = false;
+  /** Quit has begun: nothing may boot any more. */
+  private shuttingDown = false;
   private queue: Promise<unknown> = Promise.resolve();
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private lastPushed = "";
@@ -149,7 +172,9 @@ export class NodeController {
     this.now = deps.now ?? Date.now;
     deps.installWipeRestartHook(() => {
       this.wipeRestartRequested = true;
+      this.onServerWipeRestart();
     });
+    deps.installHostResetHook(() => this.onServerReset());
   }
 
   // ---- State ------------------------------------------------------------------------------------------------
@@ -201,6 +226,11 @@ export class NodeController {
     const state = this.getState();
     this.lastPushed = JSON.stringify(state);
     this.deps.onState(state);
+  }
+
+  /** The Unlock screen; `fresh` when the passphrase typed now starts the network over (its old key was destroyed). */
+  private lockedPhase(wrongPassphrase: boolean): DesktopPhase {
+    return { phase: "locked", wrongPassphrase, fresh: this.freshKey };
   }
 
   private fail(code: DesktopErrorCode, detail?: string): void {
@@ -284,7 +314,16 @@ export class NodeController {
       if (!network) {
         this.setPhase({ phase: "setup" });
       } else if (network.encryption === "passphrase" && this.passphrase === undefined) {
-        this.setPhase({ phase: "locked", wrongPassphrase: false });
+        // A reset that proved the data gone but crashed before destroying the key: destroy it now, before asking
+        // for anything, so the screen can say the passphrase typed next starts the network over.
+        if (readWipePhase(this.deps.dataDir) === "key-clear-ready") {
+          this.deps.log.note("warn", "Finishing an interrupted Emergency Reset before asking for the passphrase.");
+          if (!this.finishKeyClear()) {
+            this.fail("reset_incomplete", "The reset's journal couldn't be removed from the data folder.");
+            return;
+          }
+        }
+        this.setPhase(this.lockedPhase(false));
       } else {
         await this.boot();
       }
@@ -305,6 +344,7 @@ export class NodeController {
         this.fail("reset_incomplete", "The reset's journal couldn't be removed from the data folder.");
         return;
       }
+      await this.clearClientCopy();
     }
     this.fail("reset_incomplete", "The reset kept asking for a new key.");
   }
@@ -322,7 +362,91 @@ export class NodeController {
       this.deps.log.note("error", `Couldn't delete the device secret: ${errorDetail(error)}`);
       return false;
     }
+    // The old key is gone: whatever boots next is a new network and gets a new secret.
+    this.freshKey = true;
     return clearWipePhase(this.deps.dataDir);
+  }
+
+  /** After a fixed-key reset's data is proven gone and the node is closed: destroy the key, erase the client copy, boot. */
+  private async completeKeyClearAndBoot(): Promise<void> {
+    if (!this.finishKeyClear()) {
+      this.fail("reset_incomplete", "The reset's journal couldn't be removed from the data folder.");
+      return;
+    }
+    await this.clearClientCopy();
+    await this.boot();
+  }
+
+  /** Erase the host client window's copy after a reset; a failure is logged, never a reason to stop. */
+  private async clearClientCopy(): Promise<void> {
+    try {
+      await this.deps.clearClientData();
+    } catch (error) {
+      this.deps.log.note("warn", `Couldn't erase the LOAM window's stored copy: ${errorDetail(error)}`);
+    }
+  }
+
+  // ---- Resets the launcher didn't start --------------------------------------------------------------------------
+
+  /**
+   * The server's fixed-key hook fired. During a boot (its resume) or the launcher's own reset, they handle it. Any
+   * other time the reset came from the web client's admin screen or `/api/panic`: the data is deleted and proven
+   * gone, the node is locked (503), and the key must now be destroyed and the node booted again, exactly as the
+   * Android launcher's `loam-wipe-restart` listener does. Queued, so it never overlaps another operation.
+   */
+  private onServerWipeRestart(): void {
+    const running = this.running;
+    if (!running || this.launcherReset) {
+      return;
+    }
+    this.stopPolling();
+    this.setPhase({ phase: "resetting" });
+    void this.serialize(() => this.finishOutsideReset(running.node));
+  }
+
+  private async finishOutsideReset(node: EmbeddedNode): Promise<void> {
+    if (this.running?.node !== node || this.shuttingDown) {
+      return;
+    }
+    this.deps.log.note("warn", "An Emergency Reset erased this network: destroying its old key and starting it again, empty.");
+    await this.closeNode();
+    await this.completeKeyClearAndBoot();
+  }
+
+  /**
+   * A reset began, whoever started it. One the launcher didn't start and that finishes in-process (a plaintext or
+   * ephemeral network, reset from the web client) still leaves the host's client window holding a copy: once the
+   * node says the reset is over, erase that copy and reload the window. A fixed-key reset is finished by
+   * {@link onServerWipeRestart} instead, which closes this node and so ends the wait below.
+   */
+  private onServerReset(): void {
+    const running = this.running;
+    if (!running || this.launcherReset) {
+      return;
+    }
+    void (async () => {
+      for (let waited = 0; waited < OUTSIDE_RESET_WAIT_MS; waited += 100) {
+        await delay(100);
+        if (this.running !== running) {
+          return;
+        }
+        try {
+          if (!running.node.host.status().resetting) {
+            break;
+          }
+        } catch {
+          // Mid-wipe the node can refuse; ask again.
+        }
+      }
+      await this.serialize(async () => {
+        if (this.running !== running || this.shuttingDown) {
+          return;
+        }
+        await this.clearClientCopy();
+        this.deps.onNodeChanged(localOrigin(running.port));
+        this.refresh();
+      });
+    })();
   }
 
   private async bootOnce(): Promise<BootOutcome> {
@@ -331,6 +455,9 @@ export class NodeController {
     const network = settings.network;
     if (!network) {
       this.setPhase({ phase: "setup" });
+      return "done";
+    }
+    if (this.shuttingDown) {
       return "done";
     }
     this.setPhase({ phase: "starting" });
@@ -350,18 +477,22 @@ export class NodeController {
         this.fail("reset_incomplete", "The reset's journal couldn't be removed from the data folder.");
         return "done";
       }
+      await this.clearClientCopy();
     }
 
     let dbKey: string | undefined;
     try {
       dbKey = resolveDbKey(mode, deps.secrets, {
         keychain: deps.capabilities.keychain,
+        // A new secret only for a new network: just set up, its old key destroyed by a reset, or no database yet
+        // (nothing a new key could lock out). Any other missing secret is reported, not papered over.
+        mayMint: this.freshKey || !existsSync(join(deps.dataDir, DATABASE_FILE)),
         ...(this.passphrase !== undefined ? { passphrase: this.passphrase } : {}),
       });
     } catch (error) {
       if (error instanceof KeyError) {
         if (mode === "passphrase" && this.passphrase === undefined) {
-          this.setPhase({ phase: "locked", wrongPassphrase: false });
+          this.setPhase(this.lockedPhase(false));
         } else {
           this.fail(error.code, error.message);
         }
@@ -403,7 +534,7 @@ export class NodeController {
       if (failure.kind === "wrong_passphrase") {
         this.passphrase = undefined;
         deps.log.note("warn", "The passphrase didn't open this network's database.");
-        this.setPhase({ phase: "locked", wrongPassphrase: true });
+        this.setPhase(this.lockedPhase(true));
       } else {
         this.fail(failure.error.code, failure.error.detail);
       }
@@ -422,7 +553,12 @@ export class NodeController {
       this.fail("unknown", "The network started without its transport key (Developer Mode?), so it was stopped.");
       return "done";
     }
+    if (this.shuttingDown) {
+      await node.close().catch(() => undefined);
+      return "done";
+    }
     this.running = { node, hostToken, port, startedAt: this.now() };
+    this.freshKey = false;
     try {
       node.host.setLogLevel(settings.logLevel);
     } catch {
@@ -536,6 +672,7 @@ export class NodeController {
         return { ok: false, error: `Some files in the data folder couldn't be removed: ${left.join(", ")}` };
       }
       this.deps.secrets.destroy();
+      this.freshKey = true;
       await this.discardClientData();
       const nodeName = cleanNodeName(request.nodeName);
       writeInitialConfig(this.deps.dataDir, presetConfig(request.preset, nodeName, "en"));
@@ -571,14 +708,17 @@ export class NodeController {
         return { ok: true, value: undefined };
       }
       if (this.running && this.phase.phase === "failed" && this.phase.error.code === "reset_incomplete") {
-        const reset = await this.resetNow();
+        this.launcherReset = true;
+        const reset = await this.resetNow().finally(() => {
+          this.launcherReset = false;
+        });
         return reset.ok ? { ok: true, value: undefined } : reset;
       }
       const { network } = this.deps.settings.read();
       if (!network) {
         this.setPhase({ phase: "setup" });
       } else if (network.encryption === "passphrase" && this.passphrase === undefined) {
-        this.setPhase({ phase: "locked", wrongPassphrase: false });
+        this.setPhase(this.lockedPhase(false));
       } else {
         await this.closeNode();
         await this.boot();
@@ -604,15 +744,19 @@ export class NodeController {
   newNetwork(): Promise<HostResult<void>> {
     return this.serialize(async () => {
       if (this.running) {
+        this.launcherReset = true;
         try {
           await this.running.node.host.emergencyReset();
         } catch (error) {
           this.deps.log.note("warn", `The reset before discarding the network failed: ${errorDetail(error)}`);
+        } finally {
+          this.launcherReset = false;
         }
       }
       await this.closeNode();
       this.passphrase = undefined;
       this.deps.secrets.destroy();
+      this.freshKey = true;
       await this.discardClientData();
       const left = emptyDataDir(this.deps.dataDir);
       if (left.length > 0) {
@@ -629,7 +773,14 @@ export class NodeController {
 
   /** Emergency Reset from the host's own screen (no admin session needed, whatever `killSwitch.enabled` says). */
   emergencyReset(): Promise<HostResult<{ complete: boolean; journaled: boolean }>> {
-    return this.serialize(() => this.resetNow());
+    return this.serialize(async () => {
+      this.launcherReset = true;
+      try {
+        return await this.resetNow();
+      } finally {
+        this.launcherReset = false;
+      }
+    });
   }
 
   /**
@@ -659,15 +810,12 @@ export class NodeController {
 
     if (this.wipeRestartRequested && isFixedKey(network.encryption)) {
       await this.closeNode();
-      if (!this.finishKeyClear()) {
-        this.fail("reset_incomplete", "The reset's journal couldn't be removed from the data folder.");
-        return { ok: true, value: { complete: false, journaled: true } };
-      }
-      await this.boot();
+      await this.completeKeyClearAndBoot();
       return { ok: true, value: { complete: this.phase.phase === "running", journaled: true } };
     }
     if (result.complete) {
       this.deps.log.note("warn", "Emergency Reset: every message, person and file on this network was erased.");
+      await this.clearClientCopy();
       this.setPhase({ phase: "running", node: this.nodeInfo(running) });
       this.startPolling();
       this.deps.onNodeChanged(localOrigin(running.port));
@@ -676,6 +824,7 @@ export class NodeController {
     if (result.journaled) {
       this.deps.log.note("warn", "The Emergency Reset didn't finish; restarting the network to finish it.");
       await this.closeNode();
+      await this.clearClientCopy();
       await this.boot();
       return { ok: true, value: { complete: this.phase.phase === "running", journaled: true } };
     }
@@ -742,10 +891,14 @@ export class NodeController {
     }
   }
 
-  /** Stop the node for Quit. Bounded by the close timeout, and never throws. */
-  async shutdown(): Promise<void> {
+  /**
+   * Stop the node for Quit. Waits its turn behind whatever is running (a boot in progress finishes, then is
+   * closed), and nothing boots after it. Never throws; the caller bounds how long it waits.
+   */
+  shutdown(): Promise<void> {
+    this.shuttingDown = true;
     this.stopPolling();
-    await this.closeNode().catch(() => undefined);
+    return this.serialize(() => this.closeNode()).catch(() => undefined);
   }
 
   // ---- The host API, for the People and Settings screens ------------------------------------------------------

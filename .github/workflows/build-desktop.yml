@@ -152,8 +152,10 @@ jobs:
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             # Ad-hoc sign the whole bundle (`-` is Apple's ad-hoc identity): the fuses electron-builder flips
             # break Electron's own signature, and an unsigned bundle on Apple Silicon is reported as "damaged"
-            # rather than offered "Open Anyway". A real certificate, when present, makes this unnecessary.
-            ADHOC=(-c.mac.identity=-)
+            # rather than offered "Open Anyway". The hardened runtime must be off for an ad-hoc build: with
+            # library validation on, dyld refuses Electron's own framework because an ad-hoc signature has no
+            # Team ID (exit 134). A real certificate, when present, makes both flags unnecessary.
+            ADHOC=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
           fi
           unset APPLE_API_KEY_P8
           # Rebuild the native SQLCipher driver for each architecture in turn (it lands in

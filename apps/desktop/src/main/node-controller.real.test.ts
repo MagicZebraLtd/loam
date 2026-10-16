@@ -58,12 +58,14 @@ async function realController(encryption: DbEncryptionMode, secrets = memoryDevi
     findFreePort: (preferred, host) => findFreePort(preferred + Math.floor(Math.random() * 2000), host),
     lanAddresses: () => [],
     env: process.env,
+    installHostResetHook: () => undefined,
     installWipeRestartHook: (hook) => {
       (globalThis as Hooked).__loamRequestWipeRestart = hook;
     },
     onState: () => undefined,
     onNodeChanged: () => undefined,
     onNetworkDiscarded: async () => undefined,
+    clearClientData: async () => undefined,
   });
   return { controller, secrets, dataDir };
 }

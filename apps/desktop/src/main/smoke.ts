@@ -79,10 +79,12 @@ export async function runSmoke(): Promise<void> {
       findFreePort,
       lanAddresses,
       env: process.env,
+      installHostResetHook: () => undefined,
       installWipeRestartHook: () => undefined,
       onState: () => undefined,
       onNodeChanged: () => undefined,
       onNetworkDiscarded: async () => undefined,
+      clearClientData: async () => undefined,
     });
     await controller.initialize();
     await controller.setup({ nodeName: "LOAM smoke", preset: "private", encryption: driverLoads ? "ephemeral" : "off" });

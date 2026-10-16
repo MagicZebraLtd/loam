@@ -66,7 +66,7 @@ describe("keychainProtects", () => {
     try {
       const store = fileDeviceSecretStore(dir, box);
       store.destroy();
-      expect(() => store.get("persistent")).toThrow(expect.objectContaining({ code: "keychain_unavailable" }));
+      expect(() => store.get("persistent", { mayMint: true })).toThrow(expect.objectContaining({ code: "keychain_unavailable" }));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -86,7 +86,7 @@ describe("resolveDbKey", () => {
     const secrets = memoryDeviceSecretStore();
     expect(resolveDbKey("off", secrets, { keychain: true })).toBeUndefined();
     expect(resolveDbKey("ephemeral", secrets, { keychain: false })).toBe("ephemeral");
-    const persistent = resolveDbKey("persistent", secrets, { keychain: true });
+    const persistent = resolveDbKey("persistent", secrets, { keychain: true, mayMint: true });
     expect(persistent).toBe(secrets.current());
     expect(resolveDbKey("passphrase", secrets, { keychain: true, passphrase: "pw" })).toBe(passphraseKey("pw", persistent!));
   });
@@ -106,9 +106,10 @@ describe("resolveDbKey", () => {
 
   it("gives a different key once the secret is destroyed", () => {
     const secrets = memoryDeviceSecretStore();
-    const before = resolveDbKey("passphrase", secrets, { keychain: true, passphrase: "pw" });
+    const before = resolveDbKey("passphrase", secrets, { keychain: true, passphrase: "pw", mayMint: true });
     secrets.destroy();
-    expect(resolveDbKey("passphrase", secrets, { keychain: true, passphrase: "pw" })).not.toBe(before);
+    expect(() => resolveDbKey("passphrase", secrets, { keychain: true, passphrase: "pw" })).toThrow(KeyError);
+    expect(resolveDbKey("passphrase", secrets, { keychain: true, passphrase: "pw", mayMint: true })).not.toBe(before);
   });
 });
 
@@ -122,7 +123,7 @@ describe("fileDeviceSecretStore", () => {
   });
 
   it("keeps the secret sealed by the keychain and reads it back", () => {
-    const secret = fileDeviceSecretStore(dir, fakeBox()).get("persistent");
+    const secret = fileDeviceSecretStore(dir, fakeBox()).get("persistent", { mayMint: true });
     expect(secret).toMatch(/^[0-9a-f]{64}$/);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8").startsWith("sealed:")).toBe(true);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).not.toContain(secret);
@@ -131,34 +132,44 @@ describe("fileDeviceSecretStore", () => {
 
   it("mints a new secret after destroy", () => {
     const store = fileDeviceSecretStore(dir, fakeBox());
-    const first = store.get("persistent");
+    const first = store.get("persistent", { mayMint: true });
     store.destroy();
     expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
-    expect(store.get("persistent")).not.toBe(first);
+    expect(store.get("persistent", { mayMint: true })).not.toBe(first);
+  });
+
+  it("never mints a missing secret unless told it may", () => {
+    for (const box of [fakeBox(), fakeBox(false)]) {
+      expect(() => fileDeviceSecretStore(dir, box).get("passphrase")).toThrow(
+        expect.objectContaining({ code: "db_encryption_locked", message: expect.stringContaining("missing") }),
+      );
+    }
+    expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
+    expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(false);
   });
 
   it("never mints over a secret the keychain won't open", () => {
     writeFileSync(join(dir, DEVICE_SECRET_FILE), "someone else's");
-    expect(() => fileDeviceSecretStore(dir, fakeBox()).get("persistent")).toThrow(KeyError);
+    expect(() => fileDeviceSecretStore(dir, fakeBox()).get("persistent", { mayMint: true })).toThrow(KeyError);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).toBe("someone else's");
   });
 
   it("keeps a sealed secret locked, not re-minted, when the keychain is away", () => {
-    const secret = fileDeviceSecretStore(dir, fakeBox()).get("passphrase");
-    expect(() => fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase")).toThrow(
+    const secret = fileDeviceSecretStore(dir, fakeBox()).get("passphrase", { mayMint: true });
+    expect(() => fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase", { mayMint: true })).toThrow(
       expect.objectContaining({ code: "db_encryption_locked" }),
     );
     expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
   });
 
   it("keeps a passphrase network's secret in a private plain file with no keychain", () => {
-    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase");
+    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase", { mayMint: true });
     expect(readFileSync(join(dir, DEVICE_SECRET_PLAIN_FILE), "utf8").trim()).toBe(secret);
     expect(fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase")).toBe(secret);
   });
 
   it("never keeps a persistent key in the clear", () => {
-    expect(() => fileDeviceSecretStore(dir, fakeBox(false)).get("persistent")).toThrow(
+    expect(() => fileDeviceSecretStore(dir, fakeBox(false)).get("persistent", { mayMint: true })).toThrow(
       expect.objectContaining({ code: "keychain_unavailable" }),
     );
     expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(false);
@@ -166,7 +177,7 @@ describe("fileDeviceSecretStore", () => {
   });
 
   it("seals a plain secret once this computer has a keychain", () => {
-    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase");
+    const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase", { mayMint: true });
     expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
     expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(false);
     expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).not.toContain(secret);

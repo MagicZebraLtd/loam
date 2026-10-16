@@ -91,6 +91,11 @@ export const en = {
   "unlock.missing": "Type the passphrase.",
   "unlock.submit": "Unlock and start",
   "unlock.working": "Unlocking…",
+  "unlock.freshTitle": "Choose a new passphrase",
+  "unlock.freshBody":
+    "Emergency Reset erased this network, so it starts again empty. Choose the passphrase for the new network: you type it each time LOAM starts. It is never stored, so if you forget it, the messages can't be opened.",
+  "unlock.freshSubmit": "Start the new network",
+  "unlock.freshWorking": "Starting…",
   "unlock.forgotTitle": "Forgot the passphrase?",
   "unlock.forgotBody": "Without it the messages can't be opened by anyone. You can erase this network and start a new one.",
 

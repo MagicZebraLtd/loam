@@ -11,7 +11,7 @@ afterEach(unmountAll);
 const PHASES: { state: DesktopState; heading: string | RegExp; tabs: boolean }[] = [
   { state: sampleState({ phase: "setup" }), heading: "Welcome to LOAM", tabs: false },
   {
-    state: sampleState({ phase: "locked", wrongPassphrase: false }, { network: sampleNetwork({ encryption: "passphrase" }) }),
+    state: sampleState({ phase: "locked", wrongPassphrase: false, fresh: false }, { network: sampleNetwork({ encryption: "passphrase" }) }),
     heading: "Unlock Riverside",
     tabs: false,
   },

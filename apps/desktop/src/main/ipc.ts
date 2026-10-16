@@ -21,9 +21,11 @@ import {
   UnlockRequestSchema,
   UpdateConfigRequestSchema,
 } from "../shared/ipc.js";
-import { isKnownExternalUrl, isSameOrigin } from "./external-links.js";
+import { isKnownExternalUrl } from "./external-links.js";
 import type { LogFeed } from "./log-feed.js";
 import type { NodeController } from "./node-controller.js";
+import { appPaths } from "./paths.js";
+import { hostShellUrl, isHostShellSender, mayInjectHostToken, type SenderFacts } from "./trust.js";
 import { checkForUpdates } from "./updates.js";
 import type { WindowManager } from "./windows.js";
 
@@ -38,15 +40,14 @@ export type IpcContext = {
   lanAddresses(): string[];
 };
 
-/** True when `event` came from the host window's top frame, showing the packaged host shell (file://). */
-function fromHostShell(windows: WindowManager, event: IpcMainInvokeEvent | IpcMainEvent): boolean {
+/** The facts about who sent `event`, for the decisions in trust.ts. */
+function senderFacts(isWindow: (contents: WebContents) => boolean, event: IpcMainInvokeEvent | IpcMainEvent): SenderFacts {
   const frame = event.senderFrame;
-  return (
-    windows.isHost(event.sender) &&
-    frame !== null &&
-    frame === event.sender.mainFrame &&
-    frame.url.startsWith("file:")
-  );
+  return {
+    isWindow: isWindow(event.sender),
+    isMainFrame: frame !== null && frame === event.sender.mainFrame,
+    frameUrl: frame?.url ?? "",
+  };
 }
 
 /** The payload parsed against `schema`, or undefined. */
@@ -63,11 +64,12 @@ function nodeHosts(context: IpcContext): { port: number; hosts: string[] } | und
 
 export function registerIpc(context: IpcContext): void {
   const { controller, windows } = context;
+  const shellUrl = hostShellUrl(appPaths.rendererIndex);
 
   /** Handle `channel` from the host shell only. A request from anywhere else is refused before it is read. */
   function handle(channel: string, handler: (payload: unknown, sender: WebContents) => unknown): void {
     ipcMain.handle(channel, (event, payload: unknown) => {
-      if (!fromHostShell(windows, event)) {
+      if (!isHostShellSender(senderFacts(windows.isHost, event), shellUrl)) {
         throw new Error("Refused: not the host window.");
       }
       return handler(payload, event.sender);
@@ -139,12 +141,7 @@ export function registerIpc(context: IpcContext): void {
   // Synchronous: the client preload must have the token before the page's own scripts run. Assigned exactly
   // once: setting `returnValue` sends the reply, and a second assignment is never seen.
   ipcMain.on(IPC.hostInjection, (event) => {
-    const frame = event.senderFrame;
-    const trusted =
-      windows.isClient(event.sender) &&
-      frame !== null &&
-      frame === event.sender.mainFrame &&
-      isSameOrigin(frame.url, controller.localOrigin());
+    const trusted = mayInjectHostToken(senderFacts(windows.isClient, event), controller.localOrigin());
     event.returnValue = trusted ? (controller.hostInjection() ?? null) : null;
   });
 }

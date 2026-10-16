@@ -35,8 +35,11 @@ process.env.NODE_ENV = "production";
 app.setName("LOAM");
 app.setPath("userData", join(app.getPath("appData"), app.isPackaged ? "LOAM" : "LOAM (development)"));
 
-/** The server's fixed-key Emergency Reset hook (apps/server/src/store-lifecycle.ts `wipeRestartHook`). */
-type WipeRestartGlobal = { __loamRequestWipeRestart?: () => void };
+/**
+ * The server's launcher hooks: the fixed-key Emergency Reset handoff (apps/server/src/store-lifecycle.ts
+ * `wipeRestartHook`) and the reset-started notice (apps/server/src/kill-switch.ts).
+ */
+type ServerHooks = { __loamRequestWipeRestart?: () => void; __loamHostReset?: () => void };
 
 /** Resolve after `ms`. */
 function delay(ms: number): Promise<void> {
@@ -79,7 +82,10 @@ async function runApp(): Promise<void> {
     lanAddresses,
     env: process.env,
     installWipeRestartHook: (hook) => {
-      (globalThis as WipeRestartGlobal).__loamRequestWipeRestart = hook;
+      (globalThis as ServerHooks).__loamRequestWipeRestart = hook;
+    },
+    installHostResetHook: (hook) => {
+      (globalThis as ServerHooks).__loamHostReset = hook;
     },
     onState: (state) => {
       windows.sendState(state);
@@ -87,6 +93,7 @@ async function runApp(): Promise<void> {
     },
     onNodeChanged: (origin) => windows.nodeChanged(origin),
     onNetworkDiscarded: () => windows.discardClient(),
+    clearClientData: () => windows.clearClientData(),
   });
   log.setListener((entry) => windows.sendLog(entry));
 
@@ -126,6 +133,11 @@ async function runApp(): Promise<void> {
       app.quit();
     });
   });
+
+  // A Linux logout, a service manager or `kill` sends SIGTERM (a terminal's Ctrl-C, SIGINT): quit the same way the
+  // menu does, so the node is closed properly instead of waiting for SIGKILL.
+  process.on("SIGTERM", () => app.quit());
+  process.on("SIGINT", () => app.quit());
 
   windows.showHost();
   await controller.initialize();

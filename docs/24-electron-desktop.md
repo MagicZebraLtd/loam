@@ -345,8 +345,10 @@ builds or tests them. Each release file also gets a `.sha256`.
 State today: **nothing is signed or notarized.**
 
 - **macOS.** The Apple Developer enrolment is pending. Until it completes the `.dmg` files are unsigned and not
-  notarized, but the CI build ad-hoc signs the bundle (`-c.mac.identity=-`): without it, Apple Silicon reports a
-  downloaded copy as "damaged" instead of offering **Open Anyway** (System Settings, Privacy & Security). The
+  notarized, but the CI build ad-hoc signs the bundle (`-c.mac.identity=- -c.mac.hardenedRuntime=false`; the
+  hardened runtime has to be off for an ad-hoc signature, whose missing Team ID would otherwise make dyld refuse
+  Electron's own framework): without it, Apple Silicon reports a downloaded copy as "damaged" instead of
+  offering **Open Anyway** (System Settings, Privacy & Security). The
   website's /desktop page tells people to do that once. Gatekeeper and the keychain re-prompt (above) both go
   away only with a real identity.
   **What the owner adds once enrolment completes:** five repository secrets. `CSC_LINK` (the Developer ID

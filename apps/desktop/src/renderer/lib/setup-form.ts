@@ -41,6 +41,24 @@ export type SetupForm = {
 
 export type SetupErrors = Partial<Record<"nodeName" | "encryption" | "passphrase" | "confirm" | "acknowledged", string>>;
 
+/**
+ * What's wrong with a new network's passphrase and its repeat, if anything: required, at least
+ * {@link MIN_NEW_PASSPHRASE} characters, at most the contract's cap, and typed the same twice. Shared by Setup
+ * and the Unlock screen's fresh mode (a passphrase network erased by an Emergency Reset gets a new one).
+ */
+export function newPassphraseErrors(passphrase: string, confirm: string): Pick<SetupErrors, "passphrase" | "confirm"> {
+  if (!passphrase) {
+    return { passphrase: t("setup.passphraseMissing") };
+  }
+  if (passphrase.length < MIN_NEW_PASSPHRASE) {
+    return { passphrase: t("setup.passphraseShort", { min: MIN_NEW_PASSPHRASE }) };
+  }
+  if (passphrase.length > MAX_PASSPHRASE) {
+    return { passphrase: t("setup.passphraseLong", { max: MAX_PASSPHRASE }) };
+  }
+  return confirm === passphrase ? {} : { confirm: t("setup.passphraseMismatch") };
+}
+
 export type SetupValidation = { ok: true; request: SetupRequest } | { ok: false; errors: SetupErrors };
 
 /**
@@ -58,15 +76,7 @@ export function validateSetup(form: SetupForm, capabilities: DesktopCapabilities
     errors.encryption = t("setup.keychainMissing");
   }
   if (form.encryption === "passphrase") {
-    if (!form.passphrase) {
-      errors.passphrase = t("setup.passphraseMissing");
-    } else if (form.passphrase.length < MIN_NEW_PASSPHRASE) {
-      errors.passphrase = t("setup.passphraseShort", { min: MIN_NEW_PASSPHRASE });
-    } else if (form.passphrase.length > MAX_PASSPHRASE) {
-      errors.passphrase = t("setup.passphraseLong", { max: MAX_PASSPHRASE });
-    } else if (form.confirm !== form.passphrase) {
-      errors.confirm = t("setup.passphraseMismatch");
-    }
+    Object.assign(errors, newPassphraseErrors(form.passphrase, form.confirm));
   }
   if (!form.acknowledged) {
     errors.acknowledged = t("setup.ackRequired");
