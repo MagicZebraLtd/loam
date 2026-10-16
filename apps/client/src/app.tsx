@@ -121,6 +121,11 @@ declare global {
      * a wipe) claims again.
      */
     __loamHostDeviceToken?: string;
+    /**
+     * Set by the desktop host on its OWN client window (apps/desktop/src/preload/client.cts) when the
+     * network is encrypted: keep no copy of it in this device's storage (lib/local-store.ts).
+     */
+    __loamHostNoLocalCache?: boolean;
   }
 }
 import {

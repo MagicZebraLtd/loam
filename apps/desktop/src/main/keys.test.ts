@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -136,6 +136,39 @@ describe("fileDeviceSecretStore", () => {
     store.destroy();
     expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
     expect(store.get("persistent", { mayMint: true })).not.toBe(first);
+  });
+
+  it("destroys the copies an interrupted write left behind, not just the final files", () => {
+    // A plain secret being sealed (a keychain appeared) when the process died after writing the temporary
+    // file and before renaming it: both the plain file and the sealed temporary hold the secret.
+    const plain = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase", { mayMint: true });
+    writeFileSync(join(dir, `${DEVICE_SECRET_FILE}.tmp`), fakeBox().encryptString(plain));
+    writeFileSync(join(dir, `${DEVICE_SECRET_PLAIN_FILE}.tmp`), `${plain}\n`);
+    fileDeviceSecretStore(dir, fakeBox(false)).destroy();
+    for (const name of [DEVICE_SECRET_FILE, DEVICE_SECRET_PLAIN_FILE, `${DEVICE_SECRET_FILE}.tmp`, `${DEVICE_SECRET_PLAIN_FILE}.tmp`]) {
+      expect(existsSync(join(dir, name))).toBe(false);
+    }
+    expect(() => fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toThrow(expect.objectContaining({ code: "db_encryption_locked" }));
+  });
+
+  it("refuses to report a secret destroyed while a copy remains", () => {
+    const store = fileDeviceSecretStore(dir, fakeBox());
+    store.get("persistent", { mayMint: true });
+    // A directory under the secret's name can't be unlinked: the wipe must say so, never claim success.
+    rmSync(join(dir, DEVICE_SECRET_FILE));
+    mkdirSync(join(dir, DEVICE_SECRET_FILE));
+    expect(() => store.destroy()).toThrow(/proven gone/);
+  });
+
+  it("writes the secret without a window where a crash loses it", () => {
+    // A leftover temporary from an earlier interrupted write is replaced, never read back or kept.
+    writeFileSync(join(dir, `${DEVICE_SECRET_FILE}.tmp`), "stale");
+    const secret = fileDeviceSecretStore(dir, fakeBox()).get("persistent", { mayMint: true });
+    expect(existsSync(join(dir, `${DEVICE_SECRET_FILE}.tmp`))).toBe(false);
+    expect(fileDeviceSecretStore(dir, fakeBox()).get("persistent")).toBe(secret);
+    if (process.platform !== "win32") {
+      expect(statSync(join(dir, DEVICE_SECRET_FILE)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("never mints a missing secret unless told it may", () => {

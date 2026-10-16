@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import type { LoamConfigUpdate } from "@loam/schema";
 
-import { fsyncDirectory } from "./wipe-phase.js";
+import { fsyncDirectory } from "./durable-files.js";
 
 /** The node's config file (the server's default: `<dataDir>/config.json`). */
 export const CONFIG_FILE = "config.json";

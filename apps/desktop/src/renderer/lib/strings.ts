@@ -281,6 +281,9 @@ export const en = {
   "error.reset_incomplete.title": "Emergency Reset didn't finish",
   "error.reset_incomplete.body":
     "Some data may still be on this computer, so the network stays locked. Try again to start it, then run Emergency Reset again; or erase it all now by starting a new network.",
+  "error.stop_timeout.title": "The network didn't stop",
+  "error.stop_timeout.body":
+    "LOAM waited for the network to stop, but it is still shutting down, so nothing else can start yet. Try again in a moment. If it keeps happening, quit LOAM and open it again.",
   "error.unknown.title": "The network stopped unexpectedly",
   "error.unknown.body": "Something went wrong. Try again; the Activity screen may say more.",
 } as const;

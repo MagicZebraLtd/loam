@@ -25,6 +25,12 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   drift apart. Nothing changes for the phone.
 - **The server bundle recipe is shared**: `scripts/lib/bundle-server.mjs` is used by both the `loamnet`
   package build and the desktop app. The `loamnet` output is unchanged.
+- **Stopping the node no longer waits for a request that never finishes.** The embedded server (the desktop
+  app, the Android host, `loamnet` on Ctrl-C) closes its connections when it shuts down instead of waiting
+  for every in-flight request, so a stalled upload can't hold a stop open for ever.
+- **The web client keeps no local copy when the host app says not to** (`window.__loamHostNoLocalCache`):
+  the desktop app sets it on every encrypted network, so the host's own window never writes messages to the
+  disk outside the database's key. Nothing changes for phones joining a network.
 
 ## [0.6.4] - 2026-10-15
 

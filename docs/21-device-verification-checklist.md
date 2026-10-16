@@ -145,7 +145,13 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   journal) and start it again: it finishes the reset and never serves the old data.
 - [ ] **Stop, Quit and reopen.** Closing the window keeps the phone connected; Quit stops the node within 10 s;
   reopening a persistent network restores its messages, an ephemeral one starts empty, and the host is still
-  admin in **Open LOAM** (the client window keeps its storage on disk except for ephemeral networks).
+  admin in **Open LOAM** (the client window keeps its identity on disk except for ephemeral networks). Press
+  Stop while a phone is mid-upload: it stops within 10 s all the same. On an encrypted network, with messages
+  shown in **Open LOAM**, quit and look in the profile folder (`Partitions/loam-client/IndexedDB` under
+  `userData`): no `loam-poc` database exists; on an unencrypted network it does.
+- [ ] **A reset from the web client that cannot finish.** Make the data folder read-only mid-run (or fill the
+  disk), run Emergency Reset from the web admin screen: within 30 s the host window shows "Emergency Reset
+  didn't finish" (or restarts to finish a journaled one), never a Running screen over a node answering 503.
 - [ ] **Start a new network** from Settings erases the old network (devices purge), the keychain item or secret
   file, and the client window's stored copy, and returns to Setup.
 - [ ] **Windows durable writes.** The same crash and power-cut check as docs/25 O3, with the packaged app.

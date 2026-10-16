@@ -22,6 +22,8 @@ function coded(code: string): Error {
 }
 
 type ResetBehaviour = "in-process" | "fixed-key" | "incomplete-journaled" | "incomplete-unjournaled";
+/** What a reset started outside the launcher does: finishes, hands off a fixed key, or gets stuck (locked, 503). */
+type ExternalResetKind = "fixed-key" | "in-process" | "stuck-journaled" | "stuck-unjournaled";
 
 /** One booted fake node: what it was started with, and a host API whose answers a test can change. */
 type FakeNode = EmbeddedNode & {
@@ -43,6 +45,7 @@ function fakeServer(context: {
   const failures: (Error | (() => Error))[] = [];
   let reset: ResetBehaviour = "in-process";
   let gate: Promise<void> | undefined;
+  let closeGate: Promise<void> | undefined;
 
   async function start(options: EmbeddedServerOptions): Promise<EmbeddedNode> {
     if (gate) {
@@ -78,6 +81,9 @@ function fakeServer(context: {
       },
       host: {} as HostApi,
       async close() {
+        if (closeGate) {
+          await closeGate;
+        }
         node.closed = true;
       },
     };
@@ -141,18 +147,33 @@ function fakeServer(context: {
       });
       return release;
     },
+    /** Hold every node's close until the returned function is called (a server that won't stop). */
+    holdClose(): () => void {
+      let release = (): void => undefined;
+      closeGate = new Promise((resolve) => {
+        release = () => {
+          closeGate = undefined;
+          resolve();
+        };
+      });
+      return release;
+    },
     /**
      * A reset the launcher didn't start (the web client's admin screen, /api/panic), as the kill switch runs it:
      * the reset-started hook, then for a fixed key the journal and the key-clear handoff (the node stays locked).
+     * A stuck one stays `resetting` (the node answers 503), with or without a `delete-pending` journal on disk.
      */
-    externalReset(kind: "fixed-key" | "in-process") {
+    externalReset(kind: ExternalResetKind) {
       const node = nodes.at(-1)!;
       node.calls.push("external-reset");
       context.resetHook?.()?.();
-      node.status = { ...node.status, resets: node.status.resets + 1, resetting: kind === "fixed-key" };
+      node.status = { ...node.status, resets: node.status.resets + 1, resetting: kind !== "in-process" };
       if (kind === "fixed-key") {
         writeFileSync(join(context.dataDir, WIPE_PHASE_FILE), JSON.stringify({ phase: "key-clear-ready" }));
         context.hook()?.();
+      }
+      if (kind === "stuck-journaled") {
+        writeFileSync(join(context.dataDir, WIPE_PHASE_FILE), JSON.stringify({ phase: "delete-pending" }));
       }
     },
   };
@@ -187,6 +208,8 @@ function makeController(options: { settings?: DesktopSettings; keychain?: boolea
   const nodeChanges: (string | undefined)[] = [];
   let discarded = 0;
   let cleared = 0;
+  /** Whether the stale-copy mark was on disk each time the window's copy was erased. */
+  const markedWhenCleared: boolean[] = [];
   const log = createLogFeed(createLogBook(), clean);
   const findFreePort = vi.fn(async (preferred: number) => (options.freePort === null ? undefined : (options.freePort ?? preferred)));
   const deps: ControllerDeps = {
@@ -216,12 +239,27 @@ function makeController(options: { settings?: DesktopSettings; keychain?: boolea
     },
     clearClientData: async () => {
       cleared += 1;
+      markedWhenCleared.push(settings.read().clientCopyStale === true);
     },
     now: () => 1_000,
     closeTimeoutMs: 50,
+    outsideResetWaitMs: 300,
   };
   const controller = new NodeController(deps);
-  return { controller, server, settings, secrets, states, nodeChanges, env, log, findFreePort, discarded: () => discarded, cleared: () => cleared };
+  return {
+    controller,
+    server,
+    settings,
+    secrets,
+    states,
+    nodeChanges,
+    env,
+    log,
+    findFreePort,
+    discarded: () => discarded,
+    cleared: () => cleared,
+    markedWhenCleared,
+  };
 }
 
 const community = { preset: "community", nodeName: "Kitchen", encryption: "persistent", createdAt: 5 } as const;
@@ -294,6 +332,20 @@ describe("first run", () => {
     expect(controller.clientStorageInMemory()).toBe(true);
     const kept = makeController({ settings: { logLevel: "info", network: community } });
     expect(kept.controller.clientStorageInMemory()).toBe(false);
+  });
+
+  it("tells the client window to keep no copy of an encrypted network on the disk", async () => {
+    for (const encryption of ["persistent", "passphrase", "ephemeral"] as const) {
+      const { controller } = makeController({ settings: { logLevel: "info", network: { ...community, encryption } } });
+      await controller.initialize();
+      if (encryption === "passphrase") {
+        await controller.unlock({ passphrase: "pw" });
+      }
+      expect(controller.hostInjection()).toMatchObject({ noLocalCache: true });
+    }
+    const plain = makeController({ settings: { logLevel: "info", network: { ...community, encryption: "off" } } });
+    await plain.controller.initialize();
+    expect(plain.controller.hostInjection()).toMatchObject({ noLocalCache: false });
   });
 
   it("refuses a kept key without a keychain, and encryption without the driver", async () => {
@@ -447,9 +499,11 @@ describe("running", () => {
     const { controller, server } = makeController({ settings: { logLevel: "info", network: community } });
     expect(controller.hostInjection()).toBeUndefined();
     await controller.initialize();
-    expect(controller.hostInjection()).toEqual({ hostToken: server.nodes[0]!.options.hostToken, transportKey: "key-of-boot-1" });
+    expect(controller.hostInjection()).toEqual({ hostToken: server.nodes[0]!.options.hostToken, transportKey: "key-of-boot-1", noLocalCache: true });
+    expect(controller.localPort()).toBe(3000);
     await controller.stop();
     expect(controller.hostInjection()).toBeUndefined();
+    expect(controller.localPort()).toBeUndefined();
     expect(server.nodes[0]!.closed).toBe(true);
   });
 
@@ -489,7 +543,9 @@ describe("running", () => {
 
 describe("Emergency Reset", () => {
   it("keeps running when the server wiped in-process", async () => {
-    const { controller, server, nodeChanges, cleared } = makeController({ settings: { logLevel: "info", network: community } });
+    const { controller, server, nodeChanges, cleared, settings, markedWhenCleared } = makeController({
+      settings: { logLevel: "info", network: community },
+    });
     await controller.initialize();
     expect(await controller.emergencyReset()).toEqual({ ok: true, value: { complete: true, journaled: false } });
     expect(server.nodes).toHaveLength(1);
@@ -498,6 +554,30 @@ describe("Emergency Reset", () => {
     expect(cleared()).toBe(1);
     expect(controller.phaseName()).toBe("running");
     expect(nodeChanges.at(-1)).toBe("http://127.0.0.1:3000");
+    // The window's copy was marked stale before the reset and fresh again once erased.
+    expect(markedWhenCleared).toEqual([true]);
+    expect(settings.read().clientCopyStale).toBeUndefined();
+  });
+
+  it("erases the window's copy at the next launch when a reset was cut short before it could", async () => {
+    const { controller, cleared, settings } = makeController({ settings: { logLevel: "info", network: community, clientCopyStale: true } });
+    await controller.initialize();
+    expect(cleared()).toBe(1);
+    expect(settings.read().clientCopyStale).toBeUndefined();
+    expect(controller.phaseName()).toBe("running");
+  });
+
+  it("keeps the stale mark when the window's copy couldn't be erased", async () => {
+    const { controller, settings, server } = makeController({ settings: { logLevel: "info", network: community } });
+    // Replacing the dependency after construction: the controller reads it on every call.
+    const deps = (controller as unknown as { deps: ControllerDeps }).deps;
+    deps.clearClientData = async () => {
+      throw new Error("profile locked");
+    };
+    await controller.initialize();
+    await controller.emergencyReset();
+    expect(server.nodes[0]!.calls).toContain("reset");
+    expect(settings.read().clientCopyStale).toBe(true);
   });
 
   it("on a fixed key: stops, destroys the device secret, clears the journal and boots under a new key", async () => {
@@ -646,6 +726,35 @@ describe("resets the launcher didn't start", () => {
     expect(controller.phaseName()).toBe("running");
   });
 
+  it("restarts to finish a reset from the web client that got stuck with a journal", async () => {
+    const { controller, server, cleared, states } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    server.externalReset("stuck-journaled");
+    await vi.waitFor(() => expect(server.nodes).toHaveLength(2), { timeout: 3_000 });
+    await vi.waitFor(() => expect(controller.phaseName()).toBe("running"));
+    expect(server.nodes[0]!.closed).toBe(true);
+    expect(cleared()).toBe(1);
+    expect(states.some((state) => state.phase === "resetting")).toBe(true);
+  });
+
+  it("reports a reset from the web client that got stuck without a journal, and Retry runs it again", async () => {
+    const { controller, server, cleared } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    server.externalReset("stuck-unjournaled");
+    await vi.waitFor(() => expect(controller.getState()).toMatchObject({ phase: "failed", error: { code: "reset_incomplete" } }), {
+      timeout: 3_000,
+    });
+    // Nothing was erased or reloaded as if it had finished; the node (locked) is still the one to retry on.
+    expect(cleared()).toBe(0);
+    expect(server.nodes).toHaveLength(1);
+    expect(server.nodes[0]!.closed).toBe(false);
+
+    server.onReset("in-process");
+    await controller.start();
+    expect(server.nodes[0]!.calls).toContain("reset");
+    expect(controller.phaseName()).toBe("running");
+  });
+
   it("leaves its own resets to itself", async () => {
     const { controller, server, cleared } = makeController({ settings: { logLevel: "info", network: community } });
     await controller.initialize();
@@ -690,13 +799,74 @@ describe("keys that went missing", () => {
     expect(await controller.unlock({ passphrase: "new" })).toEqual({ ok: true, value: undefined });
     expect(secrets.current()).not.toBe(oldSecret);
     expect(server.nodes[0]!.env.LOAM_DB_KEY).toBe(passphraseKey("new", secrets.current()!));
-    expect(cleared()).toBe(0);
+    // The window's copy of the erased network goes with the key, before the passphrase is asked for.
+    expect(cleared()).toBe(1);
   });
 
   it("asks an ordinary passphrase network for its passphrase, not a fresh one", async () => {
     const { controller, states } = makeController({ settings: { logLevel: "info", network: passphraseNetwork } });
     await controller.initialize();
     expect(states.at(-1)).toMatchObject({ phase: "locked", wrongPassphrase: false, fresh: false });
+  });
+});
+
+describe("a node that won't stop", () => {
+  it("fails Stop rather than report stopped, and nothing boots over it until it has stopped", async () => {
+    const { controller, server, states, settings } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    const release = server.holdClose();
+    expect(await controller.stop()).toMatchObject({ ok: false });
+    expect(states.at(-1)).toMatchObject({ phase: "failed", error: { code: "stop_timeout" } });
+    expect(server.nodes[0]!.closed).toBe(false);
+    expect(controller.localOrigin()).toBeUndefined();
+
+    // Retry while it is still closing: refused the same way, and no second node exists.
+    expect(await controller.start()).toMatchObject({ ok: false });
+    expect(server.nodes).toHaveLength(1);
+    expect(states.at(-1)).toMatchObject({ phase: "failed", error: { code: "stop_timeout" } });
+
+    // Once it has closed, the screen says so by itself, and the next start boots.
+    release();
+    await vi.waitFor(() => expect(controller.phaseName()).toBe("stopped"));
+    expect(server.nodes[0]!.closed).toBe(true);
+    await controller.start();
+    expect(server.nodes).toHaveLength(2);
+    expect(controller.phaseName()).toBe("running");
+    expect(settings.read().network).toEqual(community);
+  });
+
+  it("won't discard the network from under a node that hasn't stopped", async () => {
+    const { controller, server, secrets, settings } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    const secret = secrets.current();
+    const release = server.holdClose();
+    expect(await controller.newNetwork()).toMatchObject({ ok: false });
+    expect(secrets.current()).toBe(secret);
+    expect(settings.read().network).toEqual(community);
+    release();
+    await vi.waitFor(() => expect(controller.phaseName()).toBe("stopped"));
+    expect(await controller.newNetwork()).toEqual({ ok: true, value: undefined });
+    expect(settings.read().network).toBeUndefined();
+  });
+
+  it("finishes a fixed-key reset only once the locked node has gone", async () => {
+    const { controller, server, secrets } = makeController({ settings: { logLevel: "info", network: community } });
+    await controller.initialize();
+    const oldSecret = secrets.current();
+    server.onReset("fixed-key");
+    const release = server.holdClose();
+    const result = await controller.emergencyReset();
+    expect(result).toMatchObject({ ok: true, value: { complete: false, journaled: true } });
+    expect(controller.getState()).toMatchObject({ phase: "failed", error: { code: "stop_timeout" } });
+    // The key is destroyed (the data is proven gone), but no node boots over the one still closing.
+    expect(secrets.current()).toBeUndefined();
+    expect(server.nodes).toHaveLength(1);
+    release();
+    await vi.waitFor(() => expect(controller.phaseName()).toBe("stopped"));
+    await controller.start();
+    expect(server.nodes).toHaveLength(2);
+    expect(server.nodes[1]!.env.LOAM_DB_KEY).toBe(secrets.current());
+    expect(secrets.current()).not.toBe(oldSecret);
   });
 });
 

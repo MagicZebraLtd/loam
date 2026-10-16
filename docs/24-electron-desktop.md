@@ -64,14 +64,16 @@ view), the error catalogue (`DESKTOP_ERROR_CODES`), the Zod request schemas and 
   `NodeInfo`: the host status, the join URL, the transport key, this computer's addresses), `stopped`, `failed`
   (with an error code) and `resetting`.
 - **Error codes:** `port_in_use`, `port_unavailable`, `db_encryption_driver_missing`, `db_encryption_locked`,
-  `db_unreadable`, `keychain_unavailable`, `client_missing`, `reset_incomplete`, `unknown`. The renderer's
-  `ERROR_COPY` is a full record over them, so a new code does not compile until it has words.
+  `db_unreadable`, `keychain_unavailable`, `client_missing`, `reset_incomplete`, `stop_timeout`, `unknown`. The
+  renderer's `ERROR_COPY` is a full record over them, so a new code does not compile until it has words.
 - **Every handler checks the sender and the payload.** `invoke` channels are answered only when the request
   comes from the host window's own top frame while it shows a `file:` page; the client window, which is a web
   page the LAN also gets, cannot drive the launcher. Each payload is parsed against its schema first.
   `openExternal` opens only pages LOAM knows (see below).
 - **The one synchronous channel, `desktop:hostInjection`,** is answered only to the client window's top frame
-  while it shows the node's loopback origin; anyone else gets `null`.
+  while it shows the node's loopback origin (origins are compared as parsed, so a node on port 80 matches the
+  page's `http://127.0.0.1`); anyone else gets `null`. The answer carries the host token, the transport key and
+  `noLocalCache`, true on every encrypted network (below, "Storage partition").
 - **Pushes:** `desktop:state` (on every change, and every 2 s while running if the node's status moved) and
   `desktop:logEntry`.
 
@@ -98,6 +100,15 @@ Electron. Operations are serialised, so a double-clicked Start cannot boot two s
    base64url, new on every boot. A node that reports no transport key (Developer Mode) is stopped: the join QR
    and the window's pin both need it.
 
+**Stopping is bounded, never abandoned.** `close()` on the embedded server destroys its connections (Fastify's
+`forceCloseConnections: true`, a server-wide setting: the default waited for every in-flight request, which a
+stalled upload could hold open for ever) and then closes the store. The controller waits 10 s for it; a node
+that still has not closed is reported as `stop_timeout` (Stop fails rather than report stopped; "Start a new
+network" refuses to destroy the key or empty the folder under it), its close is remembered, and **nothing
+boots until it has finished**: the next Start waits for it again, bounded the same way. Once a given-up node
+does finish, the screen moves to Stopped by itself. Quit stays bounded on its own (`before-quit` exits after
+10 s whatever the node did).
+
 `NODE_ENV=production` is also set at the top of `index.ts`, before the server bundle is ever imported, so the
 shipped app refuses Developer Mode exactly as the Android host does.
 
@@ -117,7 +128,8 @@ development run can never touch a real network). Under the OS's application-data
 | `desktop.json` | The launcher's own settings (mode 0600, written beside and renamed over): the network record (preset, name, encryption mode, creation time), the preferred port, the pinned join address, the log level, the host-note version acknowledged. **Never a key and never a passphrase.** Read tolerantly: a bad field is dropped; a malformed network record is dropped, which sends the host back to setup rather than booting under a guessed mode. |
 | `device-secret.enc` | The device secret, sealed by the OS keychain through `safeStorage` (below). Absent until a persistent or passphrase network needs it. |
 | `device-secret.key` | The device secret **in the clear**, used only on a computer with no keychain and only by a passphrase network (below). |
-| Electron's own profile | Cookies, caches and the client window's storage partition (below). |
+| `*.tmp` beside the three above | The name each file is written under (fsynced) before being renamed over the final one (`durable-files.ts`). Destroying the secret removes the temporary names too and fsyncs the folder, so an interrupted write never leaves a copy of a destroyed key. |
+| Electron's own profile | Cookies and the client window's storage partition (below); no HTTP cache. |
 
 "Open data folder" in Settings opens `node/`.
 
@@ -170,10 +182,13 @@ Honest caveats:
 - **The keychain protects the key from other users and from a stolen disk, not from the logged-in user.**
   Any program running as the same user can ask the OS to unseal the item, subject to the OS's prompts.
 - **What the database encryption does not cover.** As for the CLI, pictures, files and avatars are stored
-  beside the database unencrypted. And the host's own client window keeps a browser copy of what it shows on
-  disk (next section) outside the database's key, for every network except `ephemeral`; that copy is erased
-  by Emergency Reset (both the in-process reset and the fixed-key handoff), by "Start a new network" and by
-  setup, never left behind for a later network. Chromium's own on-disk logs are not securely erased.
+  beside the database unencrypted. The host's own client window keeps **no copy of an encrypted network's
+  content on the disk** (next section, "Storage partition"): its browser-side cache is switched off, and its
+  HTTP cache too, so only its identity and preferences (localStorage) persist. On an unencrypted network the
+  window caches as any browser would; that copy is erased by Emergency Reset (both the in-process reset and
+  the fixed-key handoff), by "Start a new network" and by setup, never left behind for a later network, and
+  `desktop.json` carries a `clientCopyStale` mark from the start of each of those until the erase succeeded,
+  so a crash in between is finished at the next launch. Chromium's own on-disk logs are not securely erased.
 - **SQLCipher is a Node-API addon** (`better-sqlite3-multiple-ciphers` ^13, NAPI_VERSION 10), which is ABI-stable
   across Node and Electron. Nothing is compiled: `scripts/native.mjs` copies the prebuild for the target
   platform and architecture into `dist/main/node_modules/`, where the server bundle's `createRequire` finds it.
@@ -199,7 +214,10 @@ no admin session and ignores `killSwitch.enabled`: it is the host's own screen. 
   new secret again.
 - **If it cannot finish.** A reset that did not complete but was journaled restarts the node to finish; one that
   could not even be journaled leaves the node locked (the server answers 503) and shows `reset_incomplete`,
-  where Retry runs the reset again. The boot gives up after two key-clear rounds rather than looping.
+  where Retry runs the reset again. The boot gives up after two key-clear rounds rather than looping. A reset
+  **started elsewhere** (the web client's admin screen, `/api/panic`) is watched for up to 30 s: finished, the
+  window's copy is erased and the window reloaded; still resetting after that, it ends the same two ways as
+  the launcher's own, by whether the journal is on disk.
 - **Start a new network** (Settings, or after a failure) does an Emergency Reset first when the node is running
   (so joined devices purge their copies), then stops it, destroys the secret, erases the host's client-window
   storage, empties the data folder (reporting any file it could not remove) and returns to Setup.
@@ -233,9 +251,15 @@ Rules for every page the app creates:
 - **Permissions.** Requests and checks are denied in every session the app uses, except
   `clipboard-sanitized-write` (the client's Copy buttons).
 - **Storage partition for the client window.** A network kept only while LOAM runs (`ephemeral`) uses an
-  in-memory partition, so the web client's IndexedDB and session copy are gone on Quit; any other network uses a
-  persistent one (`persist:loam-client`, so the host stays the same person across restarts), which sits in
-  Electron's profile on disk **outside the database's encryption**. Both are erased when a network is discarded.
+  in-memory partition, so everything the web client stored is gone on Quit; any other network uses a persistent
+  one (`persist:loam-client`, so the host stays the same person across restarts), which sits in Electron's
+  profile on disk **outside the database's encryption**. So on every encrypted network the preload also sets
+  `window.__loamHostNoLocalCache`, and the web client (`lib/local-store.ts`) then keeps no IndexedDB at all:
+  what it shows is held in memory and loaded from the node, on loopback, at every page load; its localStorage
+  (identity token, preferences, no messages) is what persists. Both partitions are created without an HTTP
+  cache, so pictures served in the clear (`optional` transport mode) never land on the disk either. Both are
+  erased on every Emergency Reset and when a network is discarded. (The Android host's WebView could ask for
+  the same with one injected line; docs/25 P30.)
 - **CSP.** The built host shell carries `default-src 'self'`, `script-src 'self'`, `style-src 'self'`,
   `img-src 'self' data:`, `connect-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'none'`:
   no network, no inline script. (Added at build time only; Vite's dev server injects `<style>` elements.) The web

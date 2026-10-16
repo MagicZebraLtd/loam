@@ -65,11 +65,13 @@ export function navigationDecision(url: string, page: { isClientWindow: boolean;
 }
 
 /**
- * The client window's own browser storage, apart from the host shell's. The web client keeps a copy of what it
- * shows (IndexedDB, localStorage) and its session; on disk that copy would sit outside the network's encryption,
- * so for a network kept only while LOAM runs (ephemeral) it lives in memory and is gone on Quit. Any other network
- * keeps it on disk (so the host stays the same person across restarts); it is erased on every Emergency Reset and
- * when the network is discarded.
+ * The client window's own browser storage, apart from the host shell's. The web client keeps its identity and
+ * preferences (localStorage) and, as any browser, a copy of what it shows (IndexedDB); on disk that copy would
+ * sit outside the network's encryption. So for a network kept only while LOAM runs (ephemeral) everything lives
+ * in memory and is gone on Quit; any other network keeps the partition on disk (so the host stays the same
+ * person across restarts), and on every encrypted one the preload tells the web client to keep no IndexedDB at
+ * all (`noLocalCache` in the host injection). Neither partition has an HTTP cache (windows.ts). Both are erased
+ * on every Emergency Reset and when the network is discarded.
  */
 export const CLIENT_PARTITIONS = { kept: "persist:loam-client", memory: "loam-client-memory" } as const;
 

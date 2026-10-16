@@ -34,6 +34,7 @@ export const ERROR_COPY: Record<DesktopErrorCode, ErrorCopy> = {
   client_missing: { title: "error.client_missing.title", body: "error.client_missing.body", newNetwork: false, download: true },
   // Starting over is the sure way to finish an erase that couldn't be recorded.
   reset_incomplete: { title: "error.reset_incomplete.title", body: "error.reset_incomplete.body", newNetwork: true, download: false },
+  stop_timeout: { title: "error.stop_timeout.title", body: "error.stop_timeout.body", newNetwork: false, download: false },
   unknown: { title: "error.unknown.title", body: "error.unknown.body", newNetwork: false, download: false },
 };
 

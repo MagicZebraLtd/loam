@@ -11,17 +11,18 @@ const network = { preset: "community", nodeName: "Field kitchen", encryption: "p
 
 describe("parseSettings", () => {
   it("keeps every well-formed field", () => {
-    expect(parseSettings({ network, port: 3005, joinHost: "192.168.1.4", logLevel: "debug", hostAck: 1 })).toEqual({
+    expect(parseSettings({ network, port: 3005, joinHost: "192.168.1.4", logLevel: "debug", hostAck: 1, clientCopyStale: true })).toEqual({
       network,
       port: 3005,
       joinHost: "192.168.1.4",
       logLevel: "debug",
       hostAck: 1,
+      clientCopyStale: true,
     });
   });
 
   it("drops bad fields one by one", () => {
-    expect(parseSettings({ network, port: 70000, joinHost: "bad host!", logLevel: "trace", hostAck: 0 })).toEqual({
+    expect(parseSettings({ network, port: 70000, joinHost: "bad host!", logLevel: "trace", hostAck: 0, clientCopyStale: "yes" })).toEqual({
       network,
       logLevel: "info",
     });

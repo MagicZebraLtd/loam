@@ -72,8 +72,11 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     return target;
   }
   harden(session.defaultSession);
-  harden(session.fromPartition(CLIENT_PARTITIONS.kept));
-  harden(session.fromPartition(CLIENT_PARTITIONS.memory));
+  // The client window's sessions are created here, first, with no HTTP cache: the node is on loopback, so a
+  // cache buys nothing, and in `optional` transport mode it would keep pictures and files served in the clear
+  // on the disk, outside the database's key (trust.ts). A later lookup by partition name finds these sessions.
+  harden(session.fromPartition(CLIENT_PARTITIONS.kept, { cache: false }));
+  harden(session.fromPartition(CLIENT_PARTITIONS.memory, { cache: false }));
 
   // Every page this app creates, whichever window it's in: no new windows, no navigation away.
   app.on("web-contents-created", (_event, contents) => {

@@ -78,6 +78,7 @@ const LAUNCHER_ENV = [
 ] as const;
 
 const NOT_RUNNING = "The network isn't running.";
+const STOP_TIMEOUT = "The network didn't stop in time, so nothing else can start until it has.";
 const KEYCHAIN_MISSING =
   "This computer has no keychain to keep the network's key in. Choose a passphrase, or keep the data only while LOAM runs.";
 const DRIVER_MISSING =
@@ -129,6 +130,7 @@ export type ControllerDeps = {
   now?: () => number;
   pollMs?: number;
   closeTimeoutMs?: number;
+  outsideResetWaitMs?: number;
 };
 
 /** A booted node and what the launcher handed it. */
@@ -163,6 +165,12 @@ export class NodeController {
   private launcherReset = false;
   /** Quit has begun: nothing may boot any more. */
   private shuttingDown = false;
+  /**
+   * A close still in progress: the node was given up on after the close timeout, but its listener and its store
+   * may well be alive. Nothing boots until this settles (two nodes on one data folder, or one port, is never
+   * acceptable); every operation that needs the node gone waits for it again, bounded, and fails `stop_timeout`.
+   */
+  private closing: Promise<void> | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private lastPushed = "";
@@ -174,7 +182,11 @@ export class NodeController {
       this.wipeRestartRequested = true;
       this.onServerWipeRestart();
     });
-    deps.installHostResetHook(() => this.onServerReset());
+    deps.installHostResetHook(() => {
+      // Every reset, whoever started it: the host's client window now holds a copy of an erased network.
+      this.markClientCopyStale();
+      this.onServerReset();
+    });
   }
 
   // ---- State ------------------------------------------------------------------------------------------------
@@ -200,6 +212,11 @@ export class NodeController {
     return this.running ? localOrigin(this.running.port) : undefined;
   }
 
+  /** The port the running node listens on, or undefined. */
+  localPort(): number | undefined {
+    return this.running?.port;
+  }
+
   /**
    * Whether the host's client window keeps its browser storage in memory only: for a network kept only while
    * LOAM runs, a copy of its messages on disk would outlive the key that protects the network (windows.ts).
@@ -208,13 +225,18 @@ export class NodeController {
     return this.deps.settings.read().network?.encryption === "ephemeral";
   }
 
-  /** The host token and transport key the client window's preload injects, while the node runs. */
-  hostInjection(): { hostToken: string; transportKey?: string } | undefined {
+  /**
+   * What the client window's preload injects, while the node runs: the host token, the transport key, and
+   * whether the web client must keep no copy of the network in its storage (`noLocalCache`: every encrypted
+   * network, since the client's IndexedDB would sit on the disk outside the database's key; see trust.ts).
+   */
+  hostInjection(): { hostToken: string; transportKey?: string; noLocalCache: boolean } | undefined {
     if (!this.running) {
       return undefined;
     }
     const transportKey = this.running.node.host.transportPublicKey();
-    return { hostToken: this.running.hostToken, ...(transportKey ? { transportKey } : {}) };
+    const encryption = this.deps.settings.read().network?.encryption ?? "off";
+    return { hostToken: this.running.hostToken, ...(transportKey ? { transportKey } : {}), noLocalCache: encryption !== "off" };
   }
 
   private view(settings: DesktopSettings): DesktopSettingsView {
@@ -310,6 +332,12 @@ export class NodeController {
   /** At launch: set up a network, ask for its passphrase, or start it. */
   initialize(): Promise<void> {
     return this.serialize(async () => {
+      // A reset or discard that erased the network but not (yet) the host client window's copy of it: erase
+      // that first, before any window could show it.
+      if (this.deps.settings.read().clientCopyStale) {
+        this.deps.log.note("warn", "Erasing the LOAM window's copy of a network that was erased earlier.");
+        await this.clearClientCopy();
+      }
       const { network } = this.deps.settings.read();
       if (!network) {
         this.setPhase({ phase: "setup" });
@@ -322,6 +350,7 @@ export class NodeController {
             this.fail("reset_incomplete", "The reset's journal couldn't be removed from the data folder.");
             return;
           }
+          await this.clearClientCopy();
         }
         this.setPhase(this.lockedPhase(false));
       } else {
@@ -377,12 +406,46 @@ export class NodeController {
     await this.boot();
   }
 
-  /** Erase the host client window's copy after a reset; a failure is logged, never a reason to stop. */
+  /**
+   * Erase the host client window's copy after a reset; a failure is logged, never a reason to stop, and leaves
+   * the stale mark in place so the next launch tries again.
+   */
   private async clearClientCopy(): Promise<void> {
     try {
       await this.deps.clearClientData();
+      this.markClientCopyFresh();
     } catch (error) {
       this.deps.log.note("warn", `Couldn't erase the LOAM window's stored copy: ${errorDetail(error)}`);
+    }
+  }
+
+  /**
+   * Record, durably, that the host client window's copy belongs to a network being erased. Written before the
+   * first destructive step and cleared only once the copy is erased, so a crash in between is finished at the
+   * next launch. A settings file that can't be written is logged: the erase itself still runs.
+   */
+  private markClientCopyStale(): void {
+    const settings = this.deps.settings.read();
+    if (settings.clientCopyStale) {
+      return;
+    }
+    try {
+      this.deps.settings.write({ ...settings, clientCopyStale: true });
+    } catch (error) {
+      this.deps.log.note("warn", `Couldn't record that the LOAM window's copy must be erased: ${errorDetail(error)}`);
+    }
+  }
+
+  /** The copy is erased: drop the mark (a write that fails only means one needless erase at the next launch). */
+  private markClientCopyFresh(): void {
+    const { clientCopyStale, ...rest } = this.deps.settings.read();
+    if (!clientCopyStale) {
+      return;
+    }
+    try {
+      this.deps.settings.write(rest);
+    } catch (error) {
+      this.deps.log.note("warn", `Couldn't record that the LOAM window's copy was erased: ${errorDetail(error)}`);
     }
   }
 
@@ -417,7 +480,9 @@ export class NodeController {
    * A reset began, whoever started it. One the launcher didn't start and that finishes in-process (a plaintext or
    * ephemeral network, reset from the web client) still leaves the host's client window holding a copy: once the
    * node says the reset is over, erase that copy and reload the window. A fixed-key reset is finished by
-   * {@link onServerWipeRestart} instead, which closes this node and so ends the wait below.
+   * {@link onServerWipeRestart} instead, which closes this node and so ends the wait below. One still going when
+   * the wait runs out didn't finish (the node answers 503 then), and ends as the launcher's own would (resetNow):
+   * journaled, a restart finishes it; not journaled, the node stays locked and Retry runs the reset again.
    */
   private onServerReset(): void {
     const running = this.running;
@@ -425,15 +490,15 @@ export class NodeController {
       return;
     }
     void (async () => {
-      for (let waited = 0; waited < OUTSIDE_RESET_WAIT_MS; waited += 100) {
+      let finished = false;
+      const wait = this.deps.outsideResetWaitMs ?? OUTSIDE_RESET_WAIT_MS;
+      for (let waited = 0; waited < wait && !finished; waited += 100) {
         await delay(100);
         if (this.running !== running) {
           return;
         }
         try {
-          if (!running.node.host.status().resetting) {
-            break;
-          }
+          finished = !running.node.host.status().resetting;
         } catch {
           // Mid-wipe the node can refuse; ask again.
         }
@@ -442,9 +507,22 @@ export class NodeController {
         if (this.running !== running || this.shuttingDown) {
           return;
         }
-        await this.clearClientCopy();
-        this.deps.onNodeChanged(localOrigin(running.port));
-        this.refresh();
+        if (finished) {
+          await this.clearClientCopy();
+          this.deps.onNodeChanged(localOrigin(running.port));
+          this.refresh();
+          return;
+        }
+        this.stopPolling();
+        if (readWipePhase(this.deps.dataDir) !== undefined) {
+          this.deps.log.note("warn", "An Emergency Reset started elsewhere didn't finish; restarting the network to finish it.");
+          this.setPhase({ phase: "resetting" });
+          await this.closeNode();
+          await this.clearClientCopy();
+          await this.boot();
+          return;
+        }
+        this.fail("reset_incomplete", "An Emergency Reset started elsewhere didn't finish, and couldn't be recorded on disk.");
       });
     })();
   }
@@ -461,6 +539,11 @@ export class NodeController {
       return "done";
     }
     this.setPhase({ phase: "starting" });
+    // Never over a node that hasn't finished closing: its store may still be open on this folder.
+    if (!(await this.awaitClose())) {
+      this.fail("stop_timeout", STOP_TIMEOUT);
+      return "done";
+    }
     const mode = network.encryption;
 
     if (!existsSync(join(deps.clientDist, "index.html"))) {
@@ -630,26 +713,52 @@ export class NodeController {
     }
   }
 
-  /** Stop the running node (bounded: a node that won't close in time is abandoned, not waited on forever). */
-  private async closeNode(): Promise<void> {
+  /**
+   * Stop the running node. Bounded: one that won't close in time is reported (false), and its close is kept in
+   * `closing`, so nothing boots over it; the next operation that needs it gone waits for it again. Quit is
+   * bounded on its own (index.ts exits once the wait is over, whatever the node did).
+   */
+  private async closeNode(): Promise<boolean> {
     this.stopPolling();
     const running = this.running;
     this.running = undefined;
-    if (!running) {
-      return;
+    if (running) {
+      const closed = (this.closing ?? Promise.resolve())
+        .then(() => running.node.close())
+        .catch((error: unknown) => {
+          this.deps.log.note("error", `Error while stopping the network: ${errorDetail(error)}`);
+        })
+        .then(() => {
+          if (this.closing === closed) {
+            this.closing = undefined;
+          }
+          // Given up on earlier, and nothing took its place since: it is stopped after all.
+          if (this.phase.phase === "failed" && this.phase.error.code === "stop_timeout" && !this.running) {
+            this.deps.log.note("info", "The network has stopped.");
+            this.setPhase(this.deps.settings.read().network ? { phase: "stopped" } : { phase: "setup" });
+          }
+        });
+      this.closing = closed;
+    }
+    const closedInTime = await this.awaitClose();
+    if (running) {
+      this.deps.onNodeChanged(undefined);
+    }
+    return closedInTime;
+  }
+
+  /** Wait, bounded, for a close still in progress. True when there is none, or it finished in time. */
+  private async awaitClose(): Promise<boolean> {
+    const closing = this.closing;
+    if (!closing) {
+      return true;
     }
     const timeout = this.deps.closeTimeoutMs ?? CLOSE_TIMEOUT_MS;
-    const closed = running.node.close().then(
-      () => true,
-      (error: unknown) => {
-        this.deps.log.note("error", `Error while stopping the network: ${errorDetail(error)}`);
-        return true;
-      },
-    );
-    if (!(await Promise.race([closed, delay(timeout).then(() => false)]))) {
-      this.deps.log.note("error", `The network didn't stop within ${timeout / 1000} s.`);
+    if (await Promise.race([closing.then(() => true), delay(timeout).then(() => false)])) {
+      return true;
     }
-    this.deps.onNodeChanged(undefined);
+    this.deps.log.note("error", `The network didn't stop within ${timeout / 1000} s. Nothing can start until it has.`);
+    return false;
   }
 
   // ---- What the host asks for ---------------------------------------------------------------------------------
@@ -673,6 +782,7 @@ export class NodeController {
       }
       this.deps.secrets.destroy();
       this.freshKey = true;
+      this.markClientCopyStale();
       await this.discardClientData();
       const nodeName = cleanNodeName(request.nodeName);
       writeInitialConfig(this.deps.dataDir, presetConfig(request.preset, nodeName, "en"));
@@ -720,7 +830,10 @@ export class NodeController {
       } else if (network.encryption === "passphrase" && this.passphrase === undefined) {
         this.setPhase(this.lockedPhase(false));
       } else {
-        await this.closeNode();
+        if (!(await this.closeNode())) {
+          this.fail("stop_timeout", STOP_TIMEOUT);
+          return { ok: false, error: STOP_TIMEOUT };
+        }
         await this.boot();
       }
       return { ok: true, value: undefined };
@@ -730,8 +843,12 @@ export class NodeController {
   /** Stop the network. A passphrase network asks for its passphrase again on the next start. */
   stop(): Promise<HostResult<void>> {
     return this.serialize(async () => {
-      await this.closeNode();
+      const closed = await this.closeNode();
       this.passphrase = undefined;
+      if (!closed) {
+        this.fail("stop_timeout", STOP_TIMEOUT);
+        return { ok: false, error: STOP_TIMEOUT };
+      }
       this.setPhase(this.deps.settings.read().network ? { phase: "stopped" } : { phase: "setup" });
       return { ok: true, value: undefined };
     });
@@ -753,10 +870,16 @@ export class NodeController {
           this.launcherReset = false;
         }
       }
-      await this.closeNode();
+      const closed = await this.closeNode();
       this.passphrase = undefined;
+      if (!closed) {
+        // The old node may still hold the folder and the key's database open: nothing is destroyed under it.
+        this.fail("stop_timeout", STOP_TIMEOUT);
+        return { ok: false, error: STOP_TIMEOUT };
+      }
       this.deps.secrets.destroy();
       this.freshKey = true;
+      this.markClientCopyStale();
       await this.discardClientData();
       const left = emptyDataDir(this.deps.dataDir);
       if (left.length > 0) {
@@ -800,6 +923,7 @@ export class NodeController {
     this.stopPolling();
     this.setPhase({ phase: "resetting" });
     this.wipeRestartRequested = false;
+    this.markClientCopyStale();
     let result: { complete: boolean; journaled: boolean };
     try {
       result = await running.node.host.emergencyReset();
@@ -886,6 +1010,7 @@ export class NodeController {
   private async discardClientData(): Promise<void> {
     try {
       await this.deps.onNetworkDiscarded();
+      this.markClientCopyFresh();
     } catch (error) {
       this.deps.log.note("warn", `Couldn't erase the LOAM window's stored copy: ${errorDetail(error)}`);
     }
@@ -898,7 +1023,9 @@ export class NodeController {
   shutdown(): Promise<void> {
     this.shuttingDown = true;
     this.stopPolling();
-    return this.serialize(() => this.closeNode()).catch(() => undefined);
+    return this.serialize(async () => {
+      await this.closeNode();
+    }).catch(() => undefined);
   }
 
   // ---- The host API, for the People and Settings screens ------------------------------------------------------

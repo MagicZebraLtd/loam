@@ -58,8 +58,8 @@ function parse<T>(schema: z.ZodType<T>, payload: unknown): T | undefined {
 
 /** The running node's port and this computer's addresses, for the external-link check. */
 function nodeHosts(context: IpcContext): { port: number; hosts: string[] } | undefined {
-  const origin = context.controller.localOrigin();
-  return origin ? { port: Number(new URL(origin).port), hosts: context.lanAddresses() } : undefined;
+  const port = context.controller.localPort();
+  return port === undefined ? undefined : { port, hosts: context.lanAddresses() };
 }
 
 export function registerIpc(context: IpcContext): void {

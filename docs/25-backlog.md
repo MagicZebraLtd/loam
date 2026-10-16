@@ -99,10 +99,11 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 | P23 | A guided hotspot step in the app (today the app shows the address and the website's /desktop page explains the OS hotspot; there is no cross-platform hotspot API) | 24 | M | Product decision |
 | P24 | Encrypt pictures, files and avatars on the host (the same gap as the CLI and Android) | 24,25 | M | None |
 | P25 | Smoke-test the packaged macOS and Windows apps in CI (only the Linux AppImage is today), and run `node-controller.real.test.ts` there (it skips because `native.mjs` runs after the tests). The Windows ASAR-integrity fuse is unverified. | 24 | S | CI runners |
-| P26 | Desktop: a node whose close times out (10 s) is abandoned but may still be listening; "Start a new network" then empties the folder under it and a restart can collide on the port. Kill or wait, never abandon. | 24 | S | None |
+| P26 | Desktop: a node whose close times out (10 s) is now reported (`stop_timeout`) and never booted over, and the server destroys its connections on close so it should not happen; what remains is a node whose `close()` itself never resolves (an onClose hook that hangs), which only Quit ends. | 24 | S | None |
 | P27 | Desktop: "Start a new network" destroys the device secret before emptying the folder; files Windows still holds open leave the network record behind, and the next start mints a new key over the leftover database and reports it locked (recoverable by running it again). Empty the folder first, then the secret, then the record. | 24 | S | None |
 | P28 | Desktop: `LOAM_DB_KEY` passes through `process.env` for the length of a boot, so a Chromium helper spawned in that window inherits it. Hand the key to `startEmbeddedServer` as an option instead (a server change shared with the Android launcher). | 24,04 | S | None |
 | P29 | Desktop on Ubuntu 24.04+: confirm the AppImage sandbox failure on a real desktop and either ship an AppArmor profile with it or keep pointing people at the .deb | 24 | S | Hardware |
+| P30 | Android host: the WebView's IndexedDB copy of the host's own view sits outside the database's key, as the desktop's did. The web client now honours `window.__loamHostNoLocalCache` (docs/24 "Storage partition"); inject it from `apps/app/src/app/index.tsx` beside the host token on every encrypted network, and test the host's WebView on a device. | 24, 04 | S | Hardware |
 
 An auto-updater is deliberately not on this list: the app never checks by itself (LOAM phones nowhere); Check for updates is tap-only.
 

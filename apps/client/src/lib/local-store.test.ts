@@ -27,6 +27,19 @@ afterEach(async () => {
 type Channel = { id: string; name: string };
 
 describe("local-store", () => {
+  it("keeps nothing when the host app says no copy belongs on this device", async () => {
+    window.__loamHostNoLocalCache = true;
+    try {
+      await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+      expect(await getAllRecords<Channel>("channels")).toEqual([]);
+      // Nothing was created: there is no database for a later page load without the flag to find.
+      expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
+      await expect(destroyDatabase()).resolves.toBeUndefined();
+    } finally {
+      delete window.__loamHostNoLocalCache;
+    }
+  });
+
   it("round-trips records through put and getAll", async () => {
     await putRecords<Channel>("channels", [
       { id: "general", name: "General" },

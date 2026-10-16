@@ -10,10 +10,12 @@
  * Deleting the secret file is the cryptographic wipe a fixed-key Emergency Reset ends with (wipe-phase.ts).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import type { DbEncryptionMode } from "@loam/schema";
+
+import { fsyncDirectory, isMissing, removeProven, temporaryName, writePrivateFile } from "./durable-files.js";
 
 /** Where the secret lives when the keychain protects it. */
 export const DEVICE_SECRET_FILE = "device-secret.enc";
@@ -94,23 +96,14 @@ export type DeviceSecretStore = {
    * in a private plain file on a computer with no keychain. Throws {@link KeyError}.
    */
   get(protection: SecretProtection, options?: { mayMint?: boolean }): string;
-  /** Delete the secret, proven gone. The next `get` with `mayMint` mints a new one. */
+  /**
+   * Delete the secret, proven gone and durably (the cryptographic wipe a fixed-key Emergency Reset ends with):
+   * every file that could hold it, the temporary names a write leaves behind when interrupted included. Throws
+   * when one remains, so a reset never reports an erased network whose key is still on the disk. The next
+   * `get` with `mayMint` mints a new one.
+   */
   destroy(): void;
 };
-
-/** Write `bytes` beside `path` and rename over it, private to this user. */
-function writePrivate(path: string, bytes: Buffer | string): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.tmp`;
-  rmSync(temporary, { force: true });
-  writeFileSync(temporary, bytes, { mode: 0o600 });
-  renameSync(temporary, path);
-}
-
-/** The error code Node uses for "no such file". */
-function isMissing(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
-}
 
 /**
  * The device secret in `userData`, through the keychain when there is one. Nothing here runs until `get()`:
@@ -181,7 +174,7 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
     } catch (error) {
       throw new KeyError("keychain_unavailable", `The keychain refused to keep the network's key: ${String(error)}`);
     }
-    writePrivate(sealedPath, sealed);
+    writePrivateFile(sealedPath, sealed);
   }
 
   return {
@@ -215,7 +208,7 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
       if (canSeal()) {
         seal(secret);
       } else if (protection === "passphrase") {
-        writePrivate(plainPath, `${secret}\n`);
+        writePrivateFile(plainPath, `${secret}\n`);
       } else {
         // Never a persistent key in the clear: without the keychain there is nothing protecting it at all.
         throw new KeyError(
@@ -228,8 +221,16 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
     },
     destroy() {
       cached = undefined;
-      for (const path of [sealedPath, plainPath]) {
-        rmSync(path, { force: true });
+      // The sealed and plain files, and the temporary name each is written under: an interrupted write (a
+      // plain secret being sealed when a keychain appeared, say) leaves one holding the secret too.
+      const paths = [sealedPath, plainPath].flatMap((path) => [path, temporaryName(path)]);
+      if (!removeProven(paths)) {
+        throw new Error("The device secret couldn't be deleted (or proven gone).");
+      }
+      // Durable before the caller removes the wipe journal: a journal gone but a key back after a power cut
+      // would open the next database under the key the reset was destroying.
+      if (!fsyncDirectory(userData)) {
+        throw new Error("The device secret's deletion couldn't be made durable.");
       }
     },
   };

@@ -10,8 +10,10 @@
  *     here does the launcher clear it and delete the phase file, then boot under a fresh key.
  * Route on the phase, never on mere presence.
  */
-import { closeSync, fsyncSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { fsyncDirectory, isMissing, removeProven } from "./durable-files.js";
 
 export type WipePhase = "delete-pending" | "key-clear-ready";
 
@@ -19,11 +21,6 @@ export type WipePhase = "delete-pending" | "key-clear-ready";
 export const WIPE_PHASE_FILE = ".loam-wipe-phase";
 /** The single marker an older server build wrote; still recognised as an unfinished wipe. */
 export const LEGACY_WIPE_PENDING_FILE = ".loam-wipe-pending";
-
-/** The error code Node uses for "no such file", the only proof of absence. */
-function isMissing(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
-}
 
 /**
  * The durable wipe phase in `dataDir`. No file → undefined (no wipe pending). Any unreadable, malformed or
@@ -56,45 +53,11 @@ export function readWipePhase(dataDir: string): WipePhase | undefined {
   return raw.trim() === "key-clear-ready" ? "key-clear-ready" : "delete-pending";
 }
 
-/** fsync a directory, so the unlinks in it survive a power cut. False when that can't be proven. */
-export function fsyncDirectory(dir: string): boolean {
-  try {
-    const fd = openSync(dir, "r");
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    return true;
-  } catch (error) {
-    // Windows can't open a directory for fsync; the unlink is as durable as the platform makes it there.
-    return process.platform === "win32" && (error as { code?: unknown }).code === "EISDIR";
-  }
-}
-
 /**
  * Delete the phase file (and the legacy marker) and PROVE both gone, durably. Only after this may a fresh device
  * secret be minted: a phase file that lingered would make the next boot clear THAT secret and strand the new
  * database. False on any failure (the caller stays locked; reopening retries).
  */
 export function clearWipePhase(dataDir: string): boolean {
-  for (const name of [WIPE_PHASE_FILE, LEGACY_WIPE_PENDING_FILE]) {
-    const path = join(dataDir, name);
-    try {
-      unlinkSync(path);
-    } catch (error) {
-      if (!isMissing(error)) {
-        return false;
-      }
-    }
-    try {
-      lstatSync(path);
-      return false;
-    } catch (error) {
-      if (!isMissing(error)) {
-        return false;
-      }
-    }
-  }
-  return fsyncDirectory(dataDir);
+  return removeProven([WIPE_PHASE_FILE, LEGACY_WIPE_PENDING_FILE].map((name) => join(dataDir, name))) && fsyncDirectory(dataDir);
 }

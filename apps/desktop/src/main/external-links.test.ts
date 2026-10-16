@@ -31,6 +31,14 @@ describe("isKnownExternalUrl", () => {
     expect(isKnownExternalUrl("http://127.0.0.1:3000/", undefined)).toBe(false);
   });
 
+  it("knows a node on port 80, whose URLs leave the port out", () => {
+    const onEighty = { port: 80, hosts: ["192.168.1.20"] };
+    expect(isKnownExternalUrl("http://192.168.1.20/#k=abc", onEighty)).toBe(true);
+    expect(isKnownExternalUrl("http://192.168.1.20:80/", onEighty)).toBe(true);
+    expect(isKnownExternalUrl("http://192.168.1.20:3000/", onEighty)).toBe(false);
+    expect(isKnownExternalUrl("http://192.168.1.20/", node)).toBe(false);
+  });
+
   it("never opens another scheme", () => {
     expect(isKnownExternalUrl("file:///etc/passwd", node)).toBe(false);
     expect(isKnownExternalUrl("javascript:alert(1)", node)).toBe(false);
@@ -52,5 +60,16 @@ describe("isSameOrigin", () => {
     expect(isSameOrigin("http://127.0.0.1:3000/channel/x", "http://127.0.0.1:3000")).toBe(true);
     expect(isSameOrigin("http://127.0.0.1:3001/", "http://127.0.0.1:3000")).toBe(false);
     expect(isSameOrigin("http://127.0.0.1:3000/", undefined)).toBe(false);
+  });
+
+  it("spells both sides the same way, so a default port matches with or without it", () => {
+    expect(isSameOrigin("http://127.0.0.1/channels", "http://127.0.0.1:80")).toBe(true);
+    expect(isSameOrigin("http://127.0.0.1:80/channels", "http://127.0.0.1")).toBe(true);
+    expect(isSameOrigin("http://127.0.0.1:8080/", "http://127.0.0.1:80")).toBe(false);
+  });
+
+  it("never matches an opaque origin to another", () => {
+    expect(isSameOrigin("file:///a.html", "file:///b.html")).toBe(false);
+    expect(isSameOrigin("data:text/html,hi", "data:text/html,hi")).toBe(false);
   });
 });

@@ -76,6 +76,8 @@ export const DESKTOP_ERROR_CODES = [
   "client_missing",
   /** An Emergency Reset didn't finish and couldn't be journaled; the node stays locked until it's run again. */
   "reset_incomplete",
+  /** The node didn't stop within the time allowed. Nothing starts until it has; Retry waits for it again. */
+  "stop_timeout",
   "unknown",
 ] as const;
 export type DesktopErrorCode = (typeof DESKTOP_ERROR_CODES)[number];

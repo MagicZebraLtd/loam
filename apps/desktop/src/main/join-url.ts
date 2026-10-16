@@ -25,9 +25,13 @@ export function buildJoinUrl({ joinHost, port, transportKey, inviteCode }: JoinU
   return `http://${formatHost(joinHost)}:${port}/${parts.length ? `#${parts.join("&")}` : ""}`;
 }
 
-/** The URL this computer's own window opens: loopback, so it never depends on which network is up. */
+/**
+ * The origin this computer's own window opens: loopback, so it never depends on which network is up. Spelled
+ * as the URL standard spells an origin (`http://127.0.0.1` for port 80, with no `:80`), so it compares equal
+ * to what a page reports as its own origin.
+ */
 export function localOrigin(port: number): string {
-  return `http://127.0.0.1:${port}`;
+  return new URL(`http://127.0.0.1:${port}`).origin;
 }
 
 /** One interface's entry, as `os.networkInterfaces()` reports it (the part read here). */

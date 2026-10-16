@@ -32,6 +32,8 @@ describe("isHostShellSender", () => {
 describe("mayInjectHostToken", () => {
   it("hands the token to the client window's top frame on the node's loopback origin", () => {
     expect(mayInjectHostToken({ isWindow: true, isMainFrame: true, frameUrl: `${node}/channels` }, node)).toBe(true);
+    // A node on port 80: the page's origin has no port, the launcher's spelling may.
+    expect(mayInjectHostToken({ isWindow: true, isMainFrame: true, frameUrl: "http://127.0.0.1/channels" }, "http://127.0.0.1:80")).toBe(true);
   });
 
   it("refuses any other window, frame, origin, or a stopped node", () => {

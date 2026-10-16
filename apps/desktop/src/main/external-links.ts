@@ -31,6 +31,11 @@ export function isWebUrl(url: string): boolean {
   return parsed !== undefined && (parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password;
 }
 
+/** The port `parsed` reaches, the scheme's default filled in where the URL leaves it out (`http://x/` is port 80). */
+function effectivePort(parsed: URL): number {
+  return parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+}
+
 /**
  * True when the host window may open `url`: one of LOAM's own pages, or a page of the running node on one of
  * this computer's addresses (`nodeHosts`) and its port.
@@ -43,15 +48,23 @@ export function isKnownExternalUrl(url: string, node: { port: number; hosts: rea
   if (parsed.protocol === "https:" && KNOWN_PREFIXES.some((prefix) => underPrefix(parsed.href, prefix))) {
     return true;
   }
-  if (!node || parsed.protocol !== "http:" || parsed.port !== String(node.port)) {
+  if (!node || parsed.protocol !== "http:" || effectivePort(parsed) !== node.port) {
     return false;
   }
   const host = parsed.hostname.replace(/^\[|\]$/g, "");
   return host === "127.0.0.1" || host === "localhost" || node.hosts.includes(host);
 }
 
-/** True when `url` is on `origin` (the client window stays on the node it was opened for). */
+/**
+ * True when `url` is on `origin` (the client window stays on the node it was opened for). Both sides are
+ * parsed, so `http://127.0.0.1:80` and `http://127.0.0.1` are the same origin, as they are to a page; an
+ * opaque origin (`file:`, `data:`, which the URL standard spells "null") never matches anything.
+ */
 export function isSameOrigin(url: string, origin: string | undefined): boolean {
+  if (origin === undefined) {
+    return false;
+  }
   const parsed = parse(url);
-  return origin !== undefined && parsed !== undefined && parsed.origin === origin;
+  const expected = parse(origin);
+  return parsed !== undefined && expected !== undefined && parsed.origin !== "null" && parsed.origin === expected.origin;
 }

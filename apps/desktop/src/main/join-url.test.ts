@@ -28,8 +28,10 @@ describe("buildJoinUrl", () => {
 });
 
 describe("localOrigin", () => {
-  it("is loopback on the node's port", () => {
+  it("is loopback on the node's port, spelled as a page spells its own origin", () => {
     expect(localOrigin(3002)).toBe("http://127.0.0.1:3002");
+    // Port 80 is http's default, which an origin leaves out.
+    expect(localOrigin(80)).toBe("http://127.0.0.1");
   });
 });
 

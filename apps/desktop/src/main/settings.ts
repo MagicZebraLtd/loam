@@ -4,13 +4,14 @@
  * server exists (the port, the join address, the log level, the host note acknowledged). Never a key: the
  * device secret lives in its own keychain-protected file (keys.ts) and a passphrase is never stored.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { DbEncryptionModeSchema, HOST_ACK_VERSION, SETUP_PRESETS, type HostLogLevel, type SetupPreset } from "@loam/schema";
 import { z } from "zod";
 
 import { JoinHostSchema, MAX_NODE_NAME, type DesktopSettingsView, type NetworkRecord } from "../shared/ipc.js";
+import { writePrivateFile } from "./durable-files.js";
 
 export type DesktopSettings = {
   network?: NetworkRecord;
@@ -18,6 +19,12 @@ export type DesktopSettings = {
   joinHost?: string;
   logLevel: HostLogLevel;
   hostAck?: number;
+  /**
+   * The host's own client window holds a copy of a network that was (or is being) erased: set before every
+   * Emergency Reset and discard, cleared once that copy is erased too. A launch that finds it erases the copy
+   * first, so a crash between the two can't leave it behind.
+   */
+  clientCopyStale?: true;
 };
 
 export const SETTINGS_FILE = "desktop.json";
@@ -60,6 +67,9 @@ export function parseSettings(raw: unknown): DesktopSettings {
   if (typeof value.hostAck === "number" && Number.isInteger(value.hostAck) && value.hostAck >= 1) {
     settings.hostAck = value.hostAck;
   }
+  if (value.clientCopyStale === true) {
+    settings.clientCopyStale = true;
+  }
   return settings;
 }
 
@@ -93,12 +103,7 @@ export function fileSettingsStore(userData: string): SettingsStore {
       }
     },
     write(settings) {
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      const temporary = `${path}.tmp`;
-      // A leftover temporary file would keep its old permissions (`mode` only applies to a new file).
-      rmSync(temporary, { force: true });
-      writeFileSync(temporary, `${JSON.stringify(parseSettings(settings), null, 2)}\n`, { mode: 0o600 });
-      renameSync(temporary, path);
+      writePrivateFile(path, `${JSON.stringify(parseSettings(settings), null, 2)}\n`);
     },
   };
 }
