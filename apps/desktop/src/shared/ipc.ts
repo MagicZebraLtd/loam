@@ -123,6 +123,8 @@ export type DesktopSettingsView = {
 export type NodeInfo = HostStatus & {
   /** The URL joiners open: `http://<joinHost>:<port>/#k=<transport key>` plus `&i=<invite>` on an approval-only node. */
   joinUrl: string;
+  /** The node's transport public key (the `#k=` of every QR: join, link-a-node, admin link). */
+  transportPublicKey: string;
   /** Every address this computer could be reached on right now (for pinning one). */
   addresses: string[];
   startedAt: number;

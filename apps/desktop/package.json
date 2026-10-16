@@ -2,6 +2,7 @@
   "name": "@loam/desktop",
   "private": true,
   "version": "0.6.4",
+  "productName": "LOAM",
   "description": "LOAM for Mac, Windows and Linux: run a local, off-grid LOAM network from a desktop app (embedded server + the web client in a window).",
   "license": "AGPL-3.0-only",
   "author": "Magic Zebra Ltd",

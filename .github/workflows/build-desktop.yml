@@ -1,0 +1,430 @@
+name: Build desktop
+
+# Builds LOAM for Mac, Windows and Linux (apps/desktop, Electron) and, on a release tag, attaches the
+# installers to the GitHub Release beside the Android APK that build-apk.yml attaches.
+#
+# Triggers:
+#   - push of a tag matching v*  → verify the version → typecheck + test → build on native runners → smoke
+#                                  test the Linux AppImage → attest → attach to the Release. Tags are vX.Y.Z,
+#                                  or vX.Y.Z-rc.N / vX.Y.Z-beta.N for a pre-release (published as a GitHub
+#                                  PRE-release, exactly as build-apk.yml does).
+#   - manual (workflow_dispatch) → build + upload the installers as workflow artifacts (no Release)
+#
+# `pnpm test` for the whole workspace already runs in build-apk.yml on the same tag, so this workflow runs only
+# the desktop's own typecheck and tests before packaging.
+#
+# Artifacts (version-free names, so the website can link releases/latest/download/<name>):
+#   LOAM-mac-arm64.dmg  LOAM-mac-x64.dmg  LOAM-win-x64.exe  LOAM-linux-x64.AppImage  LOAM-linux-x64.deb
+# each with a .sha256 beside it.
+#
+# Hardening (same as build-apk.yml):
+#   - Every action is pinned to a full commit SHA (the version is in the trailing comment).
+#   - The build jobs have read-only repo access and check out without persisting the token. Only the small
+#     `release` job gets `contents: write`, and it runs no repo code: it downloads the built files, writes
+#     their SHA-256 checksums and attaches them.
+#   - On a tag, the `attest` job (the only one with `id-token: write` + `attestations: write`) records signed
+#     build provenance for every installer. Check a download with
+#     `gh attestation verify LOAM-mac-arm64.dmg --repo MagicZebraLtd/loam`, or its checksum with
+#     `sha256sum -c LOAM-mac-arm64.dmg.sha256`.
+#   - Signing secrets reach ONLY the one step that needs them, never a job.
+#
+# Signing (all optional; without the secrets the build still succeeds, unsigned):
+#   macOS    The Apple Developer enrolment is pending, so today the .dmg files are unsigned and not notarized.
+#            Once enrolled, add these repository secrets and the next tag build signs and notarizes:
+#              CSC_LINK            the Developer ID Application certificate, a .p12 file, base64-encoded
+#              CSC_KEY_PASSWORD    the password of that .p12
+#              APPLE_API_KEY       the contents of the App Store Connect API key (the AuthKey_XXXX.p8 file)
+#              APPLE_API_KEY_ID    that key's id
+#              APPLE_API_ISSUER    the App Store Connect issuer id
+#   Windows  Free signing for open source from SignPath Foundation (https://signpath.org). Secrets:
+#              SIGNPATH_API_TOKEN        a SignPath API token for a submitter user
+#              SIGNPATH_ORGANIZATION_ID  the SignPath organization id
+#            SignPath side: project slug `loam`, signing policy slug `release-signing`, artifact configuration
+#            slug `installer` (its root element is <zip-file> holding LOAM-win-x64.exe, signed with the
+#            Authenticode file-type signer). See apps/site/code-signing.html for the published policy.
+#
+# NOTE: for this to fire on a tag, the workflow file must already exist in the tagged commit.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Check versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history + tags: the release-version check compares versionCode with the previous tag.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Check versions
+        # On a tag: the tag's X.Y.Z (before any -rc.N / -beta.N) must equal the manifest version and
+        # versionCode must exceed every earlier release tag's. Otherwise: every manifest agrees.
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            node scripts/check-versions.mjs --release-tag "$RELEASE_TAG"
+          else
+            node scripts/check-versions.mjs
+          fi
+
+  build-mac:
+    name: Build macOS (arm64 + x64)
+    needs: verify
+    runs-on: macos-15 # Apple Silicon
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        # The Electron binary is downloaded here (unlike ci.yml, which skips it).
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm run build
+
+      - name: Desktop typecheck
+        run: pnpm --filter @loam/desktop typecheck
+
+      - name: Desktop tests
+        run: pnpm --filter @loam/desktop test
+
+      - name: Build desktop bundle
+        run: pnpm --filter @loam/desktop build
+
+      - name: Package (arm64 and x64), signed when the Apple secrets exist
+        # The ONLY step that sees the Apple secrets. With no CSC_LINK the build is unsigned instead of failing
+        # (CSC_IDENTITY_AUTO_DISCOVERY=false stops electron-builder from hunting for a certificate in the
+        # runner's keychain). With the full set it signs with the Developer ID certificate and notarizes
+        # through the App Store Connect API key.
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          ADHOC=()
+          if [ -n "$CSC_LINK" ]; then
+            if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
+              umask 077
+              export APPLE_API_KEY="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+              printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY"
+              export APPLE_API_KEY_ID APPLE_API_ISSUER
+            else
+              echo "::warning::CSC_LINK is set but the App Store Connect API key secrets are not: signed, NOT notarized."
+            fi
+          else
+            echo "::warning::No CSC_LINK secret: the macOS builds are UNSIGNED and not notarized."
+            unset CSC_LINK CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            # Ad-hoc sign the whole bundle (`-` is Apple's ad-hoc identity): the fuses electron-builder flips
+            # break Electron's own signature, and an unsigned bundle on Apple Silicon is reported as "damaged"
+            # rather than offered "Open Anyway". A real certificate, when present, makes this unnecessary.
+            ADHOC=(-c.mac.identity=-)
+          fi
+          unset APPLE_API_KEY_P8
+          # Rebuild the native SQLCipher driver for each architecture in turn (it lands in
+          # dist/main/node_modules/), then package that architecture before the next overwrites it.
+          for arch in arm64 x64; do
+            pnpm --filter @loam/desktop exec node scripts/native.mjs --arch "$arch"
+            pnpm --filter @loam/desktop exec electron-builder --mac "--$arch" --publish never "${ADHOC[@]}"
+          done
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+
+      - name: Upload macOS installers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: loam-desktop-mac
+          path: |
+            apps/desktop/release/LOAM-mac-arm64.dmg
+            apps/desktop/release/LOAM-mac-x64.dmg
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows (x64)
+    needs: verify
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm run build
+
+      - name: Desktop typecheck
+        run: pnpm --filter @loam/desktop typecheck
+
+      - name: Desktop tests
+        run: pnpm --filter @loam/desktop test
+
+      - name: Build desktop bundle
+        run: pnpm --filter @loam/desktop build
+
+      - name: Rebuild native driver
+        run: pnpm --filter @loam/desktop exec node scripts/native.mjs --arch x64
+
+      - name: Package (unsigned installer)
+        run: pnpm --filter @loam/desktop exec electron-builder --win --x64 --publish never
+
+      - name: Check for SignPath configuration
+        # Step `if:` can't read secrets, so this step maps them to a yes/no output. The values themselves
+        # are used only by the signing step below.
+        id: signpath
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+        run: |
+          if [ -n "$SIGNPATH_API_TOKEN" ] && [ -n "$SIGNPATH_ORGANIZATION_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No SignPath secrets: LOAM-win-x64.exe is UNSIGNED (SmartScreen will warn)."
+          fi
+
+      # SignPath pulls the file from THIS run's GitHub artifacts (that is how it knows the build came from this
+      # repository's workflow), signs it, and the action downloads the result. Skipped without the secrets.
+      - name: Upload unsigned installer for SignPath
+        if: steps.signpath.outputs.enabled == 'true'
+        id: upload-unsigned
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: loam-desktop-win-unsigned
+          path: apps/desktop/release/LOAM-win-x64.exe
+          if-no-files-found: error
+
+      - name: Sign with SignPath
+        if: steps.signpath.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: loam
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Replace the installer with the signed one
+        if: steps.signpath.outputs.enabled == 'true'
+        run: |
+          test -f signed/LOAM-win-x64.exe
+          cp signed/LOAM-win-x64.exe apps/desktop/release/LOAM-win-x64.exe
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: loam-desktop-win
+          path: apps/desktop/release/LOAM-win-x64.exe
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux (x64)
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm run build
+
+      - name: Desktop typecheck
+        run: pnpm --filter @loam/desktop typecheck
+
+      - name: Desktop tests
+        run: pnpm --filter @loam/desktop test
+
+      - name: Build desktop bundle
+        run: pnpm --filter @loam/desktop build
+
+      - name: Rebuild native driver
+        run: pnpm --filter @loam/desktop exec node scripts/native.mjs --arch x64
+
+      - name: Package (AppImage and .deb)
+        run: pnpm --filter @loam/desktop exec electron-builder --linux --x64 --publish never
+
+      - name: Install smoke-test dependencies
+        # xvfb gives Electron a display; libfuse2t64 lets an AppImage mount itself on 24.04.
+        run: sudo apt-get update && sudo apt-get install -y libfuse2t64 xvfb
+
+      - name: Smoke test the packaged AppImage
+        # Boots the real packaged app with a fresh temp data dir, no windows, and waits for /api/health. Prints
+        # one JSON line and exits 0 or 1. --no-sandbox because GitHub's runner restricts unprivileged user
+        # namespaces; APPIMAGE_EXTRACT_AND_RUN is a belt-and-braces fallback if FUSE still isn't usable.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          # The packaged driver must load: a build whose smoke passes only unencrypted is not a release.
+          LOAM_SMOKE_REQUIRE_ENCRYPTION: "1"
+        run: |
+          chmod +x apps/desktop/release/LOAM-linux-x64.AppImage
+          xvfb-run -a apps/desktop/release/LOAM-linux-x64.AppImage --smoke --no-sandbox
+
+      - name: Upload Linux installers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: loam-desktop-linux
+          path: |
+            apps/desktop/release/LOAM-linux-x64.AppImage
+            apps/desktop/release/LOAM-linux-x64.deb
+          if-no-files-found: error
+
+  attest:
+    name: Attest build provenance
+    needs: [build-mac, build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token Sigstore signs the attestation with
+      attestations: write # store the attestation on this repository
+    steps:
+      - name: Download macOS installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loam-desktop-mac
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loam-desktop-win
+
+      - name: Download Linux installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loam-desktop-linux
+
+      - name: Attest every installer
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            LOAM-mac-arm64.dmg
+            LOAM-mac-x64.dmg
+            LOAM-win-x64.exe
+            LOAM-linux-x64.AppImage
+            LOAM-linux-x64.deb
+
+  release:
+    name: Attach installers to the Release
+    needs: [build-mac, build-windows, build-linux, attest]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create/update the Release and upload the assets (this job only)
+    steps:
+      # Three named downloads rather than a pattern: `loam-desktop-*` would also match the Windows job's
+      # `loam-desktop-win-unsigned` artifact, whose LOAM-win-x64.exe would race the signed one.
+      - name: Download macOS installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loam-desktop-mac
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loam-desktop-win
+
+      - name: Download Linux installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: loam-desktop-linux
+
+      - name: Write the checksums
+        # Computed here, after any Windows signing, so each .sha256 matches the file people download.
+        # `sha256sum -c LOAM-mac-arm64.dmg.sha256` beside a downloaded file checks it.
+        run: |
+          for f in LOAM-mac-arm64.dmg LOAM-mac-x64.dmg LOAM-win-x64.exe LOAM-linux-x64.AppImage LOAM-linux-x64.deb; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          cat ./*.sha256
+
+      - name: Attach installers and checksums to the Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            LOAM-mac-arm64.dmg
+            LOAM-mac-arm64.dmg.sha256
+            LOAM-mac-x64.dmg
+            LOAM-mac-x64.dmg.sha256
+            LOAM-win-x64.exe
+            LOAM-win-x64.exe.sha256
+            LOAM-linux-x64.AppImage
+            LOAM-linux-x64.AppImage.sha256
+            LOAM-linux-x64.deb
+            LOAM-linux-x64.deb.sha256
+          fail_on_unmatched_files: true
+          # vX.Y.Z-rc.N / -beta.N (check-versions rejects any other suffix) → a GitHub pre-release, so it
+          # never becomes "Latest" or the default download.
+          prerelease: ${{ contains(github.ref_name, '-') }}
