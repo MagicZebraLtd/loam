@@ -36,6 +36,7 @@ const IPC: typeof IpcChannels = {
   hostEmergencyReset: "host:emergencyReset",
   stateEvent: "desktop:state",
   logEvent: "desktop:logEntry",
+  logClearedEvent: "desktop:logCleared",
   hostInjection: "desktop:hostInjection",
 };
 
@@ -83,6 +84,7 @@ const bridge: DesktopBridge = {
   },
   onState: (listener) => subscribe<DesktopState>(IPC.stateEvent, listener),
   onLog: (listener) => subscribe<LogEntry>(IPC.logEvent, listener),
+  onLogCleared: (listener) => subscribe<undefined>(IPC.logClearedEvent, () => listener()),
 };
 
 contextBridge.exposeInMainWorld("loamDesktop", bridge);

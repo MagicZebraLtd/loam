@@ -407,10 +407,20 @@ export class NodeController {
   }
 
   /**
-   * Erase the host client window's copy after a reset; a failure is logged, never a reason to stop, and leaves
-   * the stale mark in place so the next launch tries again.
+   * Forget the erased network's log (who connected, what they asked for), as the terminal UI does once a reset
+   * has finished; `line` is all the Activity screen keeps from before.
+   */
+  private forgetLog(line: string): void {
+    this.deps.log.clear();
+    this.deps.log.note("warn", line);
+  }
+
+  /**
+   * Erase the host client window's copy after a reset, and the log with it; a failure to erase is logged,
+   * never a reason to stop, and leaves the stale mark in place so the next launch tries again.
    */
   private async clearClientCopy(): Promise<void> {
+    this.forgetLog("Emergency Reset: every message, person and file on this network was erased, and this log with it.");
     try {
       await this.deps.clearClientData();
       this.markClientCopyFresh();
@@ -880,6 +890,7 @@ export class NodeController {
       this.deps.secrets.destroy();
       this.freshKey = true;
       this.markClientCopyStale();
+      this.forgetLog("Starting a new network: the old one was erased, and its log with it.");
       await this.discardClientData();
       const left = emptyDataDir(this.deps.dataDir);
       if (left.length > 0) {
@@ -938,7 +949,6 @@ export class NodeController {
       return { ok: true, value: { complete: this.phase.phase === "running", journaled: true } };
     }
     if (result.complete) {
-      this.deps.log.note("warn", "Emergency Reset: every message, person and file on this network was erased.");
       await this.clearClientCopy();
       this.setPhase({ phase: "running", node: this.nodeInfo(running) });
       this.startPolling();

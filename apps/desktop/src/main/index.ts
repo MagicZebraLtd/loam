@@ -96,6 +96,7 @@ async function runApp(): Promise<void> {
     clearClientData: () => windows.clearClientData(),
   });
   log.setListener((entry) => windows.sendLog(entry));
+  log.setClearListener(() => windows.sendLogCleared());
 
   registerIpc({ controller, windows, log, version, dataDir, lanAddresses });
   installAppMenu();

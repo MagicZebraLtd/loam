@@ -54,6 +54,8 @@ export const IPC = {
   stateEvent: "desktop:state",
   /** Pushed for every new log entry. */
   logEvent: "desktop:logEntry",
+  /** Pushed when the main process forgot the whole log (an Emergency Reset finished, or the network was discarded). */
+  logClearedEvent: "desktop:logCleared",
   /** Synchronous, answered only to the client window's own preload: the host token + transport key to inject. */
   hostInjection: "desktop:hostInjection",
 } as const;
@@ -217,7 +219,7 @@ export type DesktopBridge = {
   updateSettings(update: SettingsUpdate): Promise<HostResult<DesktopSettingsView>>;
   acknowledgeHost(): Promise<void>;
   checkForUpdates(): Promise<UpdateCheckResult>;
-  /** The log so far (newest last); later entries arrive through `onLog`. */
+  /** The log so far (newest last); later entries arrive through `onLog`, and `onLogCleared` says when it was all forgotten. */
   log(): Promise<LogEntry[]>;
   host: {
     config(): Promise<HostResult<LoamConfig>>;
@@ -233,6 +235,7 @@ export type DesktopBridge = {
   /** Subscribe to state pushes; returns the unsubscribe. */
   onState(listener: (state: DesktopState) => void): () => void;
   onLog(listener: (entry: LogEntry) => void): () => void;
+  onLogCleared(listener: () => void): () => void;
 };
 
 declare global {

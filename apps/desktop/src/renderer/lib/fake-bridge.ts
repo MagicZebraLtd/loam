@@ -116,6 +116,8 @@ export type FakeBridge = DesktopBridge & {
   current(): DesktopState;
   push(state: DesktopState): void;
   emitLog(entry: LogEntry): void;
+  /** The main process forgot the log (a reset finished). */
+  clearLog(): void;
 };
 
 const ok: HostResult<void> = { ok: true, value: undefined };
@@ -130,6 +132,7 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
   let log = options.log ?? [];
   const stateListeners = new Set<(state: DesktopState) => void>();
   const logListeners = new Set<(entry: LogEntry) => void>();
+  const logClearedListeners = new Set<() => void>();
   const calls: string[] = [];
   const opened: string[] = [];
   let copied: string | undefined;
@@ -184,6 +187,12 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       log = [...log, entry];
       for (const listener of [...logListeners]) {
         listener(entry);
+      }
+    },
+    clearLog() {
+      log = [];
+      for (const listener of [...logClearedListeners]) {
+        listener();
       }
     },
     async getState() {
@@ -325,6 +334,10 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     onLog(listener) {
       logListeners.add(listener);
       return () => logListeners.delete(listener);
+    },
+    onLogCleared(listener) {
+      logClearedListeners.add(listener);
+      return () => logClearedListeners.delete(listener);
     },
   };
   return bridge;

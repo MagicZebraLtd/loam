@@ -22,6 +22,21 @@ describe("ActivityScreen", () => {
     expect(root.querySelector(".log-line:last-child")?.classList.contains("log-error")).toBe(true);
   });
 
+  it("drops everything when the main process forgets the log", async () => {
+    const bridge = createFakeBridge({ log: sampleLog() });
+    const root = mount(<ActivityScreen bridge={bridge} />);
+    await settle();
+    expect(root.querySelectorAll(".log-line").length).toBeGreaterThan(0);
+    act(() => {
+      bridge.clearLog();
+    });
+    expect(root.querySelectorAll(".log-line")).toHaveLength(0);
+    act(() => {
+      bridge.emitLog({ kind: "message", time: Date.now(), level: "warn", text: "After the reset" });
+    });
+    expect(Array.from(root.querySelectorAll(".log-text")).map((line) => line.textContent)).toEqual(["After the reset"]);
+  });
+
   it("filters to problems only", async () => {
     const bridge = createFakeBridge({ log: sampleLog() });
     const root = mount(<ActivityScreen bridge={bridge} />);

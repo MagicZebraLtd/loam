@@ -27,7 +27,8 @@ shell does through IPC.
   LOAM node** (the single-use link-code QR, as on the Android share screen), and **Stop network**. A network
   that keeps its messages only while it runs asks for a hold-to-confirm to stop, because stopping erases it.
 - **People**: the roster with pending join requests, and **Make admin** (`host.makeAdmin`), as in the TUI.
-- **Activity**: the node's log, an errors-only toggle and Copy.
+- **Activity**: the node's log (in memory only), an errors-only toggle and Copy. A finished Emergency Reset, or
+  starting a new network, forgets the log with the network it belonged to, as in the TUI: one line says so.
 - **Settings**: the port for the next start; the join address (automatic, or one of this computer's
   addresses); the log level; the storage mode (read-only); Check for updates; Open data folder; **Emergency
   Reset** and **Start a new network**, each a hold-to-confirm.
@@ -274,10 +275,10 @@ Rules for every page the app creates:
   keychain trusts this binary with the network's key, so a program that could run its own code inside it could
   ask for that key. `resetAdHocDarwinSignature` re-signs an unsigned build ad hoc after the fuses are flipped,
   because on Apple Silicon a binary with a broken signature is killed at launch.
-- **macOS entitlements** (`build/entitlements.mac.plist`, hardened runtime): `allow-jit`,
-  `allow-unsigned-executable-memory`, `disable-library-validation` (the SQLCipher addon is not signed by
-  Apple's team) and `allow-dyld-environment-variables`. The app is not App-Sandboxed (that would stop it
-  serving the LAN), so no network-server entitlement is needed.
+- **macOS entitlements** (`build/entitlements.mac.plist`, hardened runtime): only `allow-jit` and
+  `allow-unsigned-executable-memory`, which Electron's JavaScript engine needs. Neither
+  `disable-library-validation` nor `allow-dyld-environment-variables` is granted (why: "Signing" below). The
+  app is not App-Sandboxed (that would stop it serving the LAN), so no network-server entitlement is needed.
 - **No telemetry, no calls home.** The only outbound request is the tap-only **Check for updates**: one GET to
   GitHub's latest-release API (10 s timeout, no cookies, no LOAM data; only a strict `vX.Y.Z` tag is read). The
   result says whether a newer version exists and opens the releases page in the browser. Nothing checks on

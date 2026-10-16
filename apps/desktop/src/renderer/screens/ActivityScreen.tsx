@@ -9,8 +9,9 @@ import { t } from "../lib/strings";
 /**
  * Activity (the TUI's Activity screen): the node's requests and messages as they happen, newest at the
  * bottom, with a problems-only switch and Copy. The log lives in the main process's memory only (never on
- * disk); this screen asks for it on opening and then follows `onLog`. Text from others arrives already
- * cleaned by the main process and is shown as text, never as markup.
+ * disk); this screen asks for it on opening, then follows `onLog`, and drops everything when `onLogCleared`
+ * says the main process forgot it (an Emergency Reset finished: the old network's log went with it). Text from
+ * others arrives already cleaned by the main process and is shown as text, never as markup.
  */
 export function ActivityScreen({ bridge }: { bridge: DesktopBridge }) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
@@ -32,6 +33,10 @@ export function ActivityScreen({ bridge }: { bridge: DesktopBridge }) {
       }
       setEntries((current) => appendEntry(current, entry));
     });
+    const unsubscribeCleared = bridge.onLogCleared(() => {
+      early.length = 0;
+      setEntries([]);
+    });
     void bridge
       .log()
       .catch(() => [] as LogEntry[])
@@ -45,6 +50,7 @@ export function ActivityScreen({ bridge }: { bridge: DesktopBridge }) {
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeCleared();
     };
   }, [bridge]);
 

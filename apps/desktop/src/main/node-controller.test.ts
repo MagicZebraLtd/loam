@@ -543,12 +543,17 @@ describe("running", () => {
 
 describe("Emergency Reset", () => {
   it("keeps running when the server wiped in-process", async () => {
-    const { controller, server, nodeChanges, cleared, settings, markedWhenCleared } = makeController({
+    const { controller, server, nodeChanges, cleared, settings, markedWhenCleared, log } = makeController({
       settings: { logLevel: "info", network: community },
     });
     await controller.initialize();
+    log.note("info", "a line from before the reset");
     expect(await controller.emergencyReset()).toEqual({ ok: true, value: { complete: true, journaled: false } });
     expect(server.nodes).toHaveLength(1);
+    // The old network's log went with it, as in the terminal UI: one line says so, nothing from before stays.
+    const texts = log.entries().map((entry) => (entry.kind === "message" ? entry.text : entry.url));
+    expect(texts).not.toContain("a line from before the reset");
+    expect(texts[0]).toBe("Emergency Reset: every message, person and file on this network was erased, and this log with it.");
     // Erased once, by the reset itself: the reset-started hook leaves the launcher's own resets alone.
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(cleared()).toBe(1);
@@ -895,13 +900,17 @@ describe("Quit", () => {
 
 describe("a new network", () => {
   it("resets the running node, empties the folder, forgets the network and goes back to setup", async () => {
-    const { controller, server, settings, secrets, states, discarded } = makeController({
+    const { controller, server, settings, secrets, states, discarded, log } = makeController({
       settings: { logLevel: "info", network: community, port: 3001 },
     });
     await controller.initialize();
     const oldSecret = secrets.current();
     writeFileSync(join(dataDir, "loam.db"), "messages");
+    log.note("info", "a line from the old network");
     expect(await controller.newNetwork()).toEqual({ ok: true, value: undefined });
+    const texts = log.entries().map((entry) => (entry.kind === "message" ? entry.text : entry.url));
+    expect(texts).not.toContain("a line from the old network");
+    expect(texts[0]).toBe("Starting a new network: the old one was erased, and its log with it.");
     expect(server.nodes[0]!.calls).toContain("reset");
     expect(server.nodes[0]!.closed).toBe(true);
     expect(existsSync(join(dataDir, "loam.db"))).toBe(false);

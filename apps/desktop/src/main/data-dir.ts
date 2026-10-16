@@ -2,12 +2,12 @@
  * The node's data folder (`userData/node`, LOAM_DATA_DIR): created private to this user, written with a new
  * network's starting config, and emptied when the host discards the network.
  */
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { LoamConfigUpdate } from "@loam/schema";
 
-import { fsyncDirectory } from "./durable-files.js";
+import { fsyncDirectory, writePrivateFile } from "./durable-files.js";
 
 /** The node's config file (the server's default: `<dataDir>/config.json`). */
 export const CONFIG_FILE = "config.json";
@@ -38,13 +38,12 @@ export function emptyDataDir(dataDir: string): string[] {
   return left;
 }
 
-/** Write a new network's starting config.json (before its first boot), durably replacing any old one. */
+/**
+ * Write a new network's starting config.json (before its first boot), durably replacing any old one: the bytes
+ * are fsynced before the rename and the folder after it, so a power cut right after setup can't leave a torn
+ * file that the next boot refuses to start from.
+ */
 export function writeInitialConfig(dataDir: string, config: LoamConfigUpdate): void {
   ensureDataDir(dataDir);
-  const path = join(dataDir, CONFIG_FILE);
-  const temporary = `${path}.tmp`;
-  rmSync(temporary, { force: true });
-  writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
-  fsyncDirectory(dataDir);
+  writePrivateFile(join(dataDir, CONFIG_FILE), `${JSON.stringify(config, null, 2)}\n`);
 }

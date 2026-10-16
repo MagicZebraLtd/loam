@@ -28,6 +28,23 @@ describe("createLogFeed", () => {
     expect(pushed).toEqual([expect.objectContaining({ kind: "request", method: "GET", url: "/api/health", status: 200 })]);
   });
 
+  it("forgets everything on clear, says so, and keeps what comes after", () => {
+    const feed = createLogFeed(createLogBook(() => 1000), clean);
+    const pushed: string[] = [];
+    let clears = 0;
+    feed.setListener((entry) => pushed.push(entry.kind === "message" ? entry.text : ""));
+    feed.setClearListener(() => {
+      clears += 1;
+    });
+    feed.note("info", "before");
+    feed.clear();
+    expect(clears).toBe(1);
+    expect(feed.entries()).toEqual([]);
+    feed.note("info", "after");
+    expect(pushed).toEqual(["before", "after"]);
+    expect(feed.entries().map((entry) => (entry.kind === "message" ? entry.text : ""))).toEqual(["after"]);
+  });
+
   it("keeps pushing once the book is full", () => {
     const feed = createLogFeed(createLogBook(() => 1000, 2), clean);
     const pushed: string[] = [];

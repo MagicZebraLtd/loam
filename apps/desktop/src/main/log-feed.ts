@@ -18,6 +18,14 @@ export type LogFeed = {
   entries(): LogEntry[];
   /** Hear about every new entry (cleaned). One listener: the host window. */
   setListener(listener: ((entry: LogEntry) => void) | undefined): void;
+  /**
+   * Forget everything kept, and say so to the clear listener. An Emergency Reset that finished, or a network
+   * being discarded: its log of who connected and what they asked for belongs to it, as in the terminal UI.
+   * Entries written afterwards are kept and pushed as before.
+   */
+  clear(): void;
+  /** Hear about every clear. One listener: the host window. */
+  setClearListener(listener: (() => void) | undefined): void;
 };
 
 /** `entry` with every text field passed through `clean`. Pure. */
@@ -35,6 +43,7 @@ export function cleanEntry(entry: LogEntry, clean: (text: string) => string): Lo
 
 export function createLogFeed(book: LogBook, clean: (text: string) => string): LogFeed {
   let listener: ((entry: LogEntry) => void) | undefined;
+  let clearListener: (() => void) | undefined;
   let lastSeen: LogEntry | undefined;
 
   /** Hand the listener whatever the book gained since the last look (a request pair lands as one entry). */
@@ -63,6 +72,14 @@ export function createLogFeed(book: LogBook, clean: (text: string) => string): L
     entries: () => book.entries().map((entry) => cleanEntry(entry, clean)),
     setListener(next) {
       listener = next;
+    },
+    clear() {
+      book.clear();
+      lastSeen = undefined;
+      clearListener?.();
+    },
+    setClearListener(next) {
+      clearListener = next;
     },
   };
 }

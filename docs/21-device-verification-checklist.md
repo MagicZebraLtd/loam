@@ -142,7 +142,9 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   *Persistent and passphrase:* the node restarts under a fresh secret (`device-secret.enc` is new), the old
   database is gone, no `.loam-wipe-phase` is left, and the same passphrase opens the new empty network. Kill
   the app at a few points during the reset (after the journal appears, between deleting the secret and the
-  journal) and start it again: it finishes the reset and never serves the old data.
+  journal) and start it again: it finishes the reset and never serves the old data. In every mode the host
+  window's Activity screen keeps nothing from before the reset (one line says the log went with the network),
+  with the Activity tab open during the reset and when opened afterwards.
 - [ ] **Stop, Quit and reopen.** Closing the window keeps the phone connected; Quit stops the node within 10 s;
   reopening a persistent network restores its messages, an ephemeral one starts empty, and the host is still
   admin in **Open LOAM** (the client window keeps its identity on disk except for ephemeral networks). Press

@@ -43,6 +43,8 @@ export type WindowManager = {
   isClient(contents: WebContents): boolean;
   sendState(state: DesktopState): void;
   sendLog(entry: LogEntry): void;
+  /** The log was forgotten (a reset finished): the Activity screen drops what it shows. */
+  sendLogCleared(): void;
   /** Open (or focus) the client window on `origin`; `inMemory` keeps its storage off the disk. */
   openClient(origin: string, inMemory: boolean): void;
   /** The network was discarded: close the client window and erase what it stored. */
@@ -186,6 +188,11 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     sendLog(entry) {
       if (host && !host.isDestroyed()) {
         host.webContents.send(IPC.logEvent, entry);
+      }
+    },
+    sendLogCleared() {
+      if (host && !host.isDestroyed()) {
+        host.webContents.send(IPC.logClearedEvent);
       }
     },
     openClient(origin, inMemory) {
