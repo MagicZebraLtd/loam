@@ -54,6 +54,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # The workspace install also runs the Android app's llama.rn postinstall, which downloads that phone's LLM
+  # libraries and extracts them with GNU tar; on the Windows runner tar reads the `C:\...` archive path as a
+  # remote host and the install fails (first run, 2026-10-17). None of these jobs uses them, so skip it everywhere.
+  RNLLAMA_SKIP_POSTINSTALL: "1"
+
 jobs:
   verify:
     name: Check versions
