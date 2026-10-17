@@ -19,6 +19,22 @@ describe("isHostShellSender", () => {
     expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: `${shell}#/settings` }, shell)).toBe(true);
   });
 
+  it("matches a Windows drive letter whichever case the launch gave it", () => {
+    const lower = "file:///c:/Users/Sam/AppData/Local/Programs/LOAM/resources/app.asar/dist/renderer/index.html";
+    const upper = lower.replace("file:///c:", "file:///C:");
+    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: upper }, lower)).toBe(true);
+    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: lower }, upper)).toBe(true);
+    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: upper.replace("/C:/", "/D:/") }, lower)).toBe(false);
+  });
+
+  it("spells an install path with a literal percent sign the way Chromium reports it", () => {
+    // pathToFileURL escapes the "%" itself; a frame URL that decoded it would be another document.
+    const url = hostShellUrl("/Users/sam/100%20off/LOAM.app/Contents/Resources/app.asar/dist/renderer/index.html");
+    expect(url).toContain("/100%2520off/");
+    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: url }, url)).toBe(true);
+    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: url.replace("%2520", "%20") }, url)).toBe(false);
+  });
+
   it("refuses the client window, an iframe, and any other page", () => {
     expect(isHostShellSender({ isWindow: false, isMainFrame: true, frameUrl: shell }, shell)).toBe(false);
     expect(isHostShellSender({ isWindow: true, isMainFrame: false, frameUrl: shell }, shell)).toBe(false);

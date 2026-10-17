@@ -23,11 +23,16 @@ export function hostShellUrl(rendererIndex: string): string {
   return pathToFileURL(rendererIndex).href;
 }
 
-/** `url` without its query and fragment, or undefined when it isn't a URL. */
+/**
+ * `url` without its query and fragment, or undefined when it isn't a URL. A Windows drive letter is compared
+ * upper-case: Chromium canonicalises `file:///c:/...` to `file:///C:/...` in a frame's URL, while Node's
+ * `pathToFileURL` keeps the case the process was launched with (a `cd c:\...` shell gives a lower-case one).
+ */
 function documentUrl(url: string): string | undefined {
   try {
     const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+    const pathname = parsed.pathname.replace(/^\/[a-z]:/, (drive) => drive.toUpperCase());
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
   } catch {
     return undefined;
   }

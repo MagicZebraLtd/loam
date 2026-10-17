@@ -11,7 +11,7 @@ import { createServer } from "node:net";
 const UNAVAILABLE_ADDRESS_CODES = new Set(["EADDRNOTAVAIL", "EAFNOSUPPORT"]);
 
 /** How many ports past the preferred one are tried. */
-export const PORT_ATTEMPTS = 20;
+export const PORT_ATTEMPTS = 120;
 
 /**
  * Try to bind `host:port` and release it at once. Resolves true when the bind succeeds (or the address isn't
@@ -23,7 +23,10 @@ function canBind(port: number, host: string): Promise<boolean> {
     const probe = createServer();
     probe.unref();
     probe.once("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE") {
+      if (error.code === "EADDRINUSE" || (error.code === "EACCES" && port >= 1024)) {
+        // Taken. An unprivileged port refused with EACCES is Windows's doing: Hyper-V and WSL reserve blocks of
+        // ports (netsh's "excluded port range", often covering 3000), and a bind inside one is denied, not busy.
+        // Those blocks are about a hundred wide, so the search steps past them (PORT_ATTEMPTS).
         resolve(false);
       } else if (error.code !== undefined && UNAVAILABLE_ADDRESS_CODES.has(error.code)) {
         resolve(true);

@@ -207,7 +207,14 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        # Without build scripts: the SQLCipher driver's install step compiles it with node-gyp, whose Visual
+        # Studio probe crashes on this runner (first run, 2026-10-17), and nothing here needs that build (v13
+        # ships Node-API prebuilds in its tarball, which scripts/native.mjs copies). Electron's own postinstall,
+        # the binary download, runs on its own in the next step.
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download Electron
+        run: pnpm --filter @loam/desktop rebuild electron
 
       - name: Build workspace packages
         run: pnpm run build

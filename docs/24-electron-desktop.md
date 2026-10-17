@@ -89,7 +89,7 @@ Electron. Operations are serialised, so a double-clicked Start cannot boot two s
 2. Resolve the database key for the network's mode (below). For any encrypted mode, check the SQLCipher driver
    loads **before** booting (`driver.ts`, the same probe as the CLI), so a missing driver is reported as such
    rather than as a failed open.
-3. Pick the port: the saved one, else 3000, stepping past a taken one (up to 20 ports, probing the wildcard and
+3. Pick the port: the saved one, else 3000, stepping past a taken one (up to 120 ports, so a Windows reserved block is crossed, probing the wildcard and
    both loopback addresses, a port of `cli/bin/port.js`). A saved port this computer will not allow falls back
    to 3000.
 4. Clear the env the launcher owns, then set exactly what the server reads: `NODE_ENV=production`,

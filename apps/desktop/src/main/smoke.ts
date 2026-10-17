@@ -106,12 +106,28 @@ export async function runSmoke(): Promise<void> {
     }
     await controller.shutdown();
     clearTimeout(timer);
-    rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+    removeQuietly(root);
     finish({ ok: true, port: state.node.port, driver, version });
   } catch (error) {
-    await controller?.shutdown();
+    try {
+      await controller?.shutdown();
+    } catch {
+      // The verdict below is what matters; a shutdown that fails on top of the error changes nothing.
+    }
     clearTimeout(timer);
-    rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+    removeQuietly(root);
     finish({ ok: false, version, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/**
+ * Remove the temporary folder, best effort: a file still held open (Windows, until the profile's handles close)
+ * must not turn a verdict into a hang, which a throw here would (the timer is cleared by then).
+ */
+function removeQuietly(root: string): void {
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Left for the OS temp cleanup.
   }
 }

@@ -16,7 +16,7 @@ import { IPC, type DesktopState } from "../shared/ipc.js";
 import { isWebUrl } from "./external-links.js";
 import { appPaths } from "./paths.js";
 import { strings } from "./strings.js";
-import { CLIENT_PARTITIONS, clientPartition as partitionFor, navigationDecision } from "./trust.js";
+import { CLIENT_PARTITIONS, clientPartition as partitionFor, hostShellUrl, navigationDecision } from "./trust.js";
 
 /** The only permission a page gets: writing to the clipboard (the client's "Copy" buttons). */
 const ALLOWED_PERMISSION = "clipboard-sanitized-write";
@@ -145,7 +145,9 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
       host = undefined;
     });
     if (existsSync(appPaths.rendererIndex)) {
-      void window.loadFile(appPaths.rendererIndex);
+      // By the URL ipc.ts compares senders against, not loadFile(): that spells the path a third way (a
+      // literal "%" in the install path is never escaped, so Chromium decodes it and the page fails to load).
+      void window.loadURL(hostShellUrl(appPaths.rendererIndex));
     } else {
       void window.loadURL(missingRendererPage());
     }

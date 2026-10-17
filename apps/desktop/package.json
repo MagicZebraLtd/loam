@@ -5,6 +5,7 @@
   "productName": "LOAM",
   "description": "LOAM for Mac, Windows and Linux: run a local, off-grid LOAM network from a desktop app (embedded server + the web client in a window).",
   "license": "AGPL-3.0-only",
+  "homepage": "https://github.com/MagicZebraLtd/loam#readme",
   "author": "Magic Zebra Ltd",
   "type": "module",
   "main": "dist/main/index.js",

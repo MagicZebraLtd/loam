@@ -103,4 +103,6 @@ appImage:
   artifactName: LOAM-linux-${arch}.${ext}
 
 deb:
-  artifactName: LOAM-linux-${arch}.${ext}
+  # Spelt out: the deb target writes ${arch} as Debian's "amd64", and the workflow, the site and the docs name
+  # the file by the same x64 the other installers use. Only x64 is built (the `linux.target` list above).
+  artifactName: LOAM-linux-x64.${ext}
