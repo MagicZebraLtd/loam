@@ -156,6 +156,9 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   didn't finish" (or restarts to finish a journaled one), never a Running screen over a node answering 503.
 - [ ] **Start a new network** from Settings erases the old network (devices purge), the keychain item or secret
   file, and the client window's stored copy, and returns to Setup.
+- [ ] **Windows reserved ports.** On a PC with Hyper-V or WSL, `netsh interface ipv4 show excludedportrange
+  protocol=tcp` lists blocks the system denies to everyone (EACCES, not "in use"); if one covers 3000, the app
+  still starts, on the first port past the block, and the TUI (`loamnet`) does the same.
 - [ ] **Windows durable writes.** The same crash and power-cut check as docs/25 O3, with the packaged app.
 
 ## Reporting
