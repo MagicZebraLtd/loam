@@ -100,7 +100,8 @@ linux:
     scanning a QR code: no internet, no accounts.
 
 appImage:
-  artifactName: LOAM-linux-${arch}.${ext}
+  # Spelt out like the deb's: the AppImage target writes ${arch} as "x86_64" (first CI run, 2026-10-17).
+  artifactName: LOAM-linux-x64.${ext}
 
 deb:
   # Spelt out: the deb target writes ${arch} as Debian's "amd64", and the workflow, the site and the docs name
