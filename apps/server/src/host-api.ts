@@ -2,15 +2,7 @@
 // uses to show and run the node. Never reachable over the network: whoever runs the node's process already
 // owns its data, so these calls take no session, like the Android host's Emergency Reset. Every change goes
 // through the same function the matching admin route uses, so the two can't drift.
-import {
-  type HostApi,
-  type HostLogLevel,
-  type HostResult,
-  type HostStatus,
-  type HostUser,
-  LoamConfigUpdateSchema,
-  type User,
-} from "@loam/schema";
+import { type HostApi, type HostLogLevel, type HostResult, type HostStatus, type HostUser, LlmModelsRequestSchema, LoamConfigUpdateSchema, type User } from "@loam/schema";
 
 import type { AppContext } from "./app-context.js";
 import { localInterfaceAddresses, remoteClientAddresses } from "./net.js";
@@ -111,6 +103,13 @@ export function createHostApi(ctx: AppContext, hooks: HostApiHooks): HostApi {
         const result = applyConfigUpdate(ctx, parsed.data);
         return result.ok ? { ok: true, value: ctx.redactedConfig() } : { ok: false, error: result.error };
       });
+    },
+    llmModels(request) {
+      const parsed = LlmModelsRequestSchema.safeParse(request);
+      if (!parsed.success) {
+        throw new Error("Invalid LLM models request");
+      }
+      return ctx.llm.listModels(parsed.data);
     },
     users() {
       const online = new Set(ctx.onlineUserIds());

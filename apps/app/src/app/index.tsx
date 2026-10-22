@@ -1260,6 +1260,13 @@ function HostScreen() {
           visible={modelManagerOpen}
           onClose={() => setModelManagerOpen(false)}
           channel={nodejs.channel}
+          onOpenAdmin={() => {
+            // The web client's admin page, assistant section, in this WebView (the host is its admin).
+            setModelManagerOpen(false);
+            webViewRef.current?.injectJavaScript(
+              `history.pushState(null, '', '/admin#llm'); dispatchEvent(new PopStateEvent('popstate')); true;`,
+            );
+          }}
         />
         <DbEncryptionSettingsOverlay
           visible={dbEncryptionOpen}

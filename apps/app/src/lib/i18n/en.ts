@@ -325,6 +325,8 @@ export const en = {
   // The on-device model manager (src/components/model-manager.tsx) and its download disclosure.
   "model.title": "On-device model",
   "model.intro": "Optional and off by default. Download a small model to run LOAM's assistant fully on this phone, with no internet and no laptop needed. Everything below runs and stays on-device.",
+  "model.otherBackends": "Rather not run a model on this phone? The assistant can also answer through Ollama on a laptop on this network, or through an online chat service such as OpenRouter (internet needed). Both are set up in LOAM's admin page.",
+  "model.openAdmin": "Open the assistant settings",
   "model.thisDevice": "This device",
   "model.deviceStats": "RAM: {ram} · Free storage: {free}",
   "model.activeName": "Active: {name}",

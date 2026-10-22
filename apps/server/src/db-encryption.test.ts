@@ -605,6 +605,38 @@ describe("encryption at rest + key-discard kill switch", () => {
     expect(config.sync.token).toBeUndefined();
   });
 
+  it("strips the chat service's API key from the config a hooked fixed-key wipe carries across the restart, switching that service off", async () => {
+    const hook = installFakeWipeRestartHook();
+    const { app, dataDir } = await makeEncryptedApp(
+      { dbEncryptionKey: "key A", dbEncryptionMode: "persistent" },
+      { killSwitch: { enabled: true } },
+    );
+    const admin = await session(app);
+    expect(
+      (
+        await app.server.inject({
+          method: "PATCH",
+          url: "/api/admin/config",
+          headers: { cookie: admin.cookie },
+          payload: { llm: { openai: { enabled: true, baseUrl: "https://openrouter.ai/api/v1", model: "m", apiKey: "sk-or-v1-plaintext-service-key" } } },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const wipe = await app.server.inject({ method: "POST", url: "/api/admin/kill-switch", headers: { cookie: admin.cookie }, payload: { confirm: "wipe" } });
+    expect(wipe.statusCode).toBe(200);
+    expect(hook.calls).toBe(1);
+
+    // Neither plain file the reset writes may hold the key, and the service it fed is off until a key is set again.
+    for (const file of ["config.json", ".loam-wipe-phase"]) {
+      const text = readFileSync(join(dataDir, file), "utf8");
+      expect(text, file).not.toContain("sk-or-v1-plaintext-service-key");
+    }
+    const persisted = JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8")) as { llm: { openai: { enabled: boolean; apiKey?: string } } };
+    expect(persisted.llm.openai.apiKey).toBeUndefined();
+    expect(persisted.llm.openai.enabled).toBe(false);
+  });
+
   it("the NO-HOOK fixed-key wipe persists config.json (with DB-only admin changes) BEFORE the phase, so it survives even though the wipe deletes the DB", async () => {
     const { app, dataDir } = await makeEncryptedApp(
       { dbEncryptionKey: "key A", dbEncryptionMode: "persistent" },

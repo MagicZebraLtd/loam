@@ -29,6 +29,16 @@ describe("SettingsScreen", () => {
     expect(buttonWith(root, "Hold to erase and start over")).toBeTruthy();
   });
 
+  it("opens the web admin page's assistant section while running, and says to start the network otherwise", () => {
+    const running = settings("running");
+    click(buttonWith(running.root, "Set up the assistant"));
+    expect(running.bridge.calls).toContain("openClient:assistant");
+
+    const stopped = settings("stopped");
+    expect(buttonWith(stopped.root, "Set up the assistant")).toBeUndefined();
+    expect(stopped.root.textContent).toContain("Start the network to set up the assistant.");
+  });
+
   it("takes a typed join address when stopped, and has no Emergency Reset", () => {
     const { root } = settings("stopped");
     expect(root.querySelector('input[name="joinHost"]')).toBeTruthy();

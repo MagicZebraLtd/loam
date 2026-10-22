@@ -113,6 +113,9 @@ onboarded.**
 - Remainder: T1/T2/D1 test-debt, sweep nits, accessibility pass.
 
 ### Track 3 — Cloud LLM experiment *(separate branch; optional, loud, off by default)*
+**Provider part BUILT (2026-10-22, docs/06):** `llm.openai`, an OpenAI-compatible backend (OpenRouter et al)
+beside Ollama and on-device, DM-only, write-only key, admin/TUI/desktop/Android set-up, cloud refused under
+`hardened`. The in-channel bot and its consent model below are still not built.
 The ex-group-D provider work (`llm.provider`: `ollama` | `openai` | `on-device`; OpenRouter et al),
 **DM-only initially**, with the consent model tightened per the review: an in-channel bot requires
 **channel-level admin enablement + persistent participant-visible disclosure** — a mention exports

@@ -11,9 +11,11 @@ import { clipboard, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, 
 import type { z } from "zod";
 
 import {
+  CLIENT_PAGE_PATHS,
   CopyRequestSchema,
   IPC,
   MakeAdminRequestSchema,
+  OpenClientRequestSchema,
   OpenExternalRequestSchema,
   RevokeCodeRequestSchema,
   SettingsUpdateSchema,
@@ -88,10 +90,11 @@ export function registerIpc(context: IpcContext): void {
   handle(IPC.start, () => controller.start());
   handle(IPC.stop, () => controller.stop());
   handle(IPC.newNetwork, () => controller.newNetwork());
-  handle(IPC.openClient, () => {
+  handle(IPC.openClient, (payload) => {
+    const request = parse(OpenClientRequestSchema, payload ?? {});
     const origin = controller.localOrigin();
-    if (origin) {
-      windows.openClient(origin, controller.clientStorageInMemory());
+    if (request && origin) {
+      windows.openClient(origin, controller.clientStorageInMemory(), request.page ? CLIENT_PAGE_PATHS[request.page] : undefined);
     }
   });
   handle(IPC.copy, (payload) => {

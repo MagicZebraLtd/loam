@@ -313,6 +313,8 @@ export const pt: Partial<AppCatalog> = {
   "encryption.savePassphrase": "Salvar frase secreta",
   "model.title": "Modelo no dispositivo",
   "model.intro": "Opcional e desativado por padrão. Baixe um modelo pequeno para executar o assistente do LOAM inteiramente neste celular, sem internet e sem precisar de notebook. Tudo abaixo é executado e fica no dispositivo.",
+  "model.otherBackends": "Prefere não executar um modelo neste celular? O assistente também pode responder pelo Ollama em um notebook desta rede, ou por um serviço de chat on-line como o OpenRouter (precisa de internet). Os dois são configurados na página de administração do LOAM.",
+  "model.openAdmin": "Abrir as configurações do assistente",
   "model.thisDevice": "Este dispositivo",
   "model.deviceStats": "RAM: {ram} · Armazenamento livre: {free}",
   "model.activeName": "Ativo: {name}",

@@ -94,6 +94,9 @@ type ModelManagerOverlayProps = {
   /** The nodejs-mobile channel (`nodejs.channel` from index.tsx) — same bridge on-device-llm.ts and
    * mesh-courier.ts use to talk to the launcher. */
   channel: BridgeChannel;
+  /** Open the web admin page's assistant section (Ollama on a laptop, or a chat service), for hosts who
+   * would rather not run a model on the phone. The screen behind closes this overlay first. */
+  onOpenAdmin?: () => void;
 };
 
 /**
@@ -103,7 +106,7 @@ type ModelManagerOverlayProps = {
  * harmless with no model downloaded (the server already treats an absent on-device model as a
  * graceful "no model configured" error, never a crash).
  */
-export function ModelManagerOverlay({ visible, onClose, channel }: ModelManagerOverlayProps) {
+export function ModelManagerOverlay({ visible, onClose, channel, onOpenAdmin }: ModelManagerOverlayProps) {
   const theme = useTheme();
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
   const [managerState, setManagerState] = useState<ModelManagerState>({ downloaded: [] });
@@ -721,6 +724,17 @@ export function ModelManagerOverlay({ visible, onClose, channel }: ModelManagerO
               <ThemedText type="small" themeColor="textSecondary">
                 {t('model.intro')}
               </ThemedText>
+
+              {onOpenAdmin ? (
+                <ThemedView type="backgroundElement" style={styles.capabilityCard}>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {t('model.otherBackends')}
+                  </ThemedText>
+                  <Pressable onPress={onOpenAdmin} accessibilityRole="button" hitSlop={Spacing.two}>
+                    <ThemedText type="link">{t('model.openAdmin')}</ThemedText>
+                  </Pressable>
+                </ThemedView>
+              ) : null}
 
               {capabilities ? (
                 <ThemedView type="backgroundElement" style={styles.capabilityCard}>

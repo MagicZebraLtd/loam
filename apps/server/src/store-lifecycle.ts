@@ -718,12 +718,18 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
    * config.json: both are plain, unprotected files (scrypt-hashed secrets are safe to persist as-is). A node
    * that was syncing WITH a token must not come back syncing WITHOUT one (pulling unauthenticated, and its
    * own `/api/sync/*` open to anyone), so when a token is stripped sync is turned off in the same snapshot;
-   * the operator sets a new token and turns it on again. Idempotent: a config with no token is unchanged.
+   * the operator sets a new token and turns it on again. The chat service's API key (`llm.openai.apiKey`,
+   * the other plaintext bearer secret) is stripped the same way, and a service that relied on it is switched
+   * off rather than left answering every DM with an error; the admin pastes the key again. Idempotent: a
+   * config with neither secret is unchanged.
    */
   function sanitizeConfigForRestart(config: LoamConfig): LoamConfig {
+    const { apiKey, apiKeySet: _never, ...openai } = config.llm.openai;
+    void _never;
     return {
       ...config,
       sync: { ...config.sync, token: undefined, enabled: restartDisablesSync(config) ? false : config.sync.enabled },
+      llm: { ...config.llm, openai: { ...openai, enabled: apiKey === undefined ? openai.enabled : false } },
     };
   }
 

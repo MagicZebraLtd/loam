@@ -542,9 +542,18 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
 - **Avatar uploads**: base64 JSON body, ≤128KB, magic-byte signature checked against declared MIME,
   written to `.loam/avatars/` under an `avt_<16hex>` id. Profile/admin edits may not name any image file
   but the user's current one. Original files never leave the browser (cropped client-side to 256×256).
-- **LLM (optional)**: when `llm.ollama.enabled`, a bot user appears as a DM contact. DMing it streams
-  a reply from Ollama's `/api/chat` into a new assistant message, updated incrementally. All gated on
-  config; absent config = no bot, no LLM routes. `botId` must be an `llm.*` id (≤64) and may not name a
+- **LLM (optional)**: three backends, all off by default, one active at a time (`activeLlmProvider` in
+  `@loam/schema`: the on-device model wins, then an OpenAI-compatible service, then Ollama). `llm.ollama`
+  (Ollama's own `/api/chat`), `llm.openai` (any **OpenAI-compatible** `/chat/completions` service, streamed as
+  SSE: OpenRouter, OpenAI, Groq, Mistral, LM Studio, llama.cpp server; `OPENAI_COMPATIBLE_PRESETS` fills the
+  base URL), `llm.onDevice` (Android). The service's `apiKey` is **write-only**: stored with the config (in
+  the clear, like `sync.token`), never returned by `GET /api/admin/config` or the host API (`apiKeySet`
+  instead), kept by an update that omits it, cleared by `""`. `POST /api/admin/llm/models` (admin; host API
+  `llmModels`) lists a backend's models for the screens' Test button, answering 200 with `{ ok: false, code }`
+  on failure. A **hardened** network refuses a cloud service (`llm_cloud_not_allowed` on PATCH; a hand-edited
+  config.json boots with the assistant off) but allows a local one (`isLocalNetworkUrl`). When a backend is
+  active, a bot user appears as a DM contact and DMing it streams a reply into a new assistant message,
+  updated incrementally. Absent config = no bot, no LLM routes. `botId` must be an `llm.*` id (≤64) and may not name a
   non-bot user (PATCH 400; at boot an out-of-namespace id is dropped for the default with a warning, and
   one naming a person skips the bot). Only the configured bot is on the roster (`visibleUsers`): a bot
   record under an old or repaired id stays in the DB but is hidden (logged once when a repair orphans one); `botDisplayName` ≤80, `model` ≤120. At most one reply in flight per user and 2 node-wide (`429 assistant_busy`); a moderator

@@ -239,8 +239,8 @@ export function createFakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       push({ phase: "setup", capabilities, settings });
       return ok;
     },
-    async openClient() {
-      record("openClient");
+    async openClient(request) {
+      record(request?.page ? `openClient:${request.page}` : "openClient");
     },
     async copy(text) {
       record("copy");

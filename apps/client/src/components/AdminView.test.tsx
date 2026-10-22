@@ -34,6 +34,7 @@ const config: LoamConfig = {
   },
   llm: {
     ollama: { enabled: false, baseUrl: "http://localhost:11434", model: "llama3", botId: "llm.bot", botDisplayName: "Assistant" },
+    openai: { enabled: false, baseUrl: "https://openrouter.ai/api/v1", model: "google/gemma", apiKeySet: false },
     onDevice: { enabled: false },
   },
   admin: { bootstrap: "firstUser" },

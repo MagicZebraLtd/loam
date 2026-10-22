@@ -7,6 +7,14 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **The assistant can answer through an online or local chat service**, not only Ollama: OpenRouter,
+  OpenAI, Groq, Mistral, LM Studio, llama.cpp server, or any other service with an OpenAI-style API. Admins
+  pick where the assistant runs (off, Ollama, a chat service, or on the Android phone), choose a service by
+  name, paste its key (kept on the host and never shown again, not even to admins), press Test connection
+  to pick a model from the service's list, and are told plainly when messages to the assistant will leave
+  the network. The same settings are in the `loamnet` Settings screen; the desktop app's Settings and the
+  Android host's AI assistant screen open them. A hardened network only accepts a service on this computer
+  or the local network. Off by default; nothing changes for a network that doesn't turn it on.
 - **A desktop app for Mac, Windows and Linux** (`apps/desktop`, Electron). Open it, answer a few questions,
   and it shows the code people nearby scan to join; you are the network's admin, and closing the window keeps
   the network running until you quit. It has the same screens as the phone host (the code, display mode,

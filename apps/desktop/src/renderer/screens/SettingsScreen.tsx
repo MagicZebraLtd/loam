@@ -163,6 +163,22 @@ export function SettingsScreen({ bridge, state }: { bridge: DesktopBridge; state
           </div>
         </form>
 
+        <section aria-labelledby="settings-assistant" className="card">
+          <h2 className="card-title" id="settings-assistant">
+            {t("settings.assistantTitle")}
+          </h2>
+          <p className="muted">{t("settings.assistantBody")}</p>
+          {running ? (
+            <div>
+              <button className="btn btn-secondary" onClick={() => void bridge.openClient({ page: "assistant" })} type="button">
+                {t("settings.assistantOpen")}
+              </button>
+            </div>
+          ) : (
+            <p className="field-hint">{t("settings.assistantNotRunning")}</p>
+          )}
+        </section>
+
         <section aria-labelledby="settings-security" className="card">
           <h2 className="card-title" id="settings-security">
             {t("settings.securityTitle")}

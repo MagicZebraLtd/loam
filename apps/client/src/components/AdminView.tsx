@@ -1,6 +1,7 @@
 import {
   AdminBootstrapStrategySchema,
   JoinPolicySchema,
+  LlmModelsResponseSchema,
   LoamConfigSchema,
   LocaleSchema,
   securityProfilePreset,
@@ -10,6 +11,8 @@ import {
   type FeatureFlags,
   type IdentityConfig,
   type JoinPolicy,
+  type LlmModelsRequest,
+  type LlmModelsResponse,
   type LoamConfig,
   type SecurityProfile,
   type User,
@@ -254,7 +257,9 @@ export function AdminView({
         node: adminConfig.node,
         identity: adminConfig.identity,
         features: adminConfig.features,
-        llm: { ollama: adminConfig.llm.ollama, onDevice: adminConfig.llm.onDevice },
+        // `llm.openai.apiKey` rides only when the admin typed one ("" clears it); `apiKeySet` is read-only
+        // and the server strips it.
+        llm: { ollama: adminConfig.llm.ollama, openai: adminConfig.llm.openai, onDevice: adminConfig.llm.onDevice },
         admin: {
           bootstrap: adminConfig.admin.bootstrap,
           ...(passphrase.trim() ? { passphrase: passphrase.trim() } : {}),
@@ -317,6 +322,21 @@ export function AdminView({
         ? { ...previous, llm: { ...previous.llm, ollama: { ...previous.llm.ollama, ...update } } }
         : previous,
     );
+  }
+
+  function setOpenAi(update: Partial<LoamConfig["llm"]["openai"]>): void {
+    setAdminConfig((previous) =>
+      previous
+        ? { ...previous, llm: { ...previous.llm, openai: { ...previous.llm.openai, ...update } } }
+        : previous,
+    );
+  }
+
+  /** Ask the node which models a backend offers (the LLM panel's Test button). */
+  async function listLlmModels(request: LlmModelsRequest): Promise<LlmModelsResponse> {
+    const response = await encryptedFetch("POST", "/api/admin/llm/models", request);
+    const parsed = LlmModelsResponseSchema.safeParse(await response.json().catch(() => undefined));
+    return parsed.success ? parsed.data : { ok: false, code: "llm_bad_response" };
   }
 
   function setOnDevice(update: Partial<LoamConfig["llm"]["onDevice"]>): void {
@@ -805,10 +825,11 @@ export function AdminView({
 
               <AdminSection id="llm" label={t("admin.llmEyebrow")} onSubmit={submitConfig}>
                 <LlmPanel
-                  onDevice={adminConfig.llm.onDevice}
-                  ollama={adminConfig.llm.ollama}
+                  llm={adminConfig.llm}
+                  onListModels={listLlmModels}
                   onOllamaChange={setOllama}
                   onOnDeviceChange={setOnDevice}
+                  onOpenAiChange={setOpenAi}
                   saving={saving}
                 />
               </AdminSection>

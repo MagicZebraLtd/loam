@@ -2,10 +2,15 @@
 
 ## Current state (what exists)
 
-All in `apps/server/src/llm.ts`, gated on `llm.ollama.enabled` (or `llm.onDevice.enabled`, below):
+All in `apps/server/src/llm.ts`, gated on a backend being enabled (`activeLlmProvider` in `@loam/schema`):
 
-- **One provider, one model**: `streamOllamaChat()` POSTs to Ollama `/api/chat` with `stream: true`, a
-  5-minute abort timeout, parses newline-delimited JSON deltas.
+- **Three backends, one active at a time**, each off by default: `llm.ollama` (Ollama's own `/api/chat`,
+  newline-delimited JSON), `llm.openai` (any **OpenAI-compatible** service's `/chat/completions`, streamed
+  as SSE `data:` chunks: OpenRouter, OpenAI, Groq, Mistral, and local servers such as LM Studio or
+  llama.cpp server), and `llm.onDevice` (the Android host's own model, below). Precedence when more than one
+  is switched on: on-device, then the service, then Ollama; the admin screens switch exactly one on, so
+  the two never disagree. One 5-minute timeout covers a streamed reply whichever backend answers
+  (`streamLines` reads the body line by line for both parsers). See "The OpenAI-compatible service" below.
 - **DM-only bot**: `createAssistantResponse()` fires when a user DMs the configured bot user (`type: "bot"`).
   There is no channel participation and no `@mention` support.
 - **Bot identity is bounded**: `llm.ollama.botId` must be an `llm.*` id (`BotIdSchema`, ≤64 chars) and
@@ -32,6 +37,53 @@ All in `apps/server/src/llm.ts`, gated on `llm.ollama.enabled` (or `llm.onDevice
   **finalized at load** (`finalizeInterruptedStreams`: partial text kept, or a neutral "interrupted" body),
   so it no longer sits un-reapable and un-deletable.
 - **Still missing**: user-initiated cancellation and a per-user rate limit/queue beyond the bound above.
+
+## The OpenAI-compatible service (`llm.openai`): optional, off by default
+
+Built 2026-10-22 (the "provider abstraction" item below, and docs/29 Track 3's provider part).
+`llm.openai { enabled, baseUrl, model, apiKey? }`: `baseUrl` is the base of the service's OpenAI-style API
+(`https://openrouter.ai/api/v1`, `https://api.openai.com/v1`, `http://localhost:1234/v1` for LM Studio);
+`OPENAI_COMPATIBLE_PRESETS` in `@loam/schema` lists the services the screens offer by name, each marked
+`cloud` or local. The bot's identity (`botId`, `botDisplayName`, `systemPrompt`) stays in `llm.ollama`,
+shared by every backend, so switching keeps the same DM contact.
+
+**The key is write-only.** It is stored with the node's config (in the clear, like `sync.token`: the node
+has to present it), and never returned: `GET /api/admin/config` and the host API's `config()` replace it
+with `apiKeySet: true|false` (`redactedConfig`). An update that leaves `apiKey` out keeps the stored key, an
+empty string clears it, and the read-only `apiKeySet` a screen echoes back is stripped by `mergeConfig`.
+The key goes in the `Authorization: Bearer` header of the two requests the node makes and nowhere else
+(a `user:pass@host` base URL would ride in the request too; the schema allows it, so don't). A service's
+error text (which can echo a key's prefix or the URL) goes to the log only: the first line of a failed
+chat request at error level with the stack, a failed model list at debug level; a member sees the plain
+`ASSISTANT_FAILURE_BODY`. A fixed-key Emergency Reset strips the key from the config snapshot it carries
+across the restart (`sanitizeConfigForRestart`, like `sync.token`) and switches the service off, so the
+key never lands in `config.json` or `.loam-wipe-phase`; the admin pastes it again afterwards.
+
+**`POST /api/admin/llm/models`** (admin only; the host API's `llmModels` for the TUI) asks a backend which
+models it offers: Ollama's `GET /api/tags` or the service's `GET /models`, 15-second timeout, names
+deduplicated, sorted and capped at 500. The request names the backend and may carry the connection to
+try (`baseUrl`, `apiKey`), so a screen can test before saving; a key left out means the stored key. A
+backend's failure is the answer, not an HTTP error: 200 with `{ ok: false, code }` where `code` is
+`llm_unreachable`, `llm_unauthorized` (401/403 from the backend), `llm_bad_response` or `llm_not_allowed`.
+(A 401 from this node would read to the client's transport as its own session expiring.)
+
+**Hardened networks keep messages local.** Under `security.profile: "hardened"` the service may only be a
+local one (`isLocalNetworkUrl`: loopback, RFC 1918, link-local, `.local`/`.localhost`, a bare host name);
+`PATCH /api/admin/config` refuses a cloud `baseUrl` with `llm_cloud_not_allowed` (also when switching an
+already-cloud node to hardened), `ensureBotUser` treats a hand-edited config.json that pairs them as
+"assistant off" with a boot warning, and the models endpoint answers `llm_not_allowed`. Ollama and the
+on-device model are local by construction.
+
+**Where it is set up.** The web admin page's Assistant panel (`LlmPanel.tsx`: a "where the assistant runs"
+picker, a service preset, address, key field with Clear, Test connection that fills a model list, and a
+note naming the host the messages go to when the service is a cloud one); the `loamnet` TUI's Settings
+screen (the same rows, the key typed blind, the model picked from the backend's list); the desktop host's
+Settings has an Assistant card that opens the web admin page at that section (`openClient({ page:
+"assistant" })`, the only non-home page the main process allows); the Android host's model manager
+(menu, AI assistant) links to the same admin section for hosts who'd rather use a laptop or a service.
+
+**Still not built:** channel participation / `@mention` (docs/29 Track 3's consent model), a token
+budget, cancellation, tool use.
 
 ## On-device model (Android host) — optional, off by default
 
@@ -99,11 +151,11 @@ shipped.
 
 ## Improvements to investigate (roughly ordered)
 
-1. **Provider abstraction.** Extract a `ChatProvider` interface (`streamChat(messages, opts)`), then
-   implement it for: Ollama (`/api/chat`), any **OpenAI-compatible** endpoint (llama.cpp server, LM
-   Studio, vLLM — and Ollama's own `/v1/chat/completions`), and cloud APIs (Anthropic/OpenAI) for the
-   internet-hosted `authenticated` mode. Standardizing on the OpenAI-compatible shape covers most local
-   backends with one client. Config: `llm.provider` + per-provider settings.
+1. ~~**Provider abstraction.**~~ **Built (2026-10-22, above):** `streamChat` switches on
+   `activeLlmProvider`; the OpenAI-compatible shape covers OpenRouter, OpenAI, Groq, Mistral, LM Studio,
+   llama.cpp server, vLLM and Ollama's own `/v1`. Anthropic's native API is not a separate backend
+   (OpenRouter fronts it). There is no `llm.provider` field: the three `enabled` flags stayed, because the
+   Android launcher writes `llm.onDevice.enabled` itself; the schema helper derives the active one.
 2. **Fix the streaming protocol.** Wire the existing `StreamEvent` schema over the WebSocket: emit
    `start` once, `delta` with only the new text per token, `end`/`error` to finish. Client appends deltas
    locally. Removes the O(n²) rebroadcast and matches what the schema already anticipates. Persist the
