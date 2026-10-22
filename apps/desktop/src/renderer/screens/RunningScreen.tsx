@@ -29,7 +29,7 @@ export function RunningScreen({ bridge, state }: { bridge: DesktopBridge; state:
   const displayButton = useRef<HTMLButtonElement>(null);
   const linkButton = useRef<HTMLButtonElement>(null);
   const returnTo = useRef<View>("main");
-  const copiedTimer = useRef<ReturnType<typeof setTimeout>>();
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // A network that keeps its messages only while it runs loses them for good when stopped.
   const ephemeral = node.dbEncryption === "ephemeral";
 

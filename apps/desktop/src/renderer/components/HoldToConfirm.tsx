@@ -30,7 +30,7 @@ export function HoldToConfirm({
 }) {
   const [holding, setHolding] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Read inside the timer, so a re-render with a new callback while held still calls the latest one.
   const confirm = useRef(onConfirm);
   confirm.current = onConfirm;
