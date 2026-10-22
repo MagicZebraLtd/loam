@@ -126,7 +126,17 @@ function jumpToSection(key: string): void {
   }
   const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
   const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - margin;
-  scroller.scrollTo({ top: Math.max(0, top), behavior });
+  if (typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ top: Math.max(0, top), behavior });
+  } else {
+    scroller.scrollTop = Math.max(0, top);
+  }
+}
+
+/** The section a `/admin#admin-<key>` address asks for (the desktop and Android hosts open the assistant this way). */
+function sectionFromHash(hash: string): string | undefined {
+  const key = hash.startsWith("#admin-") ? hash.slice("#admin-".length) : "";
+  return adminSections().some(([candidate]) => candidate === key) ? key : undefined;
 }
 
 /**
@@ -206,6 +216,20 @@ export function AdminView({
   // Peer URLs the server had when this form last loaded or saved. A node can link itself while the form is
   // open (a "Link a node" code), and the form must take that peer in, or its next save would drop it.
   const knownPeerUrls = useRef(new Set<string>());
+  // The sections exist only once the config has loaded, so a `#admin-<key>` in the address is honoured then,
+  // once (a later hash change is the nav's own click).
+  const jumpedToHash = useRef(false);
+
+  useEffect(() => {
+    if (!adminConfig || jumpedToHash.current) {
+      return;
+    }
+    jumpedToHash.current = true;
+    const key = sectionFromHash(window.location.hash);
+    if (key) {
+      requestAnimationFrame(() => jumpToSection(key));
+    }
+  }, [adminConfig]);
 
   useEffect(() => {
     if (!currentUser.isAdmin) {

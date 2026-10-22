@@ -104,6 +104,21 @@ describe("AdminView", () => {
     expect(host.querySelector(".empty-note")).not.toBeNull();
   });
 
+  it("jumps to the section a #admin-<key> address names once the config has loaded (the hosts' assistant deep link)", async () => {
+    window.location.hash = "#admin-llm";
+    try {
+      const host = mount(
+        <AdminView currentUser={admin} joinUrl="http://192.168.0.10:3000" onChannelUpsert={() => {}} onWiped={async () => {}} />,
+      );
+      await flush();
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      expect(host.querySelector("#admin-llm")).not.toBeNull();
+      expect(document.activeElement?.id).toBe("admin-llm");
+    } finally {
+      window.location.hash = "";
+    }
+  });
+
   it("loads and renders the config sections for an admin", async () => {
     const host = mount(
       <AdminView currentUser={admin} joinUrl="http://192.168.0.10:3000" onChannelUpsert={() => {}} onWiped={async () => {}} />,

@@ -1264,7 +1264,7 @@ function HostScreen() {
             // The web client's admin page, assistant section, in this WebView (the host is its admin).
             setModelManagerOpen(false);
             webViewRef.current?.injectJavaScript(
-              `history.pushState(null, '', '/admin#llm'); dispatchEvent(new PopStateEvent('popstate')); true;`,
+              `history.pushState(null, '', '/admin#admin-llm'); dispatchEvent(new PopStateEvent('popstate')); true;`,
             );
           }}
         />

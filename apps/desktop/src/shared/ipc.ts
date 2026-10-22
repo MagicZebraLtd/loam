@@ -195,7 +195,7 @@ export const CopyRequestSchema = z.object({ text: z.string().max(4096) });
 export const OpenClientRequestSchema = z.object({ page: z.enum(["home", "assistant"]).optional() });
 export type OpenClientRequest = z.infer<typeof OpenClientRequestSchema>;
 /** The path each `OpenClientRequest.page` loads; the main process allows nothing else. */
-export const CLIENT_PAGE_PATHS: Record<NonNullable<OpenClientRequest["page"]>, string> = { home: "/", assistant: "/admin#llm" };
+export const CLIENT_PAGE_PATHS: Record<NonNullable<OpenClientRequest["page"]>, string> = { home: "/", assistant: "/admin#admin-llm" };
 export const OpenExternalRequestSchema = z.object({ url: z.string().url().max(2048) });
 export const MakeAdminRequestSchema = z.object({ userId: IdSchema });
 export const RevokeCodeRequestSchema = z.object({ code: z.string().max(128) });

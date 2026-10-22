@@ -79,7 +79,8 @@ picker, a service preset, address, key field with Clear, Test connection that fi
 note naming the host the messages go to when the service is a cloud one); the `loamnet` TUI's Settings
 screen (the same rows, the key typed blind, the model picked from the backend's list); the desktop host's
 Settings has an Assistant card that opens the web admin page at that section (`openClient({ page:
-"assistant" })`, the only non-home page the main process allows); the Android host's model manager
+"assistant" })` loads `/admin#admin-llm`, the only non-home page the main process allows; the admin page
+jumps to a `#admin-<section>` hash once its config has loaded); the Android host's model manager
 (menu, AI assistant) links to the same admin section for hosts who'd rather use a laptop or a service.
 
 **Still not built:** channel participation / `@mention` (docs/29 Track 3's consent model), a token
