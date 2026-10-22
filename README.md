@@ -196,8 +196,11 @@ computer, the same settings live in the admin area as **security profiles**
   clear their copy. On the Android app, and on a computer using a key that lives only in memory, the key
   is replaced too, so what's left on the storage can't be read ([docs/02](docs/02-kill-switch.md)).
 
-**Know the limits.** The host can read every message: it's the server. A host device taken while it's
-running, with the key in memory, can give up what it holds. LOAM raises the bar; it isn't a guarantee.
+**Know the limits.** The host can read every message: it's the server, as the operator of any chat
+service can. A host device taken while it's running, with the key in memory, can give up what it holds.
+LOAM is built for a local network: on an address reachable from the internet, anyone who finds an open
+network can join it, so a host that must do that should require approval to join and require encryption
+([docs/12](docs/12-operators-guide.md)). LOAM raises the bar; it isn't a guarantee.
 If your safety depends on it, get a professional review first. [`SECURITY.md`](SECURITY.md) has the full
 threat model, and every network serves its own privacy policy at `/privacy` (also on
 [loamnet.com](https://loamnet.com/privacy)).

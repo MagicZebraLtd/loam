@@ -115,6 +115,16 @@ from the config file or **Admin → Bootstrap**:
 (The Android app and `loamnet` use their own `hostDevice` strategy, whatever is configured: admin comes
 from the host's own screen.)
 
+### On an address the internet can reach: not what it is for
+
+LOAM is built for a local network: a hotspot, a venue's Wi-Fi, a LAN. Nothing stops a node from listening
+on a public address (a VPS, a port forward), but then everyone who finds the address is "nearby": an `open`
+join policy lets anyone in, the identity cap is per source address, and the join QR's key is only as
+secret as the page you show it on. If you must run a node like that, set **Who can join** to approval,
+set the connection encryption to **required** (or the Hardened profile, which does both), hand out the
+join link only to the people you mean, and expect the rate limits to be tested. It is not a hosted chat
+product and is not hardened as one.
+
 ### Behind an HTTPS reverse proxy: not supported
 
 LOAM is meant to be reached at a plain `http://` address on the local network, and every join link and QR

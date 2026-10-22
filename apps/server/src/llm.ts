@@ -144,11 +144,15 @@ async function* streamLines(url: string, headers: Record<string, string>, body: 
   }
 }
 
-/** The first line of a failed response's body, for the log (a model name, a quota message); never a member. */
+/**
+ * The first line of a failed response's body, for the log (a model name, a quota message); never a member.
+ * A service's 401 text can quote the start of the key it refused (OpenAI's does), so anything shaped like
+ * an API key is replaced before the line can reach the log.
+ */
 async function errorDetail(response: Response): Promise<string> {
   try {
     const text = (await response.text()).trim().split("\n")[0] ?? "";
-    return text ? ` ${text.slice(0, 200)}` : "";
+    return text ? ` ${text.slice(0, 200).replace(/\b(?:sk|or|gsk)[-_][A-Za-z0-9_*.-]{6,}/g, "[key]")}` : "";
   } catch {
     return "";
   }
