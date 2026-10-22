@@ -567,6 +567,16 @@ code {
   color: var(--on-deep-2);
 }
 
+/* The hero is dark in both colour schemes, so its outline button uses the on-deep colours, not --ink. */
+.hero .btn-ghost {
+  color: var(--on-deep);
+  border-color: rgba(234, 241, 236, 0.32);
+}
+
+.hero .btn-ghost:hover {
+  background: rgba(234, 241, 236, 0.08);
+}
+
 .hero-note {
   margin-top: 18px;
   font-size: 14px;
@@ -825,6 +835,11 @@ code {
 @media (min-width: 940px) {
   .start-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* The desktop app's card sits under the other two, across both columns. */
+  .start-card-wide {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1557,7 +1572,10 @@ code {
   margin-top: 28px;
 }
 
+/* Long commands (the checksum and attestation lines) wrap on a phone instead of widening the page: the
+   global `code` rule's nowrap would otherwise cancel the overflow-wrap. */
 .legal-body code {
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 

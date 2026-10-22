@@ -4,8 +4,8 @@
 > external full-codebase review). It is no longer the plan of record. Track 0 shipped (PR #118, released in
 > 0.5.0). Tracks 1 to 5 were not carried out as planned: the work that followed went to further security
 > reviews, Play Store readiness and the 0.5.0 and 0.6.0 features. Their items (the device run, media
-> encryption at rest, courier sync, the cloud LLM experiment, signed sync, the Reticulum spike) are still
-> open; [docs/25](25-backlog.md) lists what is open now and the [roadmap](roadmap.md) gives the public
+> encryption at rest, courier sync, the in-channel assistant, signed sync, the Reticulum spike) are still
+> open. The cloud LLM provider from Track 3 was built on 22 October 2026 (see Track 3); [docs/25](25-backlog.md) lists what is open now and the [roadmap](roadmap.md) gives the public
 > overview. Kept for the reasoning behind each track.
 
 Successor to `docs/27` (Path to MVP). Every open item in the consolidated backlog (`docs/25`) is dispositioned in §5 so

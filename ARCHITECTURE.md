@@ -10,16 +10,19 @@ LOAM is a local-first messaging app for places where the internet is missing, ov
 right tool. One device, an Android phone, a laptop or a Raspberry Pi, becomes the host and runs the
 whole network; people nearby scan a QR code and the web app opens in their browser. Nobody makes an
 account: each person gets an anonymous, generated identity and can post in channels, reply in threads,
-send direct messages, react, share pictures and files, and optionally talk to a small language model
-running on the host. Everything stays on the host and on the devices of the people using it, and
-switching the host off ends the network. The client is an installable web app that keeps a local copy
+send direct messages, react, share pictures and files, and optionally talk to an assistant. The
+assistant is a small language model on the host phone, a model on a computer the host points it at, or
+an online chat service the host connects. Unless the host links networks or connects such an
+assistant, everything stays on the host and on the devices of the people using it. Switching the host
+off ends the network. The client is an installable web app that keeps a local copy
 of what it has seen and reconnects on its own.
 
 Three priorities, in order, decide the trade-offs:
 
 1. **Simplicity**: scan and go; no setup, no install, no sign-up.
-2. **Privacy**: anonymous and ephemeral by default; nothing is collected, and nothing leaves the local
-   network unless the host links to another LOAM network.
+2. **Privacy**: anonymous and ephemeral by default; nothing is collected. Content leaves the local
+   network only when the host links to another LOAM network, or connects the assistant to another
+   computer or an online service (then messages sent to the assistant go there).
 3. **Resilience**: low bandwidth and connections that come and go are the normal case.
 
 ## Repository layout
@@ -33,6 +36,7 @@ is `pnpm@10.30.2`.
 | `apps/server` | The Fastify server: REST and WebSocket, SQLite behind a data-access layer, sync, mesh, the optional LLM assistant. |
 | `apps/client` | The Preact + Vite web app every participant uses, built as an installable PWA. |
 | `apps/app` | The Android host app (Expo SDK 57 / React Native 0.86): embedded Node.js server, hotspot, WebView, setup screens. |
+| `apps/desktop` | The desktop host app for macOS, Windows and Linux (Electron): runs the server in-process, with setup screens, the join QR and the web client in its own window. |
 | `apps/site` | The loamnet.com website (Vite, static HTML pages). |
 | `packages/schema` | `@loam/schema`: the Zod schemas and TypeScript types that form the client-server contract. |
 | `packages/crypto` | `@loam/crypto`: X25519 handshake, XChaCha20-Poly1305 framing and the Ed25519/X25519 sealed sender, on `@noble/*`. |
@@ -106,7 +110,7 @@ and hands it to the sibling modules:
 | `routes-session.ts`, `routes-users.ts`, `routes-channels.ts`, `routes-messages.ts`, `routes-sync-mesh.ts`, `routes-admin.ts` | REST routes by domain (users also covers moderation, reports, join approval, typing and attachments). |
 | `db.ts` | The `LoamStore` data-access layer and `openStore()`. |
 | `config.ts`, `secrets.ts`, `identity.ts`, `media.ts`, `ids.ts`, `defaults.ts`, `errors.ts`, `types.ts`, `boot-bridge.ts` | Pure helpers with no closure state. |
-| `server.ts`, `embedded.ts`, `embedded-main.ts` | Entry points: the plain process, the library entry (`startEmbeddedServer`) used by the CLI and the Android launcher, and the Android bundle entry. |
+| `server.ts`, `embedded.ts`, `embedded-main.ts` | Entry points: the plain process, the library entry (`startEmbeddedServer`) used by the CLI, the desktop app and the Android launcher, and the Android bundle entry. |
 
 Three conventions hold the modules together:
 
@@ -246,8 +250,10 @@ about 60 seconds without the server's 25-second heartbeat. `src/lib/identity.ts`
 server-confirmed user id and purges the cache when it changes. Markdown renders only through
 `src/lib/markdown.ts` (`snarkdown`, then `DOMPurify`, safe link protocols, `#k=` fragments stripped).
 
-The PWA caveat: `public/service-worker.js` caches the app shell (network-first for navigations,
-cache-first for hashed assets, never `/api` or `/ws`) and is registered only in production builds. A
+The PWA caveat: the service worker (`src/service-worker.ts`, bundled by the `loam:service-worker` Vite
+plugin into `dist/service-worker.js`) precaches the build's files and serves them cache-first, answers
+every navigation from one network-first request for `/`, never touches `/api` or `/ws`, and is
+registered only in production builds. A
 plain `http://<lan-ip>` origin is not a secure context and the browser refuses to register a service
 worker there, so the offline shell works only on a secure origin such as `http://localhost`. The
 IndexedDB cache does not depend on a service worker and works everywhere.
@@ -286,27 +292,34 @@ pnpm install
 pnpm build                     # every package, then the server (tsc) and the client (tsc -b && vite build)
 pnpm test                      # vitest in every workspace, then node --test over scripts/ and cli/test/
 pnpm --filter app typecheck    # the Android app's own type-check (it has no build script)
+pnpm --filter @loam/desktop typecheck      # the desktop app's main/preload/shared and renderer projects
+pnpm --filter @loam/server typecheck:test  # the server's test files, which the build excludes
 pnpm smoke:cli                 # pack and install loamnet, then drive the installed `loam`
 ```
 
-There is no lint script; type-checking happens inside `build`, plus the separate `typecheck` for
-`apps/app`. The suites: `packages/*` (schema, display-name, avatar, qr, crypto, tui); `apps/server`
+There is no lint script; type-checking happens inside `build`, plus the three separate type-checks
+above. The suites: `packages/*` (schema, display-name, avatar, qr, crypto, tui); `apps/server`
 (`src/db.test.ts` for the data-access layer, route suites by subject (`admin`, `channels`, `messages`,
 `moderation`, `kill-switch`, `transport`, `sync`, `mesh`…) driving `buildApp()` through `server.inject()`
 with a shared harness in `src/test-support/` (its header maps the files), and focused suites for realtime, llm, mesh-bridge, sync-transport,
 tombstone, net, embedded, invites, rate-limit, member rules and blocking); `apps/client` (Vitest with
 jsdom: `src/lib/*.test.ts` for markdown and XSS, IndexedDB round-trips with `fake-indexeddb`, parsers,
 transport and liveness, plus a `.test.tsx` beside most components; test files are excluded from the
-`tsc -b` build); `apps/app` (`src/**/*.test.ts`); and `scripts/check-versions.test.mjs` with
+`tsc -b` build); `apps/app` (`src/**/*.test.ts`); `apps/desktop` (`src/**/*.test.ts(x)`, main-process
+logic and the renderer screens); and `scripts/check-versions.test.mjs` with
 `cli/test/*.test.mjs` under `node --test`.
 
 CI (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`:
 `node scripts/check-versions.mjs` (every workspace `package.json`, `cli/package.json` and `app.json`
-`expo.version` must agree), `pnpm install --frozen-lockfile`, `pnpm run build`, `pnpm test`,
-`pnpm --filter app typecheck`, then `pnpm smoke:cli`. A second job builds on the pinned Node, then
-installs and drives the packed CLI under Node 22.14, the oldest version `loamnet` supports.
-`build-apk.yml` runs on tags: it re-checks versions against the tag, builds and tests, signs the APK and
-attaches it to the release.
+`expo.version` must agree), `pnpm install --frozen-lockfile`,
+`pnpm audit --prod --audit-level=high`, `pnpm run build`, `pnpm test`, the `apps/app`, desktop and
+server-test type-checks, then `pnpm smoke:cli`. A second job builds on the pinned Node, then installs and
+drives the packed CLI under Node 22.14, the oldest version `loamnet` supports. `build-apk.yml` runs on
+tags: it re-checks versions against the tag, builds and tests, signs the APK, records build provenance
+for the APK and the Play bundle, and attaches the APK with its `.sha256` to the release.
+`build-desktop.yml` runs on the same tags (or by hand): it builds the macOS, Windows and Linux installers
+on native runners, smoke-tests the packaged Linux AppImage, records their provenance and attaches them
+with `.sha256` files to the same release.
 
 Two things new contributors run into:
 
@@ -332,7 +345,7 @@ the entry says so.
 | `03-admin-ui.md` | Live | Admin bootstrap strategies, the claim route, config layering and the admin area. Its "remaining" list predates later work such as the channels and Safety panels. |
 | `04-android-host-app.md` | Live | The Android host: embedded Node, hotspot and Wi-Fi modes, join address discovery, setup screens, build and signing. |
 | `05-authentication.md` | Plan | Optional real accounts (Better Auth or atproto) as a deployment mode. Not built: no workspace package depends on an auth library. |
-| `06-llm.md` | Live | The assistant as built (Ollama and the on-device model), followed by a list of improvements to investigate that are not built. No banner. |
+| `06-llm.md` | Live | The assistant as built (Ollama, any OpenAI-compatible chat service, and the on-device model), followed by a list of improvements to investigate that are not built. No banner. |
 | `07-more-features.md` | Plan | A menu of candidate features ranked by fit; the table notes which rows have since landed. |
 | `08-transport-security.md` | Live | The app-layer transport encryption design: handshake, sealing, tunnel, pinning, image encryption. |
 | `09-security-profiles.md` | Live | `security.profile` as the authoritative bundle over join policy, retention, kill switch and transport mode. |
@@ -350,12 +363,13 @@ the entry says so.
 | `21-device-verification-checklist.md` | Live | On-device checks (model loading, SQLCipher keying, wipe timing, the host service) for shipped code that CI cannot exercise. The pass itself is outstanding. |
 | `22-atproto-p2p.md` | Historical | Portable identity and user-owned repos, as an introduction; superseded by `23`. |
 | `23-atproto-p2p-plan.md` | Plan | The revised plan of record for portable identity, pre-implementation after external review. |
-| `24-electron-desktop.md` | Investigation | Feasibility of a double-click desktop host. |
+| `24-electron-desktop.md` | Live | The desktop host app (Electron) for macOS, Windows and Linux: setup, key storage, Emergency Reset, packaging, signing, CI. Its first release ships with 0.7.0; its real-machine checks are in `21`. |
 | `25-backlog.md` | Live | The list of open work: §0 has the current open items, the older sections keep per-item detail. |
 | `26-prior-art-buzz.md` | Investigation | Findings from reading Block's Buzz. |
 | `27-path-to-mvp.md` | Historical | The pre-tester plan, superseded by `29`. |
 | `28-prior-art-reticulum.md` | Investigation | Findings on Reticulum as a candidate LoRa transport. |
 | `29-next-phase.md` | Historical | The August 2026 plan (stabilise, prove, extend). Track 0 shipped; the rest is still open and tracked in `25`. |
 | `30-play-store.md` | Live | The Google Play readiness audit of the release build and what remains in the Play Console. |
+| `audit-history.md` | Historical | Which security and code reviews took place and what kinds of problems they found, kept since the review ticket ids were removed from code comments. |
 | `decisions.md` | Live | The decision log: settled choices, and the open ones (identity mode, accounts, end-to-end encryption) with today's behaviour. |
 | `roadmap.md` | Live | The public roadmap: what is built, what is next, what is being considered. |

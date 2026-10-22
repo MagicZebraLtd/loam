@@ -1,6 +1,8 @@
 # 20 — Binding identity to the transport session (fixing the plaintext-cookie flaw)
 
-> **Status: BUILT & TESTED (v3, simplified) — pending external implementation review.** Server + client
+> **Status: BUILT, TESTED AND SHIPPED (v3, simplified).** It is merged and is how released nodes work
+> today (`GET /api/bootstrap` in `routes-session.ts`, `POST /api/session/resume` in
+> `transport-server.ts`). The "pending review" notes below are from before the merge. Server + client
 > landed on `feat/transport-auth-binding` (server 238 tests, client 177, full build + app typecheck
 > green): session `authMode`, the separate `transport_identity_tokens` namespace, `GET /api/bootstrap`,
 > the sealed `POST /api/session/resume` + `/api/session/logout`, tunnel-only content with identity via a
@@ -277,7 +279,7 @@ session under handshake-flood pressure (availability nuisance — the persisted 
 identity); a banned/revoked user can still re-mint a *fresh anonymous* identity (the existing ephemeral
 model — clearing a cookie already does this today; no access to the old identity's private state).
 
-*Pending external implementation review before merge; this is the implementation spec.*
+*This was the implementation spec. It has since been merged and shipped (see the status at the top).*
 
 ## 16. Device-wipe lifecycle hardening (external review, folded in)
 

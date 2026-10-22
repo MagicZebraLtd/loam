@@ -1,6 +1,6 @@
 # LOAM roadmap
 
-> **Status: current (9 October 2026, version 0.6.0).** What LOAM does today, what comes next, and what is
+> **Status: current (22 October 2026; 0.6.4 is released, 0.7.0 is next).** What LOAM does today, what comes next, and what is
 > being considered. Nothing below the "Next" section has a date. The detailed list of open work is
 > [docs/25](25-backlog.md); settled and open design choices are in [decisions.md](decisions.md).
 
@@ -24,21 +24,29 @@ Features that would weaken one of those come last or not at all.
   starting with the fact that the host can read everything.
 - **Linking networks:** two networks can share their public channels.
 - **Fifteen languages**, five of them right to left.
-- **An optional assistant:** a small model on the host phone, or a laptop's Ollama model, in direct
-  messages.
+- **An optional assistant** in direct messages, off by default: a small model on the host phone, an
+  Ollama model on a computer, or any chat service with an OpenAI-style API (local ones such as LM Studio,
+  or online ones such as OpenRouter). With an online service, messages sent to the assistant leave the
+  network for that service. A Hardened network accepts only a service on the host computer or the local
+  network.
 - **Mesh mail (experimental, off by default):** sealed messages that linked networks carry for each other,
   readable only by the recipient's network.
 
 ## Next
 
-The 0.6.0 release and the work around it:
+The 0.7.0 release and the work around it:
 
+- **A desktop app** for hosts who don't want a terminal: macOS, Windows and Linux, built and first
+  released with 0.7.0. The Mac builds are signed and notarized by Apple. The Windows installer is not
+  signed yet (SignPath Foundation is the plan), and the Windows and Linux builds have not yet been run on
+  real machines ([docs/24](24-electron-desktop.md)).
 - **Testing on real phones.** Several features are verified in code and CI but not yet on a physical
   device: the encrypted database (keying, changing and wiping it), the on-device model, the host's
   background service, and the Android changes in recent releases. The checklist is
   [docs/21](21-device-verification-checklist.md).
-- **Google Play.** The app meets Play's requirements in code; publishing needs the store paperwork and the
-  device run above ([docs/30](30-play-store.md)). The APK on GitHub Releases stays available.
+- **Google Play.** The app meets Play's requirements in code, and 0.6.4 is on Play's internal testing
+  track. A public release needs the rest of the store paperwork and the device run above
+  ([docs/30](30-play-store.md)). The APK on GitHub Releases stays available.
 - **Tablets, Chromebooks and Android laptops.** The host app supports large screens and keyboards; it needs
   testing on those devices.
 - **Windows hosts.** `loamnet` runs on Windows, but how its file writes survive a crash there hasn't been
@@ -62,13 +70,13 @@ None of these are built. Each links to the design or briefing it comes from.
 | **Optional accounts** for networks hosted on the internet | An open decision ([docs/05](05-authentication.md)). The anonymous, account-free default would stay. |
 | **Long-range radio (LoRa)**, possibly through Reticulum | Investigated ([docs/28](28-prior-art-reticulum.md)); the sync protocol is what a radio link would carry. |
 | **Offline maps** for shared locations | Location messages exist; the map is designed but not built ([docs/10](10-maps-location-sharing.md)). |
-| **A smarter assistant**: search over the network's own messages, more model choices | Listed in [docs/06](06-llm.md). |
-| **A desktop app** for hosts who don't want a terminal | Built, first release with 0.7.0. It has not yet been run on real Windows and Linux machines, and its installers are not signed yet ([docs/24](24-electron-desktop.md)). |
+| **A smarter assistant**: search over the network's own messages, answering in channels | Listed in [docs/06](06-llm.md). |
 
 ## What LOAM won't do
 
 - Collect anything: no analytics, crash reports, accounts or cloud service. Messages leave a network only
-  when its operator links it to another network or points the assistant at another machine.
+  when its operator links it to another network, or points the assistant at another machine or an online
+  chat service.
 - Rush the radio transport or the identity cryptography. Earlier apps in this space were hurt by shipping
   those before they were proven, so they stay experimental until they have been tested on real devices
   and reviewed.

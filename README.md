@@ -78,17 +78,18 @@ soil. We picked the word first and worked out the letters afterwards.)*
 3. **Show the code.** The share screen shows what people scan. **Display mode** puts it full screen,
    keeps the screen on and pins LOAM in front, for a phone left where people can see it.
 
-The host phone is the network's admin automatically. Needs Android 7 or newer; hosting a hotspot needs
-Android 8 or newer.
+The host phone is the network's admin automatically. Needs 64-bit Android 7 or newer; hosting a hotspot
+needs Android 8 or newer.
 
 ### On a Mac, Linux or Windows computer
 
 **The desktop app** is the double-click way: download LOAM for your system from
 [loamnet.com/desktop](https://loamnet.com/desktop), open it, answer a few questions, and it shows the code
-to scan. Closing its window keeps the network running; Quit stops it. It is not signed yet, so the first
-launch needs an extra click on each system (the page says which), and it has not yet been run on every
-system it targets. It is unreleased: the first version ships with 0.7.0. [docs/24](docs/24-electron-desktop.md)
-has the details.
+to scan. Closing its window keeps the network running; Quit stops it. It ships with LOAM 0.7.0. The Mac
+app is signed and notarized by Apple. The Windows installer isn't signed yet, so Windows asks you to
+confirm it once. The Windows, Linux and Intel Mac builds have so far only been checked automatically, not
+run on real machines, and the Windows and Linux builds are for 64-bit Intel or AMD computers only.
+[docs/24](docs/24-electron-desktop.md) has the details.
 
 ### In a terminal, on a computer or a Raspberry Pi
 
@@ -156,15 +157,20 @@ also carries the network's encryption key, so messages to and from the host are 
 - **Emergency reset.** Press and hold to erase the whole network at once, on the host and on every phone
   connected to it.
 - **Fifteen languages,** left to right and right to left: English, Español, Français, العربية, فارسی,
-  Português, Українська, Русский, Türkçe, မြန်မာ, اردو, دری, پښتو, Kiswahili and বাংলা.
+  Português, Українська, Русский, Türkçe, မြန်မာ, اردو, دری, پښتو, Kiswahili and বাংলা. The host picks
+  one for the whole network. The 14 besides English are machine translations still waiting for a native
+  speaker's review ([docs/13](docs/13-i18n.md)).
 - **Copes with a bad signal.** Phones keep what they've already seen and reconnect on their own.
-- **An assistant, if you want one.** A small AI model on the host phone, or a laptop's
-  [Ollama](https://ollama.com) model, answering in direct messages. Still no internet, and off unless
-  you turn it on.
+- **An assistant, if you want one.** It answers in direct messages, from a small AI model on the host
+  phone, from [Ollama](https://ollama.com) or another model server on a computer nearby, or from an online
+  service with an OpenAI-style API, such as OpenRouter or OpenAI. The first two need no internet. An
+  online service gets the messages people write to the assistant, and the admin page says so. Off unless
+  you turn it on ([docs/06](docs/06-llm.md)).
 
 ## Kinds of network
 
-The Android app's setup offers three. Everything can be changed later in the admin area.
+The setup in the Android app and in the desktop app offers three. Everything can be changed later in the
+admin area.
 
 | | Who can join | Names | Messages | Stored on the host |
 |---|---|---|---|---|
@@ -187,7 +193,10 @@ computer, the same settings live in the admin area as **security profiles**
   handshake and XChaCha20-Poly1305), so nobody else on the Wi-Fi can read the messages. By default,
   pictures and files are downloaded unencrypted, so someone on the same Wi-Fi could see them; a network
   that requires encryption (the Private one does) encrypts those too, and refuses anyone who didn't join
-  by the code ([docs/08](docs/08-transport-security.md)).
+  by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
+  can't get a certificate, so LOAM serves plain HTTP and encrypts inside the app instead, using the
+  [noble](https://paulmillr.com/noble/) libraries and the host key carried in the code. It has had no
+  outside security audit yet.
 - **Encrypted storage.** The host can keep its database encrypted with SQLCipher, under a key held in
   the phone's keystore, a passphrase, or a key that lives only in memory. An encrypted setting never
   falls back to storing data unencrypted. Pictures and files are stored beside the database, not
@@ -200,7 +209,10 @@ computer, the same settings live in the admin area as **security profiles**
 service can. A host device taken while it's running, with the key in memory, can give up what it holds.
 LOAM is built for a local network: on an address reachable from the internet, anyone who finds an open
 network can join it, so a host that must do that should require approval to join and require encryption
-([docs/12](docs/12-operators-guide.md)). LOAM raises the bar; it isn't a guarantee.
+([docs/12](docs/12-operators-guide.md)). Encrypted storage on a physical Android phone (keying, rekeying
+and the reset) hasn't yet been through the full device checklist
+([docs/21](docs/21-device-verification-checklist.md)); it is tested in code and CI. LOAM raises the bar;
+it isn't a guarantee.
 If your safety depends on it, get a professional review first. [`SECURITY.md`](SECURITY.md) has the full
 threat model, and every network serves its own privacy policy at `/privacy` (also on
 [loamnet.com](https://loamnet.com/privacy)).
@@ -217,8 +229,9 @@ for children the way an app made for them has to. Rather than pretend otherwise,
 ## How it works
 
 The host runs everything: the LOAM server (Node.js, Fastify), its database (SQLite) and the web app it
-hands to each phone that connects. Phones talk to it over the local network; nothing goes anywhere
-else. Switch the host off and the network is gone.
+hands to each phone that connects. Phones talk to it over the local network. Nothing goes to the internet
+unless the host turns on an online assistant, which the admin page warns about, or links another LOAM
+network, which then receives the public channels. Switch the host off and the network is gone.
 
 ```mermaid
 flowchart LR

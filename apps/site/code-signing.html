@@ -12,7 +12,7 @@
     <link rel="apple-touch-icon" href="/loam-512.png" />
     <meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0e1511" media="(prefers-color-scheme: dark)" />
-    <link rel="canonical" href="https://loamnet.com/code-signing" />
+    <link rel="canonical" href="https://www.loamnet.com/code-signing" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -32,6 +32,7 @@
           <li><a href="/#how">How it works</a></li>
           <li><a href="/#start">Get started</a></li>
           <li><a href="/#features">Features</a></li>
+          <li><a href="/desktop">Desktop</a></li>
           <li><a href="/#privacy">Privacy</a></li>
           <li>
             <a class="nav-github" href="https://github.com/MagicZebraLtd/loam" rel="noreferrer">
@@ -47,30 +48,35 @@
       <div class="wrap legal-body">
         <p class="eyebrow">Legal</p>
         <h1>Code signing policy</h1>
-        <p class="legal-meta">Last updated 16 October 2026</p>
+        <p class="legal-meta">Last updated 22 October 2026</p>
 
         <p>
           Free code signing on Windows is provided by <a href="https://signpath.io" rel="noreferrer">SignPath.io</a>,
           certificate by <a href="https://signpath.org" rel="noreferrer">SignPath Foundation</a>.
+        </p>
+        <p>
+          <strong>Status:</strong> signing through SignPath is planned and not running yet. Until it starts, the
+          Windows installer is unsigned and Windows shows a warning the first time you run it (see
+          <a href="/desktop#first-run">the first time you open it</a>). This page sets out how signing will work.
         </p>
 
         <h2 id="what">What is signed</h2>
         <p>
           The Windows installer of the LOAM desktop app (<code>LOAM-win-x64.exe</code>). Signing lets Windows
           show who published the file and lets you check that it has not been changed since it was built.
-          The signer name reads SignPath Foundation. LOAM is published by
+          Once signing starts, the signer name will read SignPath Foundation. LOAM is published by
           <a href="https://www.magiczebra.co.uk" rel="noreferrer">Magic Zebra Ltd</a>.
         </p>
 
         <h2 id="builds">How builds are made</h2>
         <p>
-          Signed files are built only by the
+          Signed files will be built only by the
           <a href="https://github.com/MagicZebraLtd/loam/blob/master/.github/workflows/build-desktop.yml" rel="noreferrer">build-desktop GitHub Actions workflow</a>
           in the public repository
           <a href="https://github.com/MagicZebraLtd/loam" rel="noreferrer">MagicZebraLtd/loam</a>, from a tagged
-          release commit. The workflow uploads the unsigned installer as a build artifact and submits it to
+          release commit. The workflow will upload the unsigned installer as a build artifact and submit it to
           SignPath, which checks that the file came from that repository and workflow before signing.
-          Nothing is built or signed on a personal computer. Every release file also carries a signed build
+          Release files are never built or signed on a personal computer. Every release file already carries a signed build
           record you can check with <code>gh attestation verify</code> (see <a href="/desktop#verify">verify your download</a>).
         </p>
 
@@ -79,15 +85,16 @@
           <li><strong>Committers and reviewers:</strong> the maintainers of
             <a href="https://github.com/MagicZebraLtd/loam" rel="noreferrer">MagicZebraLtd/loam</a>, who review every change before it is merged.</li>
           <li><strong>Approvers:</strong> the owners of the
-            <a href="https://github.com/MagicZebraLtd" rel="noreferrer">MagicZebraLtd</a> organization. Each signing request needs an approver to approve it by hand before anything is signed.</li>
+            <a href="https://github.com/MagicZebraLtd" rel="noreferrer">MagicZebraLtd</a> organization. Each signing request will need an approver to approve it by hand before anything is signed.</li>
         </ul>
 
         <h2 id="privacy">Privacy</h2>
         <p>
-          The signed software sends no information to any server of ours. It talks only to the local network
-          it serves. The one exception is when the person using it taps <strong>Check for updates</strong>: it
-          then asks GitHub's releases API for the latest version number. It never checks on its own. See the
-          full <a href="/privacy">privacy policy</a>.
+          The software sends no information to any server of ours. It talks only to the local network it
+          serves, with two exceptions. When the person using it taps <strong>Check for updates</strong>, it asks
+          GitHub's releases API for the latest version number; it never checks on its own. And if the host turns
+          on an online assistant, which the admin page warns about, the messages people write to the assistant
+          go to that service. See the full <a href="/privacy">privacy policy</a>.
         </p>
 
         <h2 id="report">Reporting a problem</h2>

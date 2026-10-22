@@ -19,9 +19,25 @@
 | O7 | **The app's own "Show the hosting notification?" prompt** did not appear on a first start on the emulator (the system dialog asked directly). Check on a phone whether that is intended. | 04 | Hardware |
 | O8 | **Template packages still linked through expo-router**: removing the unused Expo template dependencies left reanimated, gesture-handler and worklets in the APK, because expo-router depends on or optionally peers them. Revisit with Expo SDK 58, which also clears the `decode-uri-component` advisory. | 04 | Expo SDK 58 |
 | O9 | **A LAN neighbour can still tire the claim and panic limits for a network**: each address is counted on its own now, but the looser per-/64 bound (40 attempts per 5 minutes) can still be used up by one device cycling IPv6 addresses. That is the price of bounding guesses at all; revisit if it matters in practice. | 08, 12 | Decision |
-| O10 | **Desktop app on real machines**: only the Mac arm64 build has been produced locally. Run the Windows installer, the Linux AppImage and `.deb` (with and without a secret service), and the Intel Mac build; drive the real `safeStorage` flow, the firewall prompts, a phone joining and Emergency Reset on every key mode (the checks are docs/21 §5). | 24, 21 §5 | Hardware |
-| O11 | **Desktop signing**: add the five Apple secrets once the developer enrolment completes (the Mac build then signs and notarizes with no workflow change, and the keychain stops re-prompting after each update); create the SignPath Foundation project (`loam`, `release-signing`, `installer`) and add its two secrets. | 24 | Process (owner) |
+| O10 | **Desktop app on real machines**: CI builds all five installers, and the Linux AppImage is smoke-tested there, but none has been run on a real machine except the Mac arm64 build. Run the Windows installer, the Linux AppImage and `.deb` (with and without a secret service), and the Intel Mac build; drive the real `safeStorage` flow, the firewall prompts, a phone joining and Emergency Reset on every key mode (the checks are docs/21 §5). | 24, 21 §5 | Hardware |
+| O11 | **Desktop signing, Windows half**: ~~add the five Apple secrets~~ done 2026-10-22: the Mac builds are signed with the Developer ID certificate and notarized. Still open: create the SignPath Foundation project (`loam`, `release-signing`, `installer`) and add its two secrets. Until then the Windows installer is unsigned and SmartScreen warns. | 24 | Process (owner) |
 | O12 | **Desktop: Linux desktops with no tray**: closing the window leaves the network running with no icon to bring it back (a second launch focuses the window). Decide on a fallback (a notice on close, or Quit instead of hide when no tray is available). | 24 | Product decision |
+
+### Before 0.7.0
+
+The release checklist. The owner does each step.
+
+1. Merge `feat/llm-providers` and `fix/desktop-first-ci-run`. The second one fixes the Linux AppImage's file
+   name, the signing docs and Windows reserved ports. Decide whether `deps/preact-11` (PR #162) goes in too.
+2. Bump every version to 0.7.0 (`node scripts/check-versions.mjs`, and a new `versionCode`). Date the
+   changelog, then push the signed tag `v0.7.0`.
+3. `npm publish` loamnet. npm still has 0.6.0.
+4. Upload the Play bundle to internal testing. Make the foreground-service declaration and record its video,
+   which needs the phone run.
+5. Make sure the privacy policy covers the online assistant: messages sent to it go to the chosen service.
+6. SignPath for Windows (O11) is optional for this release.
+7. The hardware runs: O1, O2, O5 and O10 (the checks are in docs/21).
+8. Decide O12.
 
 ## Earlier notes
 
@@ -56,9 +72,9 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 | S2 | **E2EE for DMs / private channels** (docs/08 Layer 2) — server sees all plaintext; no client-side crypto. Strongest protest-model protection; disables server LLM/search for those convos; bundles into `hardened`. | 07,08,09 | epic | Product decision |
 | S3 | **Optional authentication / `identity.mode`** (Better Auth now, atproto later) — enables website/team hosting without touching the anonymous default. | 05 | epic | Product decision |
 | S4 | **Mesh delivery-acks.** Convergence rests on TTL/hop/cap only. Design **now decided** (external review): a **hash-lock capability receipt**. The sender commits `SHA-256("loam.mesh.ack.v1"‖msgId‖ackSecret)` in the public envelope, recipient publishes the preimage, carriers verify + delete + gossip. No recipient identity revealed; the sender can only prematurely delete its own message. Ready to build (docs/23 §11). | 16,19,23 | M | — |
-| S5 | **Inter-node sync MITM hardening** — unpinned peer keys are TOFU-learned over plain HTTP; `SyncPeer.transportKey` pinning exists in config but the **admin-UI pinned-key field is unbuilt**; longer-term per-peer signed authors. | 08,11,15#1/#6a | S (UI) / L | — |
+| S5 | **Inter-node sync MITM hardening** — unpinned peer keys are TOFU-learned over plain HTTP; `SyncPeer.transportKey` pinning exists in config and the admin-UI pinned-key field has shipped (see "Shipped since" below); longer-term per-peer signed authors. | 08,11,15#1/#6a | S (UI) / L | — |
 | S6 | **Sync peer auth: per-member / rotating creds** — only a single shared `sync.token`; revoking one courier re-keys every node. | 16,19 | M | Product decision |
-| S7 | **Transport-encryption join-QR follow-ups** — thread the `#k=` host-key through the remaining join-QR surfaces (`InviteControl`, Android host-panel, `NodeLinkControl`) + live re-handshake on a runtime mode flip. | 08,15#5 | S–M | — |
+| S7 | **Transport-encryption join-QR follow-ups** (the join-QR surfaces are done, see "Shipped since" below) — thread the `#k=` host-key through the remaining join-QR surfaces (`InviteControl`, Android host-panel, `NodeLinkControl`) + live re-handshake on a runtime mode flip. | 08,15#5 | S–M | — |
 | S8 | **Mesh key lifecycle vs kill switch** — decide per profile whether a panic wipe destroys the `mesh.` keyseed (likely `hardened` → yes). | 16 | S | Product decision |
 
 ## 2. Product features
@@ -69,7 +85,7 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 |---|------|------|--|---|------|------|
 | P1 | **RAG over local content** (semantic search; the standout off-grid feature) | L | | P5 | ~~Provider abstraction: OpenAI-compatible + cloud providers~~ (built 2026-10-22, docs/06) | M |
 | P2 | **LLM context bounding** — ~~maps the *entire* DM history every turn~~ **PARTLY DONE**: a 40-msg recent-history cap landed (`MAX_LLM_CONTEXT_MESSAGES`, tested). A token budget + summarisation is the remaining fuller version | S | | P6 | Multiple bots/personas; tool use / function calling | M/L |
-| P3 | **LLM cancellation + concurrency/rate limits** — no stop button, no cap | S–M | | P7 | LLM backend health surfaced in the UI | S |
+| P3 | **LLM cancellation** — no stop button. (The cap is built: one reply in flight per user, two per node, `429 assistant_busy`.) | S–M | | P7 | LLM backend health surfaced in the UI | S |
 | P4 | Channel participation / `@mention` for the bot (DM-only today) | M | | | | |
 
 **Other**
@@ -78,11 +94,11 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 |---|------|-----|------|-------|
 | P8 | **Offline map renderer (MapLibre GL + PMTiles)** — pin-drop location *messages* landed; the visual map + offline tiles are the outstanding half of docs/10. | 10 | L | Product decision (tiles) |
 | P9 | **Courier ("data mule") sync** — ad-hoc mutual sync, courier→node push, ring-setup wizard, opt NFC. Phases 1–3 desktop-testable. | 19 | M | Phase 4 device |
-| P10 | Private-channel **join-request flow** (invite-only today) | 07,15#23 | M | — |
-| P11 | Non-image **file attachments** (images only today) | 07 | M | — |
-| P12 | Per-channel retention TTL (only global today) | 07,12 | S | — |
-| P13 | Lock / pin channels | 07 | S | — |
-| P14 | Typing indicators (presence dots exist) | 07 | S | — |
+| P10 | ~~Private-channel **join-request flow**~~ (shipped, 0.4.0) | 07,15#23 | M | — |
+| P11 | ~~Non-image **file attachments**~~ (shipped, 1 MiB) | 07 | M | — |
+| P12 | ~~Per-channel retention TTL~~ (shipped; admin-only, can only shorten the node TTL) | 07,12 | S | — |
+| P13 | ~~Lock / pin channels~~ (shipped) | 07 | S | — |
+| P14 | ~~Typing indicators~~ (shipped) | 07 | S | — |
 | P15 | ~~**Web-push / PWA notifications**~~ — **built for what a plain-HTTP node allows (0.6.3):** in-page tone/vibration in the web client (Settings → Notifications) and Android notifications for the host phone's own person (docs/04 "Message notifications"). Real browser notifications for joiners stay impossible without a secure context. | 07,15#22 | — | — |
 | P16 | Backup / export / import (team continuity; config-gated, off by default) | 07 | S–M | Product decision |
 | P17 | Identity/key verification (safety numbers/QR) — only meaningful post-E2EE/accounts | 07 | M | Dep S2/S3 |
@@ -113,7 +129,7 @@ An auto-updater is deliberately not on this list: the app never checks by itself
 
 | # | Item | Doc | Size | Needs |
 |---|------|-----|------|-------|
-| M1 | **Phase 3 native transport finish** — Kotlin BLE + Wi-Fi Aware scaffolded but never compiled/run against radios: Wi-Fi-Aware data-path handshake + port-exchange, the unimplemented BLE chunked fallback (`sendBlobFallback` throws), real-device fixes. | 16,17 | epic | Hardware (2–3 phones) |
+| M1 | **Phase 3 native transport finish** — Kotlin BLE + Wi-Fi Aware scaffolded; it compiles into every APK but has never run against radios: Wi-Fi-Aware data-path handshake + port-exchange, the unimplemented BLE chunked fallback (`sendBlobFallback` throws), real-device fixes. | 16,17 | epic | Hardware (2–3 phones) |
 | M2 | **Phase 4 background duty-cycling + battery** — PendingIntent discovery, burst-scan/back-off, Doze-aware. "Where Briar stalled." | 16 | epic | Hardware |
 | M3 | **Phase 5 LoRa fixed relays** (Pi + LoRa hat; framing/bandwidth for the existing sync protocol) | 16,11 | epic | Hardware |
 | M4 | **AT-Proto-inspired portable identity + signed user repos**, the largest remaining epic. Plan of record **`docs/23`, revised after review round 1** (per-device operation logs, genesis-doc identity + off-grid recovery/freshness limit, fork-freeze-at-ancestor, publication as an explicit feature). One product call is open, identity **Option A (portable pseudonym + encrypted backup) vs B (recovery-key hierarchy)**, then a revised Phase 0 spike. | 22,23 | epic | Product decision |
@@ -122,7 +138,7 @@ An auto-updater is deliberately not on this list: the app never checks by itself
 
 | # | Item | Doc | Size |
 |---|------|-----|------|
-| C1 | **Channel metadata doesn't re-sync after first import** — a rename/archive on A never reaches B. A first attempt (newer-wins merge keyed on a new `ChannelSchema.updatedAt` + archived-in-digest) was built and then **reverted** after sub-agent review: channel ids are human SLUGS, so two nodes' independently-created same-named channels — notably the default `general`/`announcements` (fixed ids + fixed `createdAt` on every node) — collide, and newer-wins let one node's admin edit clobber a peer's *distinct* channel (archive then blocks message import there); peer `updatedAt` was also unbounded, so an off-grid clock-drifted peer wins uncorrectably. Correct fix = per-channel **provenance** (only update channels actually imported from that peer, never local/default ones) + **clamp** peer timestamps to now. Multi-node-sync only. | 11 | M |
+| C1 | ~~**Channel metadata doesn't re-sync after first import**~~ (shipped with per-peer provenance, see "Shipped since" below) — a rename/archive on A never reaches B. A first attempt (newer-wins merge keyed on a new `ChannelSchema.updatedAt` + archived-in-digest) was built and then **reverted** after sub-agent review: channel ids are human SLUGS, so two nodes' independently-created same-named channels — notably the default `general`/`announcements` (fixed ids + fixed `createdAt` on every node) — collide, and newer-wins let one node's admin edit clobber a peer's *distinct* channel (archive then blocks message import there); peer `updatedAt` was also unbounded, so an off-grid clock-drifted peer wins uncorrectably. Correct fix = per-channel **provenance** (only update channels actually imported from that peer, never local/default ones) + **clamp** peer timestamps to now. Multi-node-sync only. | 11 | M |
 | C2 | **Sync deletes/moderation don't propagate** (tombstones only stop local re-import) — by-design v1, real limit for a moderated mesh | 11,12 | M |
 
 *(Resolved & excluded: QR-ECC ceiling, foreground wake-lock timeout, SW network-first, setupCode-PATCH, unbounded maps, **C3 attachment-retry — BUILT: `addMissingAttachment` + `retryMissingAttachments` with backoff/max-age/starvation-fair per-pass cap, wired to the reaper timer, tested in `db.test.ts`**.)*
@@ -141,7 +157,7 @@ An auto-updater is deliberately not on this list: the app never checks by itself
 
 | # | Item | Doc | Size |
 |---|------|-----|------|
-| D1 | `app.tsx` still ~3,600 lines (down from ~5,400; conversation panes, error banner/boundary, admin panels etc. now in `src/components/`) — remaining extraction is lower-ROI now | 15#21 | M |
+| D1 | `app.tsx` still ~2,700 lines (down from ~5,400; conversation panes, error banner/boundary, admin panels etc. now in `src/components/`) — remaining extraction is lower-ROI now | 15#21 | M |
 | D2 | ~~Dead `notifyIfHidden` can never fire~~ — **removed** (in-app toast is the signal; OS push for the Android host stays P15) | 15#22 | S |
 | D3 | Native-speaker review of the 14 machine-translated i18n catalogs (structure tested, quality not) | 13 | ongoing |
 
@@ -153,7 +169,7 @@ An auto-updater is deliberately not on this list: the app never checks by itself
 | I2 | `react-native-webview` 13 → 14 (pinned `13.16.1`) — needs v14 event-type annotations + device verify | 15#13 | S | Hardware |
 | I3 | Device-tested **signed** release + securely backed-up production keystore *(signing infra now built + verified — remaining: a released, installed, verified signed build)* | 15#25,04 | S | Process |
 | I4 | 32-bit `armeabi-v7a` Android support (arm64-only today) | 04 | S–M | Hardware |
-| I5 | **`@noble/*` 2.x crypto migration** — blocked: 2.x needs Node 20.19+ & is ESM-only, but the embedded host is Node 18; also needs a security-reviewed `@loam/crypto` migration, not an auto-bump. Deferred in `dependabot.yml` (major ignored); revisit when the embedded runtime moves off Node 18. Small `@noble/curves` 1.9.4→1.9.7 can go independently. | 23 | M | Runtime move |
+| I5 | **`@noble/*` 2.x crypto migration** — blocked: 2.x needs Node 20.19+ & is ESM-only, but the embedded host is Node 18; also needs a security-reviewed `@loam/crypto` migration, not an auto-bump. Deferred in `dependabot.yml` (major ignored); revisit when the embedded runtime moves off Node 18. (The small `@noble/curves` 1.9.4→1.9.7 bump is done.) | 23 | M | Runtime move |
 
 ## 8. Stale / contradictory doc claims (to correct)
 

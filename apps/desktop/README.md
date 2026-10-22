@@ -3,8 +3,9 @@
 LOAM for Mac, Windows and Linux (Electron). The person who installs it runs a network: the app starts the
 LOAM server inside itself, shows the join QR, and opens the web client in its own window with the host already
 admin. Everyone else joins from their phone's browser. It is the desktop sibling of the Android host app and
-the `loamnet` terminal app. Download page: [loamnet.com/desktop](https://loamnet.com/desktop). Unreleased: the
-first release ships with 0.7.0.
+the `loamnet` terminal app. Download page: [loamnet.com/desktop](https://loamnet.com/desktop). It ships with
+LOAM 0.7.0. The Mac builds are signed and notarized; the Windows installer is unsigned for now (SignPath
+Foundation signing is planned).
 
 Everything about how it works, how it keeps its key, how Emergency Reset ends, how it is signed and what has
 not yet been verified on real machines is in [docs/24](../../docs/24-electron-desktop.md).

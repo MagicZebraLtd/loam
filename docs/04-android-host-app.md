@@ -19,8 +19,9 @@
 > Graceful degradation (permission denied / no SoftAP / a callback that never fires) is code-complete
 > — `requireOptionalNativeModule` for unlinked runtimes, a native reject on `onFailed`/`SecurityException`,
 > a 20s JS start-timeout, and an error message in Step 1 while Step 2's QR stays — but wasn't the path
-> this emulator took. The full two-phone join (a second device scans Step 1, connects, scans Step 2) is
-> the **physical-device** test. See
+> this emulator took. The full two-phone join (a second device scans Step 1, connects, scans Step 2) was
+> the **physical-device** test; it passed on a Galaxy S25 Ultra on 2026-09-28, once the Step-2 address was
+> discovered rather than assumed (docs/25 §9, HW1). See
 > **[Runnable build](#runnable-build)** below for exact commands. **Follow-ups:** on-device verification of
 > encryption at rest (it ships, see docs/01); 32-bit `armeabi-v7a`; raising `@loam/qr` capacity for long creds.
 >
@@ -689,9 +690,11 @@ workspace install (Expo/RN toolchain); gating its install remains an open nicety
    half is already proven on-device (phase 2 stretch goal).
 4. ~~`LocalOnlyHotspot` native module returning SSID/password~~ — **done** (`apps/app/modules/loam-hotspot`);
    emulator-verified end to end (the API-35 emulator's virtual WiFi returned a real SSID/passphrase).
-   Physical-device SoftAP behaviour may differ, so the two-phone join below remains the owner's test.
-5. WebView loading the served client over the hotspot, with cookies + WebSocket working end to end —
-   **needs a physical device** (a second phone joins the hotspot and opens the Step-2 URL).
+   Physical-device SoftAP behaviour may differ; the two-phone join below passed on a Galaxy S25 Ultra on
+   2026-09-28 (docs/25 §9, HW1). A Pixel is still untested.
+5. ~~WebView loading the served client over the hotspot, with cookies + WebSocket working end to end~~ —
+   **done on a physical device** (2026-09-28, the same two-phone run: a second phone joined the hotspot and
+   opened the Step-2 URL).
 
 Only after those pass is the QR/host UI mostly glue over `packages/qr`.
 

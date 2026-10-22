@@ -49,7 +49,8 @@ design (owner wants few big PRs), split into commit-groups. Built in this order:
 
 > **Delivered in [#109](https://github.com/MagicZebraLtd/loam/pull/109):** groups A (report loop), B (C1),
 > the pin/per-channel-TTL/@mentions subset of C, E (S5), and F (i18n en-fallback + D2). **Deferred to
-> follow-ups** (each with rationale in §5): group D (OpenRouter cloud-LLM, pending the external consent review),
+> follow-ups** (each with rationale in §5): group D (OpenRouter cloud-LLM, pending the external consent review; its provider half was built on
+> 22 October 2026 as `llm.openai`, DM-only, see docs/06, and the in-channel bot is still unbuilt),
 > typing indicators / join-request / non-image file attachments (rest of C), S7 (rest of E), and the full
 > 15-locale translation batch. So the list below is the *plan*; the PR shipped the safe, self-contained
 > subset.

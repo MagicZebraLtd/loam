@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "16 October 2026";
+export const PRIVACY_POLICY_UPDATED = "22 October 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -100,9 +100,11 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "The host can run an **Emergency reset**, which deletes every message, person, picture and file on " +
             "the network and clears the copies on devices connected at the time. A device that was offline " +
             "clears its copy the next time it connects to that network.",
-          "The host can store the network encrypted. With encryption on, a reset also replaces the key, so the " +
-            "deleted data can't be recovered from the device's storage. Pictures and files are stored beside the " +
-            "encrypted database, and a reset deletes them.",
+          "The host can store the network encrypted. With encryption on, a reset also replaces the key on the " +
+            "Android host app, and on a computer using a temporary key, so the deleted data can't be recovered " +
+            "from the device's storage. A computer that uses a fixed passphrase deletes the database files but " +
+            "keeps the same passphrase. Pictures and files are stored beside the encrypted database, and a reset " +
+            "deletes them.",
           "Uninstalling the Android host app deletes everything it stored.",
         ],
       },
@@ -129,6 +131,12 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "settings are copied to the linked networks. Direct messages and private channels never are.",
           "**A remote assistant:** if the host connects the assistant to a model on another computer, messages " +
             "you send the assistant go to that computer. The on-device assistant runs entirely on the host phone.",
+          "**An online assistant:** the host can set the assistant to use an online chat service, such as " +
+            "OpenRouter, OpenAI, Groq or Mistral. The messages you write to the assistant, and the recent history " +
+            "of that conversation, are then sent to that company and handled under its own privacy policy. The " +
+            "host chooses the service, and the admin page names it and warns that messages will leave the " +
+            "network. Nothing else goes there: not your name, not your other messages, and nothing anyone else " +
+            "writes. A Private network only accepts a service on the host or the local network.",
           "**Mesh delivery** (experimental): messages to your mesh contacts may be carried by other LOAM " +
             "networks, sealed so only the recipient can read them.",
         ],

@@ -564,7 +564,10 @@ Bound on four axes, converge via acks, reusing the tombstone machinery:
   people's* mail: with `mesh.enabled:true, relay:false` a node still creates and receives its own sealed
   mail but carries nothing for others; with `mesh.enabled:false` none of it exists.
 - **Delivery acks → convergence (the important part).** When B opens a blob it can emit a **delivery
-  ack** so carriers stop carrying a delivered message. **This sub-design is BLOCKED pending a
+  ack** so carriers stop carrying a delivered message. *(Update: the decision has since been made. The
+  external review chose a hash-lock receipt, recorded in [docs/23](23-atproto-p2p-plan.md) §11 and
+  docs/25 S4. It is not built yet. The text below is the earlier analysis; its blinded-MAC idea was
+  rejected because a carrier either could not verify it or could forge it.)* **This sub-design is BLOCKED pending a
   threat-model decision (§6.1) and must not ship in Phase 2 in its identity-exposing form:** the naïve
   ack `{ msgId, ackedBy, at, sig=Ed25519(B,…) }` names the recipient (`ackedBy` = B's `mesh.` id) with a
   signature verifiable against B's public key, which re-links a delivered message to B and undoes the
@@ -629,6 +632,8 @@ per-OEM battery-optimization allowlisting to be needed (document it honestly).
 1. **Ack unforgeability vs recipient unlinkability** (§3) — deepest tension; **blocked pending a
    security-review decision.** The identity-exposing `ackedBy` form is rejected; the blinded per-message
    MAC is the candidate; TTL is the safety net and acks ship only after the decision lands.
+   *(Update: decided. The review rejected the blinded MAC and chose a hash-lock receipt,
+   [docs/23](23-atproto-p2p-plan.md) §11. Not built yet; the TTL, hop and cap limits are still the only convergence.)*
 2. **Metadata / traffic analysis** — the secret-token `toTag` hides *who* from anyone without `B.mtk`
    (carriers included), but not *path*: an authorized carrier that holds `mtk`, or a global passive
    observer correlating a repeated tag across hops, still traces a message's route (never its
