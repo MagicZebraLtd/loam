@@ -96,7 +96,9 @@ jobs:
     name: Build macOS (arm64 + x64)
     needs: verify
     runs-on: macos-15 # Apple Silicon
-    timeout-minutes: 60
+    # Each architecture is notarized on its own, and Apple's notary service has taken close to an hour for
+    # one submission (the team's first, 2026-10-22), so the job gets room for two slow ones plus the build.
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
