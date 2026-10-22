@@ -24,7 +24,7 @@
   "devDependencies": {
     "@preact/preset-vite": "catalog:",
     "@types/node": "catalog:",
-    "fake-indexeddb": "^6.2.5",
+    "fake-indexeddb": "^6.2.6",
     "jsdom": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
