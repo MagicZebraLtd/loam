@@ -175,7 +175,10 @@ Honest caveats:
 - **No keychain, no persistent mode.** On a Linux desktop with no secret service (GNOME Keyring, KWallet),
   `persistent` is not offered, Community defaults to `passphrase`, and the Setup screen says why. A
   passphrase network there stores the device secret in `device-secret.key` unprotected: the passphrase is the
-  protection, and the secret still gives Emergency Reset its "destroy the key" property.
+  protection, and the secret still gives Emergency Reset its "destroy the key" property. That file is left
+  as it is even when a later session does have a keychain (a graphical login after an SSH start, or the other
+  way round): sealing it then would make the network unreadable in the next session without one, which an
+  earlier build did (`keys.ts` sealed a plain secret "once this computer has a keychain").
 - **A persistent key is never written in the clear.** The capability flag decides what Setup offers; the key
   store decides what it will do. When a `persistent` network needs its secret and the keychain can't seal it
   at that moment (on macOS and Windows the flag is `true` without asking, so this is the one case the flag

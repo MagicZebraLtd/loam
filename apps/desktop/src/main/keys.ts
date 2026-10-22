@@ -13,7 +13,7 @@
  * Deleting the secret file is the cryptographic wipe a fixed-key Emergency Reset ends with (wipe-phase.ts).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DbEncryptionMode } from "@loam/schema";
@@ -185,21 +185,11 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
       if (cached !== undefined) {
         return cached;
       }
-      let stored = readSealed();
-      if (stored === undefined) {
-        const plain = readPlain();
-        if (plain !== undefined && canSeal()) {
-          // Kept in the clear from a time this computer had no keychain; it has one now, so seal it. Best effort:
-          // the plain copy stays if sealing fails, since the network must still open.
-          try {
-            seal(plain);
-            rmSync(plainPath, { force: true });
-          } catch {
-            // Sealing is an improvement, not a requirement, for a secret that already exists.
-          }
-        }
-        stored = plain;
-      }
+      // A plain file is a passphrase network's secret from a session with no keychain. It is deliberately NOT
+      // sealed when a keychain turns up later: on Linux the secret service comes and goes with the desktop
+      // session (a login shell, an SSH session, a different desktop), and a secret sealed by one session is
+      // unreadable in the next, which locked the network. The passphrase is that network's protection.
+      const stored = readSealed() ?? readPlain();
       if (stored !== undefined) {
         cached = stored;
         return stored;
