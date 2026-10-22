@@ -168,9 +168,20 @@ jobs:
           unset APPLE_API_KEY_P8
           # Rebuild the native SQLCipher driver for each architecture in turn (it lands in
           # dist/main/node_modules/), then package that architecture before the next overwrites it.
+          # Apple's notary and ticket-delivery services drop connections now and then (stapler codes 65 and
+          # 68: "The network connection was lost"), so one architecture's packaging gets three attempts; a
+          # repeat submission of the same bundle is answered quickly.
           for arch in arm64 x64; do
             pnpm --filter @loam/desktop exec node scripts/native.mjs --arch "$arch"
-            pnpm --filter @loam/desktop exec electron-builder --mac "--$arch" --publish never "${ADHOC[@]}"
+            for attempt in 1 2 3; do
+              if pnpm --filter @loam/desktop exec electron-builder --mac "--$arch" --publish never "${ADHOC[@]}"; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                exit 1
+              fi
+              echo "::warning::Packaging $arch failed (attempt $attempt of 3), retrying in 30 s."
+              sleep 30
+            done
           done
           rm -f "$RUNNER_TEMP"/AuthKey_*.p8
 
