@@ -40,7 +40,8 @@ pnpm --filter @loam/desktop dist           # build + build:native + electron-bui
 
 Files are named without a version (`LOAM-mac-arm64.dmg`, `LOAM-mac-x64.dmg`, `LOAM-win-x64.exe`,
 `LOAM-linux-x64.AppImage`, `LOAM-linux-x64.deb`). Release builds come from `.github/workflows/build-desktop.yml`.
-Without signing secrets the builds are unsigned.
+The macOS builds are signed and notarized when the Apple secrets exist (docs/24 "Signing"); without them, and
+for Windows until SignPath is set up, the builds are unsigned.
 
 ## Where the data lives
 

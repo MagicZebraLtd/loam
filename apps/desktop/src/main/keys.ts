@@ -47,8 +47,8 @@ export type SecretBox = {
  *   - Linux depends on the desktop: the backend Electron picked at startup says, and `basic_text` (a fixed,
  *     public key: the secret would be as good as written in the clear) or `unknown` means no.
  * The keychain itself is touched only by {@link fileDeviceSecretStore}, when a persistent or passphrase network
- * needs its secret. An unsigned build has a new code identity with every release, so macOS asks again after
- * each update ("Always Allow" covers that build only) until the app is signed with a stable identity.
+ * needs its secret. The release builds are signed with a stable identity, so one "Always Allow" holds across
+ * updates; an ad-hoc signed local build has a new code identity every build, so macOS asks again after each.
  */
 export function keychainProtects(box: SecretBox, platform: NodeJS.Platform): boolean {
   if (platform === "darwin" || platform === "win32") {

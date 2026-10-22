@@ -168,9 +168,10 @@ Ephemeral and unencrypted networks, and `--smoke`, never touch it.
 
 Honest caveats:
 
-- **An unsigned macOS build asks again after each update.** Each unsigned build has a new code identity, and
-  "Always Allow" covers that build only. A stable signing identity ends this; none exists yet (see
-  [Signing](#signing)).
+- **Only a signed macOS build keeps "Always Allow" across updates.** The release builds are signed with the
+  Developer ID certificate (see [Signing](#signing)), so their code identity is stable and one "Always Allow"
+  holds. A local or fork build without the certificate is ad-hoc signed, which gives every build a new identity,
+  so macOS asks again after each update.
 - **No keychain, no persistent mode.** On a Linux desktop with no secret service (GNOME Keyring, KWallet),
   `persistent` is not offered, Community defaults to `passphrase`, and the Setup screen says why. A
   passphrase network there stores the device secret in `device-secret.key` unprotected: the passphrase is the
@@ -303,7 +304,8 @@ address, with a note that the phone must be on the same network.
 **Firewall prompts** are the commonest desktop failure and the one thing the host must answer. On first listen
 the macOS Application Firewall asks whether LOAM may accept incoming connections (choose Allow), and Windows
 Defender Firewall asks which networks (tick Private, choose Allow access). Refused or ignored, phones cannot
-reach the app. An unsigned app shows the real name only once it is signed. Guest Wi-Fi with client isolation
+reach the app. The prompt names the app from its signature, so an ad-hoc signed local build may show a path
+instead of "LOAM". Guest Wi-Fi with client isolation
 blocks joiners however the firewall is set, the same class of problem docs/04 notes for phones.
 
 ## Building and running
@@ -369,27 +371,33 @@ builds or tests them. Each release file also gets a `.sha256`.
 
 ## Signing
 
-State today: **nothing is signed or notarized.**
+State today: **macOS builds are signed and notarized** (since 2026-10-22). Windows and Linux are not signed.
 
-- **macOS.** The Apple Developer enrolment is pending. Until it completes the `.dmg` files are unsigned and not
-  notarized, but the CI build ad-hoc signs the bundle (`-c.mac.identity=- -c.mac.hardenedRuntime=false`; the
-  hardened runtime has to be off for an ad-hoc signature, whose missing Team ID would otherwise make dyld refuse
-  Electron's own framework): without it, Apple Silicon reports a downloaded copy as "damaged" instead of
-  offering **Open Anyway** (System Settings, Privacy & Security). The
-  website's /desktop page tells people to do that once. Gatekeeper and the keychain re-prompt (above) both go
-  away only with a real identity.
-  **What the owner adds once enrolment completes:** five repository secrets. `CSC_LINK` (the Developer ID
-  Application certificate as a base64-encoded `.p12`), `CSC_KEY_PASSWORD` (its password), `APPLE_API_KEY` (the
-  contents of the App Store Connect `AuthKey_XXXX.p8`), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The next tag
-  build then signs and notarizes with no workflow change (`notarize: true` is skipped without the API key).
-  `CSC_LINK` without the API key signs but does not notarize, and the build warns.
+- **macOS.** The CI build signs both apps with the Developer ID Application certificate of Magic Zebra Limited
+  (Team ID `D4AZ7F9PBW`) and notarizes each through the App Store Connect API, so a downloaded `.dmg` opens
+  with no Gatekeeper step and the keychain's "Always Allow" survives updates (the code identity is stable). The
+  five repository secrets behind it: `CSC_LINK` (the certificate as a base64-encoded `.p12`), `CSC_KEY_PASSWORD`
+  (its password), `APPLE_API_KEY` (the contents of the App Store Connect `AuthKey_XXXX.p8`, Team key, Developer
+  access), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The packaging step is the only step that sees them; it
+  writes the `.p8` to a 0600 file under `RUNNER_TEMP` for notarytool and removes it after. `CSC_LINK` without
+  the API key signs but does not notarize, and the build warns. The certificate's private key lives in the
+  owner's login keychain (created from Xcode, Settings, Accounts, Manage Certificates); the `.p8` is kept
+  outside the repository. Apple's notary service took 57 minutes for the team's first submission, so the
+  macOS job's timeout is 180 minutes (two architectures, two submissions).
+  **Without the secrets** (a fork, or a local `dist` with no certificate) the build ad-hoc signs the bundle
+  (`-c.mac.identity=- -c.mac.hardenedRuntime=false`; the hardened runtime has to be off for an ad-hoc
+  signature, whose missing Team ID would otherwise make dyld refuse Electron's own framework): without that,
+  Apple Silicon reports a downloaded copy as "damaged" instead of offering **Open Anyway** (System Settings,
+  Privacy & Security).
   **Entitlements** (`build/entitlements.mac.plist`) grant only `allow-jit` and `allow-unsigned-executable-memory`,
   which V8 needs under the hardened runtime. `allow-dyld-environment-variables` and `disable-library-validation`
   are deliberately absent: with them, any local process could start LOAM with an injected library and ask the
   keychain for "LOAM Safe Storage", which is the device secret, and that is exactly what the fuses are there to
   stop. The unpacked SQLCipher `.node` is signed with the bundle, so library validation passes. Entitlements only
-  take effect on a signed build, so the **first signed build must re-test launch and the encrypted `--smoke`**
-  before it is released.
+  take effect on a signed build; the first signed build (2026-10-22, both architectures) was checked with
+  `codesign --verify --deep --strict`, `spctl -a -t install` (accepted, Notarized Developer ID), `stapler
+  validate`, the entitlements read back, the encrypted `--smoke`, and a quarantined copy launched through
+  Gatekeeper with no prompt.
 - **Windows.** Free signing for open source from **SignPath Foundation**. Setup, when the owner has an
   account: a project with slug `loam`, a signing policy `release-signing` (with manual approval by the
   organization owners), and an artifact configuration `installer` whose root element is `<zip-file>` holding
@@ -444,7 +452,7 @@ Written and tested in code and CI, but not run where they matter (the checks are
   one) is tested with fakes and, for the reset handoff, against the real server with an in-memory secret store.
   No test has driven `safeStorage` itself.
 - **Firewall prompts** and a **phone joining** from each OS; **Emergency Reset on each key mode** on a
-  packaged build; the **unsigned Gatekeeper path** (Open Anyway after a download).
+  packaged build; a **browser-downloaded signed build** launching with no Gatekeeper step on an Intel Mac.
 - The **Intel Mac build**: `native.mjs` skips its load check for a foreign architecture, and CI builds it on an
   Apple Silicon runner without running it.
 - **Linux without a tray.** A GNOME desktop with no tray extension shows no icon; closing the window then leaves
