@@ -184,8 +184,8 @@ Honest caveats:
   at that moment (on macOS and Windows the flag is `true` without asking, so this is the one case the flag
   can't foresee), the store refuses with `keychain_unavailable` instead of writing `device-secret.key`; only a
   passphrase network may use the plain file. A sealed secret the keychain won't open today is `db_encryption_locked`,
-  never re-minted. A plain-file secret found on a computer that has a keychain now is sealed on first use and
-  the plain file removed.
+  never re-minted. A plain-file secret stays in its plain file even on a computer that has a keychain now
+  (see the caveat above).
 - **The keychain protects the key from other users and from a stolen disk, not from the logged-in user.**
   Any program running as the same user can ask the OS to unseal the item, subject to the OS's prompts.
 - **What the database encryption does not cover.** As for the CLI, pictures, files and avatars are stored
