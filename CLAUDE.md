@@ -421,7 +421,9 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   default)** / `required`; `off` is no longer operator-settable, see below):
   QR-bootstrapped app-layer session encryption over plain HTTP (no WebCrypto/TLS in the
   insecure-context PWA, so it's `@loam/crypto`: X25519 handshake + XChaCha20-Poly1305). Host static
-  key in the join QR `#k=` fragment (MITM-resistant); `POST /api/transport/handshake` derives a
+  key in the join QR `#k=` fragment (MITM-resistant for the protocol; the client's own HTML/JS still arrives
+  over plain HTTP, so a LAN attacker who can rewrite the page load is NOT defended against, docs/08 threat 4);
+  `POST /api/transport/handshake` derives a
   session; global `onRequest`/`preValidation`/`onSend` hooks transparently decrypt request bodies +
   encrypt responses (aad `METHOD url`). WS frames on `/ws?enc=<sid>` (after a key-confirmation challenge)
   are sealed under a connection-bound aad (`loam.ws.frame.v1 <connectionId>`) inside a `{ q, f }`
@@ -556,7 +558,10 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   on failure. A **hardened** network refuses a cloud service (`llm_cloud_not_allowed` on PATCH; a hand-edited
   config.json boots with the assistant off) but allows a local one (`isLocalNetworkUrl`). When a backend is
   active, a bot user appears as a DM contact and DMing it streams a reply into a new assistant message,
-  updated incrementally. Absent config = no bot, no LLM routes. `botId` must be an `llm.*` id (≤64) and may not name a
+  updated incrementally. Members are told where replies come from: `NetworkConfig.assistantDestination` (`onDevice` / `host` / `lan` /
+  `online` + hostname) is shown in the bot DM's header, an `online` one gates the composer behind a per-service,
+  per-device acknowledgement, and DM history written before a destination change is never sent to the new one (a
+  `{ key, since }` record under `assistantDestination` in the config table; docs/06 "What members are told"). Absent config = no bot, no LLM routes. `botId` must be an `llm.*` id (≤64) and may not name a
   non-bot user (PATCH 400; at boot an out-of-namespace id is dropped for the default with a warning, and
   one naming a person skips the bot). Only the configured bot is on the roster (`visibleUsers`): a bot
   record under an old or repaired id stays in the DB but is hidden (logged once when a repair orphans one); `botDisplayName` ≤80, `model` ≤120. At most one reply in flight per user and 2 node-wide (`429 assistant_busy`); a moderator

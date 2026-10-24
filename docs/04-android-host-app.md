@@ -487,7 +487,7 @@ HTTP server answering requests. Findings that bind future work:
   the fork adds the **16KB page-size alignment** Google Play requires (Nov 2025) which upstream's
   released binaries lack, and it is actively maintained (upstream is dormant since Oct 2024).
 - **Embedded Node is 18.20.4 (ABI 108, EOL)** — the Node 22 upgrade upstream is stalled. Plan for
-  Node 18 indefinitely. `node:sqlite` is absent on-device; the encrypted-driver verdict
+  Node 18 indefinitely (see "Runtime maintenance" below for what that costs). `node:sqlite` is absent on-device; the encrypted-driver verdict
   (better-sqlite3-multiple-ciphers) lives in [01](01-sqlite-migration.md).
 - **ARM ABIs only** (`arm64-v8a`/`armeabi-v7a`): the x86 CMake build is broken upstream (#78/#88).
   Irrelevant in practice — devices and Apple-silicon emulators are arm64.
@@ -498,6 +498,28 @@ HTTP server answering requests. Findings that bind future work:
 - ~~Top remaining unknown: Fastify 5 on Node 18~~ — **closed by the phase-2 spike: works.** See below.
 - **Production precedent:** `digidem/comapeo-mobile` (Expo 54, the @comapeo fork, better-sqlite3 +
   drizzle inside the embedded Node) is in production and actively developed.
+
+### Runtime maintenance (Node 18 is end-of-life)
+
+The Android host runs on `@comapeo/nodejs-mobile-react-native@18.20.4-2`, which embeds **Node 18.20.4**.
+Node 18 reached end-of-life on 30 April 2025.
+
+- **What runs on it:** only LOAM's own server bundle (`loam-server.js`) and the launcher (`main.js`). No
+  third-party code is loaded at runtime beyond what the bundle and the vendored SQLite drivers contain.
+- **What is exposed:** the server listens on `0.0.0.0` (`main.js` sets `HOST`), so its HTTP and WebSocket
+  stack is reachable by anyone on the hotspot or Wi-Fi network the phone hosts or joins, and by any other
+  network the phone is on that lets inbound connections reach it. Node's HTTP parser (llhttp), its core
+  modules (`node:http`, `node:net`, `node:zlib`, `node:crypto`) and the bundled OpenSSL and V8 no longer
+  get upstream security fixes on the 18 line. A future Node CVE in request parsing or a core module
+  will not be patched here unless the fork rebuilds on a newer line. The fork's releases so far are
+  packaging work (16 KB alignment, build fixes), not a commitment to backport Node security fixes.
+- **What limits it:** the attacker must be on a network that reaches the phone (normally the local one);
+  LOAM's own request handling (host allowlist, body caps, rate limits) runs after Node's parser, so it
+  does not shield the parser itself.
+- **The plan (owner's decision):** track the @comapeo fork for a Node 20 or 22 build and move to it when it
+  ships; after any bump, re-verify the 16 KB page-size check ([docs/30](30-play-store.md) "Verified fine")
+  and rebuild the vendored SQLite prebuilds for the new ABI (they are built for ABI 108). Tracked as
+  **O13** in [docs/25](25-backlog.md) §0.
 
 ### Phase-2 spike verdict (2026-07-01): the real server runs on-device ✅
 
@@ -667,6 +689,28 @@ support it); avoid Android-only Easy Connect for v1.
   `onShouldStartLoadWithRequest`), so a LAN browser never gets it; LAN joiners of an ephemeral-key node
   rescan the QR after each host restart (docs/08). The client also purges its cached data when its
   server-confirmed identity changes, so a missed wipe doesn't leave old messages on screen.
+- **No copy of messages outside the encrypted database.** On every encrypted network (any DB mode but `off`,
+  read from the persisted choice when the launcher reports `ready`; the WebView waits for it) the injection
+  also sets `window.__loamHostNoLocalCache`, as the desktop host's preload does (docs/24 "Storage
+  partition"). The web client (`lib/local-store.ts`) then keeps no IndexedDB: what the host's own screen
+  shows is held in memory and loaded from the node on loopback at each page load, and a `loam-poc` database
+  an older version of the app wrote is deleted on the first page load under the flag. The WebView also gets
+  `cacheEnabled={false}`, so pictures served in the clear (`optional` transport mode) aren't kept in an HTTP
+  cache, and each WebView mount on such a network calls `clearCache(true)` to drop one an older version
+  wrote. localStorage stays on (the identity token and preferences, no messages). An `off` network keeps
+  both caches, as before. Not yet checked on a device.
+
+### What the host phone logs
+
+nodejs-mobile copies the embedded server's stdout and stderr to logcat, and logcat sits outside the encrypted
+database: `adb logcat`, a bug report or some backup tools can read it after the fact. So the Android entry
+(`embedded-main.ts`, `startAndroidServer`) starts the server with `requestLogging: false`: no line per request,
+because each one carries the joiner's address, port and a timestamp, an activity record for the whole network.
+Warnings and errors still go to logcat, and they carry no message text, names or keys (the request serializer
+drops query strings, the tunnel hides paths, and the assistant's error lines are scrubbed of key-shaped text).
+The React Native side logs no URLs either (`onHttpError` logs the status only, since the page URL names a
+conversation). The desktop app keeps its log in memory (docs/24) and the `loamnet` terminal app logs a line per
+request only with `--verbose`.
 
 ## Monorepo question — settled
 

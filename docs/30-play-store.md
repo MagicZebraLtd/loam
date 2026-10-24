@@ -1,8 +1,8 @@
 # 30 — Google Play readiness
 
 > **Status: current working checklist** (audited 25 September 2026; large-screen section added 9 October
-> for 0.6.0; status updated 22 October 2026). 0.6.4 (`versionCode` 12) is on the internal testing
-> track. Play App Signing now uses the same key as the GitHub APK (changed 14 October, which is why 0.6.4
+> for 0.6.0; status updated 25 October 2026). 0.6.4 (`versionCode` 12) is on the internal testing
+> track; 0.7.0 (`versionCode` 13, the launch release) is the next upload. Play App Signing now uses the same key as the GitHub APK (changed 14 October, which is why 0.6.4
 > exists). The in-repo blockers are closed; what remains is the owner's work in the Play Console (the H1
 > foreground-service declaration and its video, the H2 location declaration, a production release and
 > review) and the device run in [docs/21](21-device-verification-checklist.md). Data safety needs a fresh
@@ -119,8 +119,11 @@ device checks below, and size headroom before a production track.
 
 ## Should fix before a production track
 
-- **Size headroom (open).** ~172 MB compressed against Play's 200 MB base-module limit: `libnode.so` ≈ 50 MB
-  and ≈ 73 MB of `librnllama*` CPU variants; R8 is off (≈ 44 MB dex). Levers:
+- **Size headroom (open).** ~172 MB compressed: `libnode.so` ≈ 50 MB and ≈ 73 MB of `librnllama*` CPU
+  variants; R8 is off (≈ 44 MB dex). That is well inside Play's 500 MB base-module limit, but close to
+  200 MB, the download size above which Play warns people on mobile data before they install. Measure the
+  final download size Play computes for the uploaded bundle (the Play Console's App bundle explorer shows
+  it), not the local AAB. Levers:
   - **llama.rn variants.** llama.rn picks its library from the CPU flags (dotprod+i8mm(+Hexagon/Adreno) →
     dotprod → i8mm → fp16 → v8), so all but one variant can be selected on some phone. The exception is
     `librnllama_v8_2_i8mm.so` (≈ 9.4 MB: i8mm without dotprod, which shipping arm64 cores don't have), so

@@ -22,22 +22,31 @@
 | O10 | **Desktop app on real machines**: CI builds all five installers, and the Linux AppImage is smoke-tested there, but none has been run on a real machine except the Mac arm64 build. Run the Windows installer, the Linux AppImage and `.deb` (with and without a secret service), and the Intel Mac build; drive the real `safeStorage` flow, the firewall prompts, a phone joining and Emergency Reset on every key mode (the checks are docs/21 §5). | 24, 21 §5 | Hardware |
 | O11 | **Desktop signing, Windows half**: ~~add the five Apple secrets~~ done 2026-10-22: the Mac builds are signed with the Developer ID certificate and notarized. Still open: create the SignPath Foundation project (`loam`, `release-signing`, `installer`) and add its two secrets. Until then the Windows installer is unsigned and SmartScreen warns. | 24 | Process (owner) |
 | O12 | **Desktop: Linux desktops with no tray**: closing the window leaves the network running with no icon to bring it back (a second launch focuses the window). Decide on a fallback (a notice on close, or Quit instead of hide when no tray is available). | 24 | Product decision |
+| O13 | **Android host runs on an end-of-life Node (18.20.4)**: the embedded runtime is the @comapeo nodejs-mobile fork at Node 18, which no longer gets upstream security fixes. LOAM's server listens on the hotspot/Wi-Fi LAN through Node's own HTTP parser and core modules, so a future Node CVE there stays unpatched; the fork's releases are packaging work, not a backport commitment. Track the fork for a Node 20/22 build, then rebuild the ABI-108 SQLite prebuilds and re-verify the 16 KB alignment check (docs/30) after the bump. | 04, 30 | Decision (owner), upstream fork |
 
 ### Before 0.7.0
 
-The release checklist. The owner does each step.
+The release checklist. Steps 1 to 3 are done on the `release/0.7.0` branch (25 October 2026: the two
+external launch reviews' findings, the version bump and the changelog); the owner does the rest, in order.
 
-1. Merge `feat/llm-providers` and `fix/desktop-first-ci-run`. The second one fixes the Linux AppImage's file
-   name, the signing docs and Windows reserved ports. Decide whether `deps/preact-11` (PR #162) goes in too.
-2. Bump every version to 0.7.0 (`node scripts/check-versions.mjs`, and a new `versionCode`). Date the
-   changelog, then push the signed tag `v0.7.0`.
-3. `npm publish` loamnet. npm still has 0.6.0.
-4. Upload the Play bundle to internal testing. Make the foreground-service declaration and record its video,
-   which needs the phone run.
-5. Make sure the privacy policy covers the online assistant: messages sent to it go to the chosen service.
-6. SignPath for Windows (O11) is optional for this release.
-7. The hardware runs: O1, O2, O5 and O10 (the checks are in docs/21).
-8. Decide O12.
+1. ~~Merge `feat/llm-providers` and `fix/desktop-first-ci-run`~~ (merged 24 October as #175 and #174;
+   `deps/preact-11` went in as #162).
+2. ~~Bump every version to 0.7.0 (`versionCode` 13) and date the changelog~~ (on the release branch). After
+   the merge: push the signed tag `v0.7.0`, wait for both tag workflows, then check the Release has the APK,
+   the five installers and every `.sha256`, and `spctl --assess` one of the DMGs.
+3. ~~Make sure the privacy policy covers the online assistant~~ (both policies dated 25 October; members
+   now see the destination in the assistant's chat too).
+4. `npm publish` loamnet from `cli/`. npm still has 0.6.0.
+5. Upload the Play bundle (`loam-host-aab` from the tag build) to internal testing. Make the
+   foreground-service declaration and record its video, which needs the phone run. Redo the Data safety
+   answers with docs/30 "No telemetry" in hand: the online assistant and linking a network are optional
+   paths off the device.
+6. The site redeploys from `master` on merge; after the tag, click every download on `/desktop` from a
+   clean browser.
+7. The hardware runs: O1, O2, O5 and O10 (the checks are in docs/21), plus the host WebView check in P30
+   (an encrypted Android network keeps no IndexedDB copy and no HTTP cache; an upgraded phone's old copy is
+   deleted on first load).
+8. SignPath for Windows (O11) is optional for this release. Decide O12.
 
 ## Earlier notes
 
@@ -119,7 +128,7 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 | P27 | Desktop: "Start a new network" destroys the device secret before emptying the folder; files Windows still holds open leave the network record behind, and the next start mints a new key over the leftover database and reports it locked (recoverable by running it again). Empty the folder first, then the secret, then the record. | 24 | S | None |
 | P28 | Desktop: `LOAM_DB_KEY` passes through `process.env` for the length of a boot, so a Chromium helper spawned in that window inherits it. Hand the key to `startEmbeddedServer` as an option instead (a server change shared with the Android launcher). | 24,04 | S | None |
 | P29 | Desktop on Ubuntu 24.04+: confirm the AppImage sandbox failure on a real desktop and either ship an AppArmor profile with it or keep pointing people at the .deb | 24 | S | Hardware |
-| P30 | Android host: the WebView's IndexedDB copy of the host's own view sits outside the database's key, as the desktop's did. The web client now honours `window.__loamHostNoLocalCache` (docs/24 "Storage partition"); inject it from `apps/app/src/app/index.tsx` beside the host token on every encrypted network, and test the host's WebView on a device. | 24, 04 | S | Hardware |
+| P30 | ~~Android host: the WebView's IndexedDB copy of the host's own view sits outside the database's key, as the desktop's did~~ (shipped, 0.7.0: `apps/app/src/app/index.tsx` injects `window.__loamHostNoLocalCache` beside the host token on every encrypted network and turns the WebView's HTTP cache off; the client deletes a copy an older version wrote; docs/04). Still open: test the host's WebView on a device. | 24, 04 | S | Hardware |
 
 An auto-updater is deliberately not on this list: the app never checks by itself (LOAM phones nowhere); Check for updates is tap-only.
 

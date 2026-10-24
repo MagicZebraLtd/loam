@@ -272,7 +272,7 @@
               <ul class="tips">
                 <li>Needs <a href="https://nodejs.org" rel="noreferrer">Node.js</a> 22.14 or newer.</li>
                 <li>The join code stays on screen. Press <code>o</code> to open LOAM in your browser as the network's admin.</li>
-                <li>Add <code>--encrypt</code> to encrypt everything stored on the machine.</li>
+                <li>Add <code>--encrypt</code> to encrypt the database. Pictures and files are stored beside it, unencrypted.</li>
                 <li>Install it for good with <code>npm install -g loamnet</code>, then run <code>loam</code>.</li>
               </ul>
             </article>
@@ -350,7 +350,8 @@
               <p>
                 When you start a network, LOAM asks one plain question. <strong>Private and short-lived</strong>
                 gives everyone a random name, deletes messages after an hour, lets you approve each person
-                who joins, and leaves nothing readable once the app closes. <strong>Community</strong> lets
+                who joins, and throws away the key to its messages when LOAM stops (pictures and files
+                are deleted the next time it starts). <strong>Community</strong> lets
                 people pick names and photos and keeps the conversation going for days.
               </p>
               <p class="muted">Or choose every setting yourself: joining rules, message lifetime, roles and more.</p>
@@ -463,7 +464,7 @@
             </li>
             <li class="feature reveal">
               <h3>An assistant, if you want one</h3>
-              <p>Run a small AI model on the host phone, use Ollama or another model server on a computer nearby, or connect an online service such as OpenRouter or OpenAI. An online service gets the messages people write to the assistant, and the admin page says so. Off unless you turn it on.</p>
+              <p>Run a small AI model on the host phone, use Ollama or another model server on a computer nearby, or connect an online service such as OpenRouter or OpenAI. An online service gets the messages people write to the assistant, and both the admin page and the assistant's chat say so. Off unless you turn it on.</p>
             </li>
           </ul>
         </div>
@@ -515,7 +516,8 @@
             <h2 id="privacy-title">Private because there's nothing to collect.</h2>
             <p class="section-lede">
               LOAM has no accounts, no cloud and no company in the middle. What people post stays on the
-              device that runs the network, and on their own phones.
+              device that runs the network, and on their own phones, unless the host links another network
+              or turns on an online assistant.
             </p>
             <a class="text-link text-link-light" href="/privacy">Read the privacy policy</a>
             <div class="phone privacy-phone" aria-hidden="true">
@@ -529,15 +531,15 @@
             </li>
             <li>
               <strong>Encrypted connections</strong>
-              <span>Joining by the code encrypts messages between your phone and the host, so nobody else on the Wi-Fi can read them. Pictures and files are encrypted too on a network that requires it.</span>
+              <span>Joining by the code encrypts messages between your phone and the host, so someone listening on the Wi-Fi can't read them. Pictures and files are encrypted too on a network that requires it.</span>
             </li>
             <li>
               <strong>Encrypted storage</strong>
-              <span>Messages can be stored encrypted on the host, with a key that never leaves the phone.</span>
+              <span>Messages can be stored encrypted on the host, under a key that stays on that device.</span>
             </li>
             <li>
               <strong>Emergency reset</strong>
-              <span>Press and hold to erase the whole network at once, on the host and on every phone connected to it. LOAM then closes, ready to start again.</span>
+              <span>Press and hold to erase the whole network at once, on the host and on every phone connected to it. The Android app then closes, ready to start again.</span>
             </li>
             <li>
               <strong>For adults, and here's why</strong>

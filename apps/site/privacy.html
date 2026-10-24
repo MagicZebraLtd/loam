@@ -48,7 +48,7 @@
       <div class="wrap legal-body">
         <p class="eyebrow">Legal</p>
         <h1>Privacy policy</h1>
-        <p class="legal-meta">Last updated 22 October 2026</p>
+        <p class="legal-meta">Last updated 25 October 2026</p>
 
         <p>
           This policy covers two things: the <strong>LOAM app</strong> (the Android host app, the desktop app
@@ -136,9 +136,10 @@
           </li>
           <li>
             The host can turn on encryption of the stored database. With encryption on, a reset also replaces
-            the key on the Android host app, and on a computer using a temporary key, so the deleted data
-            cannot be recovered from the device's storage. A computer that uses a fixed passphrase deletes the
-            database files but keeps the same passphrase. Uploaded images and files are stored outside the
+            the key in the Android and desktop host apps, and in the <code>loamnet</code> terminal app when it
+            uses a temporary key, so the deleted data cannot be recovered from the device's storage.
+            <code>loamnet</code> with a fixed passphrase deletes the database files but keeps the same
+            passphrase. Uploaded images and files are stored outside the
             database without encryption. A reset deletes them, but on flash storage a deleted image or file may
             still be recoverable.
           </li>
@@ -153,8 +154,10 @@
           on that network, over the local Wi-Fi or hotspot. When you join by scanning the host's QR code, the
           app encrypts the messages between your device and the host, and the pictures and files you upload.
           Downloading pictures and files is encrypted too when the host requires encrypted connections;
-          otherwise they are downloaded unencrypted over the local network. Data leaves the host device only
-          if the host turns on one of these features:
+          otherwise they are downloaded unencrypted over the local network. The encryption does not protect
+          against someone who can alter the network traffic while LOAM loads on your device: they could give
+          your device a changed copy of LOAM that reads your messages. Data leaves the host device only if
+          the host turns on one of these features:
         </p>
         <ul>
           <li>
@@ -165,21 +168,23 @@
           </li>
           <li>
             <strong>Remote assistant:</strong> if the host connects the assistant to a model running on
-            another computer, messages you send to the assistant go to that computer. The on-device assistant
-            runs entirely on the host phone.
+            another computer, the messages you send to the assistant, and the recent history of that
+            conversation since the host last chose where the assistant runs, go to that computer. The
+            on-device assistant runs entirely on the host phone.
           </li>
           <li>
             <strong>Online assistant:</strong> the host can set the assistant to use an online chat service,
             such as OpenRouter, OpenAI, Groq or Mistral. The messages you write to the assistant, and the
-            recent history of that conversation, are then sent to that company and handled under its own
-            privacy policy. The host chooses the service, and the admin page names it and warns that messages
-            will leave the network. Nothing else goes there: not your name, not your other messages, and
-            nothing anyone else writes. A Private network only accepts a service on the host or the local
-            network.
+            recent history of that conversation since the host last chose where the assistant runs, are then
+            sent to that company and handled under its own privacy policy. The host chooses the service. The
+            admin page names it and warns that messages will leave the network, and the assistant's chat
+            names it too and asks you to confirm once on each device before your first message goes out.
+            Nothing else goes there: not your name, not your other messages, and nothing anyone else writes.
+            A Private network only accepts an assistant on the host or the local network.
           </li>
           <li>
             <strong>Mesh delivery</strong> (experimental): messages to your mesh contacts may be carried
-            by other LOAM networks, sealed so that only the recipient can read them.
+            by other LOAM networks, sealed so that the networks carrying them cannot read them.
           </li>
         </ul>
         <p>

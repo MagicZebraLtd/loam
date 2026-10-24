@@ -150,6 +150,13 @@ using a bundled library**, bootstrapped by an **out-of-band channel we already h
    the wire but the host still holds plaintext. Mitigated by at-rest encryption ([01](01-sqlite-migration.md))
    + kill switch ([02](02-kill-switch.md)) + ephemeral messages ([07](07-more-features.md)); *fully*
    addressed only by E2EE ([07](07-more-features.md)), which trades away server-side LLM/search.
+4. **Rewriting the page as it loads.** The web client itself (HTML + JavaScript) is served over plain
+   HTTP. An attacker who can *modify* traffic between a phone and the host (ARP spoofing on an open
+   hotspot, a malicious router) can serve a modified client that reads messages before they are sealed,
+   sends them elsewhere, or forges what is shown. The QR key can't help: the code that checks it is the
+   code being replaced. Only a client that doesn't come over the LAN closes this (a signed native client;
+   the host app's own WebView and Electron window, which load the client from loopback). See "What this
+   buys / doesn't" below.
 
 ## Evaluating the original idea (token in the QR)
 
@@ -182,8 +189,10 @@ unavailable, so ship one):
 - **Join token** stays as an orthogonal *authorization* check (prove you scanned the physical QR;
   one-time; rate-limited), separate from the confidentiality the handshake provides.
 - **Verification UX**: derive a short **safety word / emoji fingerprint** from the host public key and
-  show it in the UI (and optionally on the host screen). MITM is already prevented by the QR-delivered
-  key; the fingerprint lets humans confirm they scanned the real host and detects a swapped QR poster.
+  show it in the UI (and optionally on the host screen). A MITM *of the protocol* (impersonating the
+  host at the handshake) is already prevented by the QR-delivered key, provided the genuine client is
+  running (threat 4 above is the case where it isn't); the fingerprint lets humans confirm they scanned
+  the real host and detects a swapped QR poster.
 
 ### Libraries (must work in an insecure context — no WebCrypto)
 - **`@noble/curves`** (x25519), **`@noble/ciphers`** (xchacha20poly1305), **`@noble/hashes`** (hkdf) —
@@ -194,9 +203,19 @@ unavailable, so ship one):
 - **Do not hand-roll** the handshake or AEAD.
 
 ### What this buys / doesn't
-- ✅ Confidentiality + integrity + MITM resistance **against network attackers** over plain HTTP — the
-  core "no HTTPS" problem solved, no certificates, no browser warnings.
+- ✅ Confidentiality + integrity over plain HTTP against **passive listeners** (anyone capturing the
+  hotspot's traffic), and MITM resistance against an active attacker who can only **impersonate the host
+  at join time** (the QR-delivered key defeats a look-alike node or an intercepted handshake), provided the
+  genuine client is running. No certificates, no browser warnings.
 - ✅ Frictionless join preserved (scan QR → connected + encrypted, invisibly).
+- ❌ Does **not** protect against an active attacker who can **rewrite the HTTP page load** (threat 4).
+  The client's HTML and JavaScript arrive over plain HTTP on every load, so an attacker on the path
+  between a phone and the host (ARP spoofing on an open hotspot, a malicious router) can serve a modified
+  client that reads messages before they are encrypted or forges what is shown. This is architectural:
+  app-layer encryption protects the protocol once the genuine client runs, not the delivery of the client
+  itself. Only a signed native client closes it. The host's own windows (the Android app's WebView and the
+  desktop app's Electron window) load the client from loopback, so they are not exposed to it; every
+  phone that joins over the LAN is.
 - ❌ Does **not** hide plaintext **from the host** (it decrypts to relay/LLM/search). That's the E2EE
   layer, deliberately separate.
 - ❌ Does not restore the **service worker / offline PWA** (still an insecure context) — see below.
