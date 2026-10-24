@@ -51,6 +51,7 @@ import {
   setDbModeHint,
   setPassphraseCandidate,
   type DbEncryptionMode,
+  type DbEncryptionModeOrError,
   type StartFreshIntent,
 } from '@/lib/db-encryption';
 import { confirmStartUnencrypted, retryKeyResolution, switchEncryptionOffAndRetry } from '@/lib/driver-missing-recovery';
@@ -199,6 +200,12 @@ let nodeHostToken: string | undefined;
 // Same "survive a remount" reasoning as `nodeStatus` above, but for the persistent boot notice:
 // once set it's never cleared by a status change, only by the operator dismissing it in this render.
 let nodeNotice: BootNotice | undefined;
+// The DB-encryption mode the running node booted under, read once per `ready` (the persisted choice the
+// launcher's key request was just answered with; a later picker change only applies on restart, so this
+// keeps the boot's value). `nodeDbModeRead` numbers the reads so a late answer from an earlier boot can't
+// overwrite a newer one. Module scope for the same remount reasoning as `nodeHostToken`.
+let nodeDbMode: DbEncryptionModeOrError | undefined;
+let nodeDbModeRead = 0;
 
 // The setup screens run once per process, before the runtime starts (it can't restart, so a remount after
 // that goes straight to the host screen). `afterSetup` is what setup asked the host screen to open first.
@@ -300,6 +307,11 @@ function HostScreen() {
   const [transportKeyFragment, setTransportKeyFragment] = useState('');
   // See `nodeHostToken` — the per-boot host token the WebView hands to the LOAM client to claim admin.
   const [hostAdminToken, setHostAdminToken] = useState<string | undefined>(() => nodeHostToken);
+  // See `nodeDbMode`. Undefined until read, and the WebView waits for it (its injected globals and cache
+  // mode depend on it). Any mode but `off`, a read error included, means an encrypted network: the
+  // database is SQLCipher-encrypted, so the client in the WebView keeps no copy of messages outside it.
+  const [bootDbMode, setBootDbMode] = useState<DbEncryptionModeOrError | undefined>(() => nodeDbMode);
+  const hostNoLocalCache = bootDbMode !== undefined && bootDbMode !== 'off';
   // After a NODE wipe (the client posts `loam-wipe`), the server has rotated its transport key and dropped
   // every identity — the client shows its "node no longer available" screen and the injected host token
   // was consumed. Re-fetch the bootstrap (new `#k=`) and REMOUNT the WebView (`key`) so the host's own
@@ -470,6 +482,19 @@ function HostScreen() {
           nodeHostToken = payload.hostToken;
           setHostAdminToken(payload.hostToken);
         }
+        // Learn the mode this boot opened its database under (see `nodeDbMode`). Cleared first, so the
+        // WebView never mounts on an earlier boot's answer.
+        const read = ++nodeDbModeRead;
+        nodeDbMode = undefined;
+        setBootDbMode(undefined);
+        void getDbEncryptionMode()
+          .catch(() => DB_ENCRYPTION_MODE_READ_ERROR)
+          .then((mode) => {
+            if (read === nodeDbModeRead) {
+              nodeDbMode = mode;
+              setBootDbMode(mode);
+            }
+          });
         // Clear any leftover start-fresh confirmation state from a PRIOR `db_encryption_unreadable`
         // recovery: that fatal block only exists in the non-ready view (see DB_UNREADABLE_CODE's comment),
         // so once `ready` fires the operator can no longer see it, and a stale confirmation message must
@@ -727,6 +752,21 @@ function HostScreen() {
       clearTimeout(timeoutId);
     };
   }, [status, bootstrapAttempt]);
+
+  // On an encrypted network the WebView keeps no HTTP cache (`cacheEnabled={false}` below); drop the one
+  // an older version of the app may have written, once per WebView mount. `clearCache(true)` is
+  // react-native-webview's Android `WebView.clearCache(includeDiskFiles)`: the cache is per application,
+  // so this clears the disk files too.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !webViewReady || !hostNoLocalCache) {
+      return;
+    }
+    try {
+      webViewRef.current?.clearCache(true);
+    } catch (error) {
+      console.warn('LOAM: could not clear the WebView cache', error);
+    }
+  }, [webViewReady, webViewKey, hostNoLocalCache]);
 
   // Retry a gated bootstrap (see `bootstrapError`): clear the error and bump `bootstrapAttempt` so the
   // effect above re-runs its /api/bootstrap fetch from scratch. The WebView stays gated until that
@@ -1142,7 +1182,7 @@ function HostScreen() {
             guide suggests `behavior={undefined}` on Android; that relies on the window resizing, which
             edge-to-edge takes away, hence `padding`. Not yet verified on a device. */}
         <KeyboardAvoidingView behavior="padding" style={styles.flex}>
-        {webViewReady ? (
+        {webViewReady && bootDbMode !== undefined ? (
           <WebView
             key={webViewKey}
             ref={webViewRef}
@@ -1157,21 +1197,28 @@ function HostScreen() {
             // `__loamHostTransportKey`: the client trusts it over a stale pin, since a node with an ephemeral
             // DB key mints a new transport key every boot and would otherwise break the host's own pin
             // (rescan gate + "different key" prompt) on every launch (docs/04, docs/08).
+            // On an encrypted network (`hostNoLocalCache`) also set `__loamHostNoLocalCache`, as the desktop
+            // host's preload does (apps/desktop/src/preload/client.cts): the client then keeps no IndexedDB
+            // copy of messages, which would sit in the clear beside the SQLCipher database, and deletes one
+            // an older version left (apps/client/src/lib/local-store.ts; docs/04, docs/24).
             injectedJavaScriptBeforeContentLoaded={
               (hostAdminToken ? `window.__loamHostDeviceToken = ${JSON.stringify(hostAdminToken)};` : '') +
               (transportKeyFragment
                 ? `window.__loamHostTransportKey = ${JSON.stringify(decodeURIComponent(transportKeyFragment.slice('#k='.length)))};`
                 : '') +
+              (hostNoLocalCache ? 'window.__loamHostNoLocalCache = true;' : '') +
               ' true;'
             }
-            // The LOAM client relies on the loam_session cookie, localStorage/IndexedDB, and a
-            // WebSocket — enable all of them. The cleartext localhost origin is allowed by the app's
-            // network security config (plugins/with-loam-host.js), loopback only.
+            // The LOAM client relies on the loam_session cookie, localStorage, IndexedDB (unless refused
+            // above) and a WebSocket — enable them. localStorage holds the identity token and preferences,
+            // no messages, so it stays on for every network. The cleartext localhost origin is allowed by the
+            // app's network security config (plugins/with-loam-host.js), loopback only.
             javaScriptEnabled
             domStorageEnabled
-            thirdPartyCookiesEnabled
-            sharedCookiesEnabled
-            cacheEnabled
+            // No HTTP cache on an encrypted network: pictures served in the clear under `optional`
+            // transport mode would otherwise land on disk outside the encrypted database (see the
+            // `clearCache` effect above for one an older version wrote).
+            cacheEnabled={!hostNoLocalCache}
             // Bridge from the LOAM web client back to this native screen, see `handleWebViewMessage`'s
             // comment.
             onMessage={handleWebViewMessage}
@@ -1190,8 +1237,12 @@ function HostScreen() {
             // Keep the WebView pinned to the embedded server's origin. originWhitelist is a coarse
             // prefix guard; onShouldStartLoadWithRequest is the real one — it allows only LOAM-origin
             // navigations and shunts external links (the client opens them with target=_blank) to the
-            // system browser, so the host frame never leaves LOAM.
+            // system browser, so the host frame never leaves LOAM. That needs `setSupportMultipleWindows`
+            // off: with it on (the default), Android hands a target=_blank link to a detached popup
+            // WebView that never consults onShouldStartLoadWithRequest; off, the link navigates this
+            // WebView, which the handler below refuses and opens in the system browser instead.
             originWhitelist={['http://localhost:3000']}
+            setSupportMultipleWindows={false}
             onShouldStartLoadWithRequest={(request) => {
               if (isLoamUrl(request.url)) {
                 return true;
@@ -1206,7 +1257,8 @@ function HostScreen() {
               failWebView(nativeEvent.description || t('boot.pageFailed'));
             }}
             onHttpError={({ nativeEvent }) => {
-              console.warn('LOAM WebView HTTP error', nativeEvent.statusCode, nativeEvent.url);
+              // The status only: the URL names a conversation, and logcat outlives the network (docs/04).
+              console.warn('LOAM WebView HTTP error', nativeEvent.statusCode);
               // Any HTTP error from the LOAM origin is fatal (on Android onHttpError is the main frame);
               // compare origins so a redirect to /channels or a trailing slash still matches.
               if (isLoamUrl(nativeEvent.url)) {

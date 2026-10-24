@@ -1,5 +1,5 @@
 import { IDBFactory } from "fake-indexeddb";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearAllRecords,
@@ -35,6 +35,39 @@ describe("local-store", () => {
       // Nothing was created: there is no database for a later page load without the flag to find.
       expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
       await expect(destroyDatabase()).resolves.toBeUndefined();
+    } finally {
+      delete window.__loamHostNoLocalCache;
+    }
+  });
+
+  it("deletes the copy an older build wrote once the host app refuses one (an upgrade)", async () => {
+    // An older host build kept a copy: written on a page load without the flag.
+    await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+    expect((await indexedDB.databases()).map((database) => database.name)).toContain("loam-poc");
+
+    // The next page load runs under the flag. Any store call starts the purge without waiting on it.
+    resetLocalStoreForTests();
+    window.__loamHostNoLocalCache = true;
+    try {
+      expect(await getAllRecords<Channel>("channels")).toEqual([]);
+      await vi.waitFor(async () => {
+        expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
+      });
+    } finally {
+      delete window.__loamHostNoLocalCache;
+    }
+  });
+
+  it("destroyDatabase deletes an existing database while the host app refuses a copy", async () => {
+    await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+    resetLocalStoreForTests();
+    window.__loamHostNoLocalCache = true;
+    try {
+      markLocalStoreWiped();
+      await destroyDatabase();
+      expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
+      // The deletion landed, so the wipe is complete rather than pending.
+      expect(localStorage.getItem("loam.wipePending")).toBeNull();
     } finally {
       delete window.__loamHostNoLocalCache;
     }
