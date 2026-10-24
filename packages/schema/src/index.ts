@@ -472,6 +472,114 @@ export const OllamaConfigSchema = z.object({
 });
 export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
 
+/** Longest API key an OpenAI-compatible service's configuration may carry. */
+export const LLM_API_KEY_MAX_LENGTH = 512;
+
+/**
+ * An **OpenAI-compatible** chat service (`POST {baseUrl}/chat/completions`, streaming SSE): OpenRouter,
+ * OpenAI, Groq, Mistral and the local servers that speak the same shape (LM Studio, llama.cpp server, vLLM).
+ * The bot's identity (botId / botDisplayName / systemPrompt) is shared from `llm.ollama`, like the on-device
+ * block. `apiKey` is **write-only**: it is stored with the node's config (in the clear, like `sync.token`,
+ * because the node has to present it) but never returned by the admin API or the host API, which report
+ * `apiKeySet` instead. An update that omits `apiKey` keeps the stored key; an empty string clears it.
+ */
+export const OpenAiCompatibleConfigSchema = z.object({
+  enabled: z.boolean(),
+  baseUrl: z.url({ protocol: /^https?$/ }),
+  model: z.string().min(1).max(LLM_MODEL_MAX_LENGTH),
+  apiKey: z.string().min(1).max(LLM_API_KEY_MAX_LENGTH).optional(),
+  /** Read-only: set by the server on the redacted config it returns, ignored (and stripped) on update. */
+  apiKeySet: z.boolean().optional(),
+});
+export type OpenAiCompatibleConfig = z.infer<typeof OpenAiCompatibleConfigSchema>;
+
+/**
+ * Services an admin can pick by name so the base URL is filled in for them; "custom" leaves the URL alone.
+ * The order is the order they are offered in. Local servers are listed with their default ports.
+ */
+export const OPENAI_COMPATIBLE_PRESETS: readonly { id: string; label: string; baseUrl: string; cloud: boolean }[] = [
+  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", cloud: true },
+  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", cloud: true },
+  { id: "groq", label: "Groq", baseUrl: "https://api.groq.com/openai/v1", cloud: true },
+  { id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", cloud: true },
+  { id: "lmstudio", label: "LM Studio (this computer)", baseUrl: "http://localhost:1234/v1", cloud: false },
+  { id: "llamacpp", label: "llama.cpp server (this computer)", baseUrl: "http://localhost:8080/v1", cloud: false },
+];
+
+/** Which assistant backend answers, given the `llm` config block, or `off` when none is enabled. */
+export const LlmProviderSchema = z.enum(["off", "ollama", "openai", "onDevice"]);
+export type LlmProvider = z.infer<typeof LlmProviderSchema>;
+
+/**
+ * The backend that answers: the on-device model first (the Android host's own model wins when it is
+ * switched on, as it always has), then an OpenAI-compatible service, then Ollama. The server streams from
+ * this one, and the admin screens show the same answer, so the two can't disagree.
+ */
+export function activeLlmProvider(llm: {
+  ollama: { enabled: boolean };
+  openai: { enabled: boolean };
+  onDevice: { enabled: boolean };
+}): LlmProvider {
+  if (llm.onDevice.enabled) {
+    return "onDevice";
+  }
+  if (llm.openai.enabled) {
+    return "openai";
+  }
+  return llm.ollama.enabled ? "ollama" : "off";
+}
+
+/**
+ * Whether a base URL points at this computer or the local network, so a `hardened` node can keep using
+ * a local OpenAI-compatible server (LM Studio, llama.cpp) while cloud services stay refused (docs/09,
+ * docs/29 Track 3). Loopback, RFC 1918 and link-local addresses, `.local` and `.localhost` names, and a
+ * bare hostname with no dot count as local; anything else (a public name or address) does not.
+ */
+export function isLocalNetworkUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+    return true;
+  }
+  if (host.includes(":")) {
+    // An IPv6 literal: loopback, link-local, or a unique local address (fc00::/7).
+    return host === "::1" || host.startsWith("fe80:") || /^f[cd][0-9a-f]{2}:/.test(host);
+  }
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  return !host.includes(".");
+}
+
+/** What `POST /api/admin/llm/models` (and the host API's `llmModels`) take: which backend to ask, and the
+ * connection to try. A field left out means the saved one, so a Test button works before and after a save;
+ * an `apiKey` left out means the stored key. */
+export const LlmModelsRequestSchema = z.object({
+  provider: z.enum(["ollama", "openai"]),
+  baseUrl: z.url({ protocol: /^https?$/ }).optional(),
+  apiKey: z.string().max(LLM_API_KEY_MAX_LENGTH).optional(),
+});
+export type LlmModelsRequest = z.infer<typeof LlmModelsRequestSchema>;
+
+/** The model names a backend offers, or why it couldn't be asked. `code` is for the UI to branch on. */
+export const LlmModelsResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), models: z.array(z.string().min(1).max(LLM_MODEL_MAX_LENGTH)).max(500) }),
+  z.object({
+    ok: z.literal(false),
+    code: z.enum(["llm_unreachable", "llm_unauthorized", "llm_bad_response", "llm_not_allowed"]),
+  }),
+]);
+export type LlmModelsResponse = z.infer<typeof LlmModelsResponseSchema>;
+
 /**
  * On-device LLM backend (the Android host running a small model itself, e.g. Gemma via llama.cpp),
  * as an alternative to reaching a laptop's Ollama. The bot's *identity* (botId / botDisplayName /
@@ -618,7 +726,7 @@ export const LoamConfigSchema = z.object({
   node: NodeIdentityConfigSchema,
   identity: IdentityConfigSchema,
   features: FeatureFlagsSchema,
-  llm: z.object({ ollama: OllamaConfigSchema, onDevice: OnDeviceLlmConfigSchema }),
+  llm: z.object({ ollama: OllamaConfigSchema, openai: OpenAiCompatibleConfigSchema, onDevice: OnDeviceLlmConfigSchema }),
   admin: AdminConfigSchema,
   killSwitch: KillSwitchConfigSchema,
   retention: RetentionConfigSchema,
@@ -637,6 +745,10 @@ export const LoamConfigUpdateSchema = z.object({
     .object({
       ollama: OllamaConfigSchema.partial().extend({
         systemPrompt: z.string().max(4000).optional(),
+      }),
+      openai: OpenAiCompatibleConfigSchema.partial().extend({
+        // Empty string clears the stored key; left out keeps it.
+        apiKey: z.literal("").or(z.string().min(1).max(LLM_API_KEY_MAX_LENGTH)).optional(),
       }),
       onDevice: OnDeviceLlmConfigSchema.partial(),
     })
@@ -1517,6 +1629,8 @@ export const SERVER_ERROR_CODES = [
   "channel_admins_post_only",
   "message_removed",
   "assistant_busy",
+  "llm_cloud_not_allowed",
+  "invalid_llm_models_request",
   "internal_error",
   "dm_unavailable",
   "dm_blocked_by_you",
@@ -1620,6 +1734,8 @@ export type HostApi = {
   /** Apply a change exactly as `PATCH /api/admin/config` would: same validation, persistence, broadcast.
    *  Refused while a reset is running or unfinished. */
   updateConfig(update: LoamConfigUpdate): HostResult<LoamConfig>;
+  /** Ask an assistant backend which models it offers, exactly as `POST /api/admin/llm/models` does. */
+  llmModels(request: LlmModelsRequest): Promise<LlmModelsResponse>;
   /** Everyone who can be shown on the People screen (humans only, newest last). */
   users(): HostUser[];
   /** Make someone an admin; approves them first if they were waiting. Refuses a banned user, and refuses

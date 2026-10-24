@@ -213,7 +213,8 @@ export function MessageComposer({ allowLocationSharing, disabledReason, label, o
   }
 
   async function submit(): Promise<void> {
-    const body = value.trim();
+    const sent = value;
+    const body = sent.trim();
 
     if ((!body && !readyAttachments.length && !draftLocation) || sending || uploading || locationIncomplete) {
       return;
@@ -223,7 +224,9 @@ export function MessageComposer({ allowLocationSharing, disabledReason, label, o
 
     try {
       await onSend(body, readyAttachments.length ? readyAttachments : undefined, draftLocation);
-      setValue("");
+      // The field stays live while the send is in flight, so remove only what was sent: anything typed
+      // after pressing Enter is the start of the next message, not part of this one.
+      setValue((current) => (current.startsWith(sent) ? current.slice(sent.length).trimStart() : current));
       pending.forEach(revokePreview);
       setPending([]);
       closeLocationForm();

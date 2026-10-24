@@ -313,6 +313,8 @@ export const tr: Partial<AppCatalog> = {
   "encryption.savePassphrase": "Parolayı kaydet",
   "model.title": "Cihaz üzerinde model",
   "model.intro": "İsteğe bağlı ve varsayılan olarak kapalı. LOAM'un asistanını internet veya dizüstü bilgisayar gerekmeden tamamen bu telefonda çalıştırmak için küçük bir model indirin. Aşağıdaki her şey cihazda çalışır ve cihazda kalır.",
+  "model.otherBackends": "Bu telefonda model çalıştırmak istemiyor musunuz? Asistan, bu ağdaki bir dizüstü bilgisayarda çalışan Ollama üzerinden veya OpenRouter gibi çevrimiçi bir sohbet hizmeti üzerinden de (internet gerekir) yanıt verebilir. İkisi de LOAM'un yönetici sayfasından ayarlanır.",
+  "model.openAdmin": "Asistan ayarlarını aç",
   "model.thisDevice": "Bu cihaz",
   "model.deviceStats": "RAM: {ram} · Boş depolama: {free}",
   "model.activeName": "Etkin: {name}",

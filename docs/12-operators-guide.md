@@ -65,9 +65,10 @@ and how to keep its data (in the computer's keychain, behind a passphrase, or on
 the code to scan, and you are the admin. Closing its window keeps the network running; **Quit** stops it.
 Say yes to the firewall question the first time, or phones cannot reach it, and put the computer and the
 phones on the same network (for no router at all, turn on the computer's own hotspot first; the page says
-how). The app is not signed yet, so the first launch needs an extra click, and it has not yet been run on
-every system it targets. [docs/24](24-electron-desktop.md) has the details, including how Emergency Reset
-works with each way of keeping the data.
+how). The desktop app ships with LOAM 0.7.0. The Mac app is signed and notarized by Apple; the Windows
+installer isn't signed yet, so Windows asks you to confirm it once. The Windows, Linux and Intel Mac builds
+have so far only been checked automatically, not run on real machines. [docs/24](24-electron-desktop.md) has
+the details, including how Emergency Reset works with each way of keeping the data.
 
 ### On a computer or Raspberry Pi
 
@@ -114,6 +115,16 @@ from the config file or **Admin → Bootstrap**:
 
 (The Android app and `loamnet` use their own `hostDevice` strategy, whatever is configured: admin comes
 from the host's own screen.)
+
+### On an address the internet can reach: not what it is for
+
+LOAM is built for a local network: a hotspot, a venue's Wi-Fi, a LAN. Nothing stops a node from listening
+on a public address (a VPS, a port forward), but then everyone who finds the address is "nearby": an `open`
+join policy lets anyone in, the identity cap is per source address, and the join QR's key is only as
+secret as the page you show it on. If you must run a node like that, set **Who can join** to approval,
+set the connection encryption to **required** (or the Hardened profile, which does both), hand out the
+join link only to the people you mean, and expect the rate limits to be tested. It is not a hosted chat
+product and is not hardened as one.
 
 ### Behind an HTTPS reverse proxy: not supported
 
@@ -178,7 +189,7 @@ until you switch back to **Custom** ([docs/09](09-security-profiles.md)):
 | Profile | Who can join | Messages kept | Emergency reset from the admin area | Connections |
 |---|---|---|---|---|
 | **Open** / **Standard** | anyone | until deleted | off | encrypted for everyone who scans |
-| **Hardened** (the Private network) | approved first | 1 hour by default (a channel can keep longer) | on | encrypted only; others refused |
+| **Hardened** (the Private network) | approved first | 1 hour by default (a channel can only be shorter) | on | encrypted only; others refused |
 | **Custom** (the default) | your choice | your choice | your choice | your choice |
 
 (Open and Standard currently set the same things.)

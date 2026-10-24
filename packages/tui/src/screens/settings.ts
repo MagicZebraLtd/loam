@@ -3,9 +3,18 @@
  * (so the two always agree), a few actions, and what this computer remembers for the next `loam` start.
  * The web app's admin page has the rest.
  */
-import type { LoamConfig, LoamConfigUpdate, SecurityProfile } from "@loam/schema";
+import {
+  activeLlmProvider,
+  isLocalNetworkUrl,
+  type LlmModelsRequest,
+  type LlmProvider,
+  type LoamConfig,
+  type LoamConfigUpdate,
+  OPENAI_COMPATIBLE_PRESETS,
+  type SecurityProfile,
+} from "@loam/schema";
 
-import { type Line, padEnd, text } from "../ansi.js";
+import { clean, type Line, padEnd, text } from "../ansi.js";
 import { isChar } from "../keys.js";
 import { textField } from "../modal.js";
 import { qrBlock } from "../qr.js";
@@ -65,6 +74,239 @@ function choose<T>(
 
 function onOff(value: boolean): string {
   return value ? "On" : "Off";
+}
+
+const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
+  off: "Off",
+  ollama: "Ollama",
+  openai: "Chat service",
+  onDevice: "On this device",
+};
+
+const LLM_TEST_WORDS: Record<string, string> = {
+  llm_unreachable: "Could not reach the service at that address.",
+  llm_unauthorized: "The service refused the key.",
+  llm_bad_response: "The service answered, but not in a way loam understands. Check the address.",
+  llm_not_allowed: "A hardened network can only use a service on this computer or the local network.",
+};
+
+/** The host name a cloud service's messages go to, for the note; the URL as typed if it won't parse. */
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
+}
+
+/** Switch exactly one assistant backend on (or all off), so the server's precedence agrees with the screen. */
+function chooseLlmProvider(view: View, provider: LlmProvider): void {
+  save(
+    view,
+    { llm: { ollama: { enabled: provider === "ollama" }, openai: { enabled: provider === "openai" }, onDevice: { enabled: provider === "onDevice" } } },
+    provider === "off" ? "Assistant off" : "Saved",
+  );
+}
+
+/** A text row for one of the assistant's connection settings. */
+function llmTextRow(
+  view: View,
+  label: string,
+  current: string,
+  body: string[],
+  options: { secret?: boolean; maxLength: number },
+  apply: (value: string) => string | undefined,
+): void {
+  view.open({
+    kind: "input",
+    title: label,
+    body,
+    field: textField(options.secret ? "" : current, { secret: options.secret, maxLength: options.maxLength }),
+    onSubmit: (value) => apply(value),
+  });
+}
+
+/**
+ * Pick the assistant's model: ask the backend for its list and offer it, with the current model chosen;
+ * when the backend can't be asked, say why and take the name typed instead.
+ */
+function pickLlmModel(view: View, request: LlmModelsRequest, current: string, apply: (model: string) => void): void {
+  view.toast("Asking for the list of models...");
+  void view.options.host.llmModels(request).then(
+    (result) => {
+      if (result.ok && result.models.length) {
+        // Names come from a service: nothing it sends may reach the terminal uncleaned.
+        const offered = result.models.map(clean);
+        const models = offered.includes(current) ? offered : [current, ...offered];
+        choose(
+          view,
+          "Model",
+          `${result.models.length} models offered. Choose one.`,
+          models.map((model) => ({ label: model, value: model })),
+          current,
+          apply,
+        );
+        return;
+      }
+      const why = result.ok ? "The service listed no models." : (LLM_TEST_WORDS[result.code] ?? LLM_TEST_WORDS.llm_bad_response!);
+      llmTextRow(view, "Model", current, [why, "Type the model's name as the service knows it."], { maxLength: 120 }, (value) => {
+        if (!value.trim()) {
+          return "The model name can't be empty.";
+        }
+        apply(value.trim());
+        return undefined;
+      });
+    },
+    () => view.toast("Could not ask for the list of models.", "error"),
+  );
+}
+
+/** The Assistant rows: which backend answers, and that backend's connection (collapsed when off). */
+function llmRows(config: LoamConfig): Row[] {
+  const { llm } = config;
+  const provider = activeLlmProvider(llm);
+  const summary =
+    provider === "off" ? "Off" : provider === "onDevice" ? LLM_PROVIDER_LABELS.onDevice : `${LLM_PROVIDER_LABELS[provider]}, ${clean(provider === "openai" ? llm.openai.model : llm.ollama.model)}`;
+  const hardened = config.security.profile === "hardened";
+  const rows: Row[] = [
+    {
+      section: "Assistant",
+      label: "Assistant",
+      value: summary,
+      activate(view) {
+        choose(
+          view,
+          "Assistant",
+          "An optional chat assistant people can message. Choose where it runs.",
+          [
+            { label: "Off", value: "off" as LlmProvider },
+            { label: "Ollama", detail: "on this computer or the local network", value: "ollama" as LlmProvider },
+            {
+              label: "Chat service",
+              detail: hardened ? "OpenAI-style, on this computer or the local network" : "OpenRouter, OpenAI, LM Studio and others",
+              value: "openai" as LlmProvider,
+            },
+          ],
+          provider === "onDevice" ? "off" : provider,
+          (value) => chooseLlmProvider(view, value),
+        );
+      },
+    },
+  ];
+
+  if (provider === "ollama") {
+    rows.push(
+      {
+        section: "Assistant",
+        label: "Ollama address",
+        value: llm.ollama.baseUrl,
+        activate(view) {
+          llmTextRow(view, "Ollama address", llm.ollama.baseUrl, ["Where Ollama listens. On this computer that is http://localhost:11434."], { maxLength: 200 }, (value) => {
+            if (!/^https?:\/\//.test(value.trim())) {
+              return "Enter an http:// or https:// address.";
+            }
+            save(view, { llm: { ollama: { baseUrl: value.trim() } } }, "Saved");
+            return undefined;
+          });
+        },
+      },
+      {
+        section: "Assistant",
+        label: "Model",
+        value: clean(llm.ollama.model),
+        activate(view) {
+          pickLlmModel(view, { provider: "ollama", baseUrl: llm.ollama.baseUrl }, llm.ollama.model, (model) => save(view, { llm: { ollama: { model } } }, "Saved"));
+        },
+      },
+    );
+  }
+
+  if (provider === "openai") {
+    const preset = OPENAI_COMPATIBLE_PRESETS.find((entry) => entry.baseUrl === llm.openai.baseUrl);
+    const cloud = !isLocalNetworkUrl(llm.openai.baseUrl);
+    rows.push(
+      {
+        section: "Assistant",
+        label: "Service",
+        value: `${preset?.label ?? llm.openai.baseUrl}${cloud ? `  (messages go to ${hostOf(llm.openai.baseUrl)})` : ""}`,
+        activate(view) {
+          choose(
+            view,
+            "Service",
+            cloud
+              ? "Messages people send to the assistant leave this network and go to the service. Everyone who messages it should know that."
+              : "Pick a service, or give another address.",
+            [
+              ...OPENAI_COMPATIBLE_PRESETS.map((entry) => ({ label: entry.label, detail: entry.cloud ? "online" : "local", value: entry.baseUrl })),
+              { label: "Another address", detail: "type it in", value: "" },
+            ],
+            preset?.baseUrl ?? "",
+            (value) => {
+              if (value) {
+                save(view, { llm: { openai: { baseUrl: value } } }, "Saved");
+                return;
+              }
+              llmTextRow(view, "Service address", llm.openai.baseUrl, ["The base of the service's OpenAI-style API, ending in /v1 for most services."], { maxLength: 200 }, (typed) => {
+                if (!/^https?:\/\//.test(typed.trim())) {
+                  return "Enter an http:// or https:// address.";
+                }
+                save(view, { llm: { openai: { baseUrl: typed.trim() } } }, "Saved");
+                return undefined;
+              });
+            },
+          );
+        },
+      },
+      {
+        section: "Assistant",
+        label: "API key",
+        value: llm.openai.apiKeySet ? "Set" : "Not set",
+        activate(view) {
+          llmTextRow(
+            view,
+            "API key",
+            "",
+            [
+              "Paste the key the service gave you. It is kept on this computer, sent only to the service, and never shown again.",
+              llm.openai.apiKeySet ? "Leave it empty and press Enter to remove the saved key." : "Leave it empty if the service needs no key.",
+            ],
+            { secret: true, maxLength: 512 },
+            (value) => {
+              save(view, { llm: { openai: { apiKey: value.trim() } } }, value.trim() ? "Key saved" : "Key removed");
+              return undefined;
+            },
+          );
+        },
+      },
+      {
+        section: "Assistant",
+        label: "Model",
+        value: clean(llm.openai.model),
+        activate(view) {
+          pickLlmModel(view, { provider: "openai", baseUrl: llm.openai.baseUrl }, llm.openai.model, (model) => save(view, { llm: { openai: { model } } }, "Saved"));
+        },
+      },
+    );
+  }
+
+  if (provider !== "off") {
+    rows.push({
+      section: "Assistant",
+      label: "Assistant's name",
+      value: llm.ollama.botDisplayName,
+      activate(view) {
+        llmTextRow(view, "Assistant's name", llm.ollama.botDisplayName, ["How the assistant appears in people's messages."], { maxLength: 80 }, (value) => {
+          if (!value.trim()) {
+            return "The name can't be empty.";
+          }
+          save(view, { llm: { ollama: { botDisplayName: value.trim() } } }, "Saved");
+          return undefined;
+        });
+      },
+    });
+  }
+
+  return rows;
 }
 
 function rows(view: View, config: LoamConfig): Row[] {
@@ -190,14 +432,7 @@ function rows(view: View, config: LoamConfig): Row[] {
         save(view, { features: { enablePresence: !config.features.enablePresence } }, "Saved");
       },
     },
-    {
-      section: "Network",
-      label: "Assistant (Ollama)",
-      value: config.llm.ollama.enabled ? `On, ${config.llm.ollama.model}` : "Off",
-      activate(view) {
-        save(view, { llm: { ollama: { enabled: !config.llm.ollama.enabled } } }, "Saved");
-      },
-    },
+    ...llmRows(config),
     {
       section: "Actions",
       label: "Link another LOAM network",
@@ -375,7 +610,7 @@ export const settingsScreen: Screen = {
         { text: row.locked ? `  (${row.locked})` : "", style: { dim: true } },
       ]);
     });
-    lines.push([], text(" The web app's admin page has every other setting.", { dim: true }));
+    lines.push([], text(" The web app's admin page has every other setting, and can test the assistant's connection.", { dim: true }));
 
     // Keep the chosen row in view on a short window.
     const start = Math.max(0, Math.min(selectedLine - Math.floor(height / 2), lines.length - height));

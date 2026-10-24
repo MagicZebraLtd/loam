@@ -211,6 +211,11 @@ export const en = {
   "settings.logInfo": "Normal",
   "settings.logDebug": "Detailed (for fixing problems)",
   "settings.saveFailed": "Not saved: {error}",
+  "settings.assistantTitle": "Assistant",
+  "settings.assistantBody":
+    "An optional chat assistant people on the network can message. It can run through Ollama on this computer, through a chat service such as OpenRouter or OpenAI (an internet connection and a key from the service), or stay off. Set it up in LOAM's admin page.",
+  "settings.assistantOpen": "Set up the assistant",
+  "settings.assistantNotRunning": "Start the network to set up the assistant.",
   "settings.securityTitle": "Encryption",
   "settings.storage": "Messages on this computer",
   "settings.connections": "Connections",

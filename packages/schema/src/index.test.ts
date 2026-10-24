@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  activeLlmProvider,
   ChannelSchema,
   DbEncryptionModeSchema,
   IdSchema,
+  isLocalNetworkUrl,
   isReactionEmoji,
+  LlmModelsResponseSchema,
   LoamConfigSchema,
   LoamConfigUpdateSchema,
   MessageCreateRequestSchema,
@@ -12,9 +15,10 @@ import {
   MessageSchema,
   ModerationUpdateRequestSchema,
   NetworkConfigSchema,
+  OPENAI_COMPATIBLE_PRESETS,
   SearchQuerySchema,
-  securityProfilePreset,
   SecurityConfigSchema,
+  securityProfilePreset,
   SERVER_ERROR_CODES,
   StreamEventSchema,
   SyncAttachmentResponseSchema,
@@ -165,6 +169,7 @@ describe("@loam/schema", () => {
             botId: "llm.ollama.gemma4",
             botDisplayName: "Gemma",
           },
+          openai: { enabled: false, baseUrl: "https://openrouter.ai/api/v1", model: "google/gemma-4-27b-it:free" },
           onDevice: { enabled: false },
         },
         admin: { bootstrap: "firstUser" },
@@ -611,5 +616,75 @@ describe("isReactionEmoji", () => {
       vi.unstubAllGlobals();
       vi.resetModules();
     }
+  });
+});
+
+describe("LLM backends", () => {
+  const llm = (flags: { ollama?: boolean; openai?: boolean; onDevice?: boolean }) => ({
+    ollama: { enabled: flags.ollama ?? false },
+    openai: { enabled: flags.openai ?? false },
+    onDevice: { enabled: flags.onDevice ?? false },
+  });
+
+  it("activeLlmProvider: on-device wins, then the chat service, then Ollama, else off", () => {
+    expect(activeLlmProvider(llm({}))).toBe("off");
+    expect(activeLlmProvider(llm({ ollama: true }))).toBe("ollama");
+    expect(activeLlmProvider(llm({ ollama: true, openai: true }))).toBe("openai");
+    expect(activeLlmProvider(llm({ ollama: true, openai: true, onDevice: true }))).toBe("onDevice");
+  });
+
+  it("isLocalNetworkUrl: this computer and the LAN are local, public names and addresses are not", () => {
+    for (const url of [
+      "http://localhost:1234/v1",
+      "http://127.0.0.1:8080",
+      "http://[::1]:8080/v1",
+      "http://10.0.0.5:1234/v1",
+      "http://172.20.1.1/v1",
+      "http://192.168.1.10:11434",
+      "http://169.254.3.4/",
+      "http://[fe80::1]/",
+      "http://[fd12:3456::1]:8080/v1",
+      "http://my-laptop.local:1234/v1",
+      "http://studio.localhost/v1",
+      "http://nas/v1",
+    ]) {
+      expect(isLocalNetworkUrl(url), url).toBe(true);
+    }
+    for (const url of [
+      "https://openrouter.ai/api/v1",
+      "https://api.openai.com/v1",
+      "http://8.8.8.8/v1",
+      "http://172.32.0.1/v1",
+      "http://192.169.0.1/v1",
+      "http://example.com.local.evil.com/v1",
+      "https://fdn.example.com/v1",
+      "https://fcapi.io/v1",
+      "http://[2001:db8::1]/v1",
+      "not a url",
+    ]) {
+      expect(isLocalNetworkUrl(url), url).toBe(false);
+    }
+  });
+
+  it("every preset has a usable base URL and says whether it is a cloud service", () => {
+    for (const preset of OPENAI_COMPATIBLE_PRESETS) {
+      expect(() => new URL(preset.baseUrl)).not.toThrow();
+      expect(isLocalNetworkUrl(preset.baseUrl)).toBe(!preset.cloud);
+    }
+    expect(new Set(OPENAI_COMPATIBLE_PRESETS.map((preset) => preset.id)).size).toBe(OPENAI_COMPATIBLE_PRESETS.length);
+  });
+
+  it("an update may clear the chat service key with an empty string, and may not send a blank-but-present one", () => {
+    expect(LoamConfigUpdateSchema.safeParse({ llm: { openai: { apiKey: "" } } }).success).toBe(true);
+    expect(LoamConfigUpdateSchema.safeParse({ llm: { openai: { apiKey: "sk-or-v1-abc" } } }).success).toBe(true);
+    expect(LoamConfigUpdateSchema.safeParse({ llm: { openai: { apiKey: "x".repeat(513) } } }).success).toBe(false);
+    expect(LoamConfigUpdateSchema.safeParse({ llm: { openai: { baseUrl: "ftp://x" } } }).success).toBe(false);
+  });
+
+  it("a models answer is either names or a known failure code", () => {
+    expect(LlmModelsResponseSchema.safeParse({ ok: true, models: ["a", "b"] }).success).toBe(true);
+    expect(LlmModelsResponseSchema.safeParse({ ok: false, code: "llm_unauthorized" }).success).toBe(true);
+    expect(LlmModelsResponseSchema.safeParse({ ok: false, code: "nope" }).success).toBe(false);
+    expect(LlmModelsResponseSchema.safeParse({ ok: true, models: [""] }).success).toBe(false);
   });
 });

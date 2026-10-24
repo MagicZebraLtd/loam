@@ -54,7 +54,10 @@ what keeps "make it all optional" from becoming "too complex."
 
 ### Proposed profiles
 
-| Axis | `open` (disaster relief) | `standard` (default) | `hardened` (high-risk) |
+This table is the original proposal. The shipped default is `custom`, not `standard` (see the status
+note at the top and `apps/server/src/config.ts`).
+
+| Axis | `open` (disaster relief) | `standard` (proposed default) | `hardened` (high-risk) |
 |------|--------------------------|----------------------|------------------------|
 | Admission | open — anyone joins | token (QR invite) | token (QR invite) |
 | Transport encryption | **`optional`** (QR key; a client that types the IP can still connect in plaintext / TOFU) | **`optional`** (QR key) | **`required`** (QR key) |

@@ -1,6 +1,7 @@
 import {
   AdminBootstrapStrategySchema,
   JoinPolicySchema,
+  LlmModelsResponseSchema,
   LoamConfigSchema,
   LocaleSchema,
   securityProfilePreset,
@@ -10,6 +11,8 @@ import {
   type FeatureFlags,
   type IdentityConfig,
   type JoinPolicy,
+  type LlmModelsRequest,
+  type LlmModelsResponse,
   type LoamConfig,
   type SecurityProfile,
   type User,
@@ -123,7 +126,17 @@ function jumpToSection(key: string): void {
   }
   const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
   const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - margin;
-  scroller.scrollTo({ top: Math.max(0, top), behavior });
+  if (typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ top: Math.max(0, top), behavior });
+  } else {
+    scroller.scrollTop = Math.max(0, top);
+  }
+}
+
+/** The section a `/admin#admin-<key>` address asks for (the desktop and Android hosts open the assistant this way). */
+function sectionFromHash(hash: string): string | undefined {
+  const key = hash.startsWith("#admin-") ? hash.slice("#admin-".length) : "";
+  return adminSections().some(([candidate]) => candidate === key) ? key : undefined;
 }
 
 /**
@@ -203,6 +216,20 @@ export function AdminView({
   // Peer URLs the server had when this form last loaded or saved. A node can link itself while the form is
   // open (a "Link a node" code), and the form must take that peer in, or its next save would drop it.
   const knownPeerUrls = useRef(new Set<string>());
+  // The sections exist only once the config has loaded, so a `#admin-<key>` in the address is honoured then,
+  // once (a later hash change is the nav's own click).
+  const jumpedToHash = useRef(false);
+
+  useEffect(() => {
+    if (!adminConfig || jumpedToHash.current) {
+      return;
+    }
+    jumpedToHash.current = true;
+    const key = sectionFromHash(window.location.hash);
+    if (key) {
+      requestAnimationFrame(() => jumpToSection(key));
+    }
+  }, [adminConfig]);
 
   useEffect(() => {
     if (!currentUser.isAdmin) {
@@ -254,7 +281,9 @@ export function AdminView({
         node: adminConfig.node,
         identity: adminConfig.identity,
         features: adminConfig.features,
-        llm: { ollama: adminConfig.llm.ollama, onDevice: adminConfig.llm.onDevice },
+        // `llm.openai.apiKey` rides only when the admin typed one ("" clears it); `apiKeySet` is read-only
+        // and the server strips it.
+        llm: { ollama: adminConfig.llm.ollama, openai: adminConfig.llm.openai, onDevice: adminConfig.llm.onDevice },
         admin: {
           bootstrap: adminConfig.admin.bootstrap,
           ...(passphrase.trim() ? { passphrase: passphrase.trim() } : {}),
@@ -317,6 +346,21 @@ export function AdminView({
         ? { ...previous, llm: { ...previous.llm, ollama: { ...previous.llm.ollama, ...update } } }
         : previous,
     );
+  }
+
+  function setOpenAi(update: Partial<LoamConfig["llm"]["openai"]>): void {
+    setAdminConfig((previous) =>
+      previous
+        ? { ...previous, llm: { ...previous.llm, openai: { ...previous.llm.openai, ...update } } }
+        : previous,
+    );
+  }
+
+  /** Ask the node which models a backend offers (the LLM panel's Test button). */
+  async function listLlmModels(request: LlmModelsRequest): Promise<LlmModelsResponse> {
+    const response = await encryptedFetch("POST", "/api/admin/llm/models", request);
+    const parsed = LlmModelsResponseSchema.safeParse(await response.json().catch(() => undefined));
+    return parsed.success ? parsed.data : { ok: false, code: "llm_bad_response" };
   }
 
   function setOnDevice(update: Partial<LoamConfig["llm"]["onDevice"]>): void {
@@ -805,10 +849,11 @@ export function AdminView({
 
               <AdminSection id="llm" label={t("admin.llmEyebrow")} onSubmit={submitConfig}>
                 <LlmPanel
-                  onDevice={adminConfig.llm.onDevice}
-                  ollama={adminConfig.llm.ollama}
+                  llm={adminConfig.llm}
+                  onListModels={listLlmModels}
                   onOllamaChange={setOllama}
                   onOnDeviceChange={setOnDevice}
+                  onOpenAiChange={setOpenAi}
                   saving={saving}
                 />
               </AdminSection>

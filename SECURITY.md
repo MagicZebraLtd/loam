@@ -79,7 +79,8 @@ we will credit the reporter in release notes or documentation, unless they ask t
 
 ## Threat model & accepted limitations
 
-LOAM's threat models span disaster-relief openness to protest-mode hostile environments, and the
+LOAM's threat models range from open, relaxed settings such as disaster relief to settings where people
+face real risk from others nearby, and the
 **server host is trusted** (it can read all plaintext). The following are deliberate, documented
 trade-offs, not open bugs:
 
@@ -97,7 +98,7 @@ trade-offs, not open bugs:
   ([docs/11](docs/11-node-sync.md)). Honest residuals: peer transport keys are TOFU-learned unless
   pinned by the admin; there are no per-peer credentials; and an *authorized but hostile* peer can
   attribute imported messages to an ordinary (non-privileged) local user id: signed authorship is
-  the tracked long-term fix ([docs/29](docs/29-next-phase.md)).
+  the tracked long-term fix ([docs/25](docs/25-backlog.md)).
 - **On-device Android database encryption is shipped** (SQLCipher via
   better-sqlite3-multiple-ciphers, [docs/04](docs/04-android-host-app.md)) and fails closed: an
   encrypted mode whose driver won't load locks rather than falling back to plaintext. OS cloud backup
@@ -107,8 +108,20 @@ trade-offs, not open bugs:
 - **Uploaded media (attachments, avatars) is stored as plaintext files outside the encrypted
   database**: destroying the database key does *not* cryptographically erase media; the kill switch
   deletes the files, which is best-effort on flash storage. Media-at-rest encryption is tracked in
-  [docs/29](docs/29-next-phase.md) (Track 2).
+  [docs/25](docs/25-backlog.md).
 - **Logical delete is not secure flash erasure** without encryption ([docs/02](docs/02-kill-switch.md)).
+- **The desktop app** (Mac, Windows, Linux; [docs/24](docs/24-electron-desktop.md)) runs the same server
+  in-process and keeps its database key as the Android app does: a device secret sealed by the operating
+  system's keychain (`safeStorage`), a passphrase, or a key held only in memory. Its Electron fuses are
+  closed (no `runAsNode`, no `NODE_OPTIONS`, no inspector) and it has no auto-updater. Honest residuals: the
+  keychain flow is tested with fakes, not against each real keychain, and the Windows, Linux and Intel Mac
+  builds have not yet been run on real machines. The Windows installer is not yet signed.
+- **The optional online assistant** sends the messages people write to the assistant, and the recent
+  history of that conversation, to the chat service the host chooses (OpenRouter, OpenAI and so on), under
+  that service's own terms. The admin page says where those messages go, and a `hardened` network only
+  accepts a service on the host or the local network. The service's API key is never returned by the API,
+  but it is stored with the node's configuration, which is encrypted only when the database is (and is
+  plain text if the host writes it into `config.json` by hand).
 
 ## Review history
 

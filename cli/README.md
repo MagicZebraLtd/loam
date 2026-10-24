@@ -2,7 +2,7 @@
 
 Run a local, off-grid [LOAM](https://github.com/MagicZebraLtd/loam) messaging node from your terminal. One command starts a server and a web app; anyone on the same network scans the printed QR code to join. No internet, no accounts, no cloud.
 
-LOAM is local communication for places where the internet is missing, overloaded, or simply not the right tool: a festival or conference, a boat or campsite, a community space, or a neighbourhood during an outage. The host runs a node; nearby people join over the LAN and can post to channels, reply in threads, send direct messages, react, and share images. Identities are anonymous and ephemeral, and everything stays on your machine and your local network.
+LOAM is local communication for places where the internet is missing, overloaded, or simply not the right tool: a festival or conference, a boat or campsite, a community space, or a neighbourhood during an outage. The host runs a node; nearby people join over the LAN and can post to channels, reply in threads, send direct messages, react, and share images. There are no accounts: everyone gets a generated name, or picks their own if the network allows it. Everything stays on your machine and your local network unless you turn on an online assistant (see below).
 
 ## Quick start
 
@@ -75,7 +75,12 @@ The default database driver is Node's built in `node:sqlite`, so a plain node ne
 - Channels, threaded replies, direct messages, reactions, and image attachments.
 - A web app that caches what it has seen and reconnects by itself when the network comes back. On a plain-HTTP LAN address browsers do not offer installation or full offline mode; that needs a secure origin.
 - Optional database encryption at rest.
-- A node that never reaches the internet: all traffic stays on the local network.
+- An optional assistant that answers in direct messages, set up in the web app's admin page or on the Settings screen: Ollama or another model server on your network, or an online service with an OpenAI-style API (such as OpenRouter or OpenAI). An online service gets the messages people write to the assistant, and the admin page says so. Off by default.
+- A node that doesn't reach the internet: all traffic stays on the local network, unless you turn on an online assistant, which the admin page warns about.
+
+## The desktop app
+
+Would rather not use a terminal? The LOAM desktop app for Mac, Windows and Linux runs the same network from a regular window, with the join code on screen. Download it from [loamnet.com/desktop](https://www.loamnet.com/desktop).
 
 ## Hosting from a phone
 

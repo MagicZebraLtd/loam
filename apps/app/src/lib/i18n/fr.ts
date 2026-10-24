@@ -313,6 +313,8 @@ export const fr: Partial<AppCatalog> = {
   "encryption.savePassphrase": "Enregistrer la phrase secrète",
   "model.title": "Modèle sur l'appareil",
   "model.intro": "Facultatif et désactivé par défaut. Téléchargez un petit modèle pour faire tourner l'assistant de LOAM entièrement sur ce téléphone, sans internet ni ordinateur. Tout ce qui suit s'exécute et reste sur l'appareil.",
+  "model.otherBackends": "Vous préférez ne pas faire tourner de modèle sur ce téléphone ? L'assistant peut aussi répondre via Ollama sur un ordinateur portable de ce réseau, ou via un service de discussion en ligne comme OpenRouter (internet nécessaire). Les deux se configurent dans la page d'administration de LOAM.",
+  "model.openAdmin": "Ouvrir les réglages de l'assistant",
   "model.thisDevice": "Cet appareil",
   "model.deviceStats": "RAM : {ram} · Stockage libre : {free}",
   "model.activeName": "Actif : {name}",

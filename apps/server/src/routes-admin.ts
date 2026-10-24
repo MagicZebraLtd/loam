@@ -1,10 +1,11 @@
 // Admin: claim, config read/patch, kill switch, and the unauthenticated panic token, registered over the
 // shared AppContext.
-import { AdminClaimRequestSchema, KillSwitchRequestSchema, type LoamConfig, type LoamConfigUpdate, LoamConfigUpdateSchema, PanicRequestSchema, UserSchema } from "@loam/schema";
+import { AdminClaimRequestSchema, KillSwitchRequestSchema, LlmModelsRequestSchema, type LoamConfig, type LoamConfigUpdate, LoamConfigUpdateSchema, PanicRequestSchema, UserSchema } from "@loam/schema";
 import { readFileSync } from "node:fs";
 
 import type { AppContext } from "./app-context.js";
 import { mergeConfig } from "./config.js";
+import { llmProviderRefusal } from "./llm.js";
 import { errorBody } from "./errors.js";
 import { makeAdminSetupCode } from "./identity.js";
 import type { KillSwitchResult } from "./kill-switch.js";
@@ -168,6 +169,24 @@ export function registerAdminRoutes(ctx: AppContext): void {
     return ctx.redactedConfig();
   });
 
+  ctx.server.post("/api/admin/llm/models", async (request, reply) => {
+    const currentUser = ctx.ensureSessionUser(ctx.getSessionUserId(request, reply));
+
+    if (!currentUser.isAdmin) {
+      return reply.code(403).send(errorBody("Admin access required"));
+    }
+
+    const body = LlmModelsRequestSchema.safeParse(request.body);
+
+    if (!body.success) {
+      return reply.code(400).send(errorBody("Invalid LLM models request"));
+    }
+
+    // Always 200: a backend's failure is the answer (`ok: false` + code), not this node's. A 401 here would
+    // read to the client's transport as its own session expiring.
+    return ctx.llm.listModels(body.data);
+  });
+
   ctx.server.post("/api/admin/kill-switch", async (request, reply) => {
     const currentUser = ctx.ensureSessionUser(ctx.getSessionUserId(request, reply));
 
@@ -309,6 +328,13 @@ export function applyConfigUpdate(
   // would 500 here and then fail the next boot.
   if (ctx.llm.botConfigError(next)) {
     return { ok: false, status: 400, error: "Invalid config values" };
+  }
+
+  // A hardened network never sends its members' messages to a cloud service (docs/09): refuse the save,
+  // with a code the admin screen words, rather than persist a backend `ensureBotUser` would then skip.
+  const refusal = llmProviderRefusal(next);
+  if (refusal) {
+    return { ok: false, status: 400, error: refusal };
   }
 
   if (commitAdminConfig(ctx, next) === "failed") {

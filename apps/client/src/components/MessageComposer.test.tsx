@@ -62,6 +62,25 @@ describe("MessageComposer", () => {
     expect(onSend).toHaveBeenCalledWith("hello world", undefined, undefined);
   });
 
+  it("keeps what was typed while a send was still in flight (the next message, not the sent one)", async () => {
+    let finish: () => void = () => {};
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    const host = mount(<MessageComposer label="Message" onSend={onSend} placeholder="Say something" />);
+    const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+    typeInto(textarea, "first");
+    await tick();
+    (host.querySelector("form") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    expect(onSend).toHaveBeenCalledWith("first", undefined, undefined);
+
+    // A fast typist starts the next message before the server has answered.
+    typeInto(textarea, "firstsecond");
+    await tick();
+    finish();
+    await tick();
+    expect(textarea.value).toBe("second");
+  });
+
   it("shows the location toggle only when location sharing is allowed", async () => {
     const withoutLocation = mount(<MessageComposer label="Message" onSend={async () => {}} placeholder="Say something" />);
     expect(withoutLocation.querySelector(".composer-location-toggle")).toBeNull();

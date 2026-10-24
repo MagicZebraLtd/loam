@@ -866,6 +866,11 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   function redactedConfig(): LoamConfig {
     return {
       ...appConfig,
+      llm: {
+        ...appConfig.llm,
+        // The chat service's key is write-only: admins learn whether one is set, never what it is.
+        openai: { ...appConfig.llm.openai, apiKey: undefined, apiKeySet: appConfig.llm.openai.apiKey !== undefined },
+      },
       admin: { ...appConfig.admin, passphrase: undefined },
       killSwitch: { ...appConfig.killSwitch, panicToken: undefined },
     };

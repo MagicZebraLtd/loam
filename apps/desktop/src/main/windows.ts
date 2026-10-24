@@ -46,7 +46,9 @@ export type WindowManager = {
   /** The log was forgotten (a reset finished): the Activity screen drops what it shows. */
   sendLogCleared(): void;
   /** Open (or focus) the client window on `origin`; `inMemory` keeps its storage off the disk. */
-  openClient(origin: string, inMemory: boolean): void;
+  /** Show the client window on `path` (default the first page); an open window is navigated only when a
+   *  path is asked for or the origin changed. */
+  openClient(origin: string, inMemory: boolean, path?: string): void;
   /** The network was discarded: close the client window and erase what it stored. */
   discardClient(): Promise<void>;
   /** An Emergency Reset erased the network: erase the client window's copy too (the window stays; it reloads). */
@@ -154,7 +156,7 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     return window;
   }
 
-  function createClient(origin: string, partition: string): BrowserWindow {
+  function createClient(origin: string, partition: string, path = "/"): BrowserWindow {
     const window = new BrowserWindow({
       width: 1100,
       height: 820,
@@ -167,7 +169,7 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     window.on("closed", () => {
       client = undefined;
     });
-    void window.loadURL(`${origin}/`);
+    void window.loadURL(`${origin}${path}`);
     return window;
   }
 
@@ -197,7 +199,7 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
         host.webContents.send(IPC.logClearedEvent);
       }
     },
-    openClient(origin, inMemory) {
+    openClient(origin, inMemory, path) {
       const partition = partitionFor(inMemory);
       // A window on the other kind of storage (the network changed) is replaced, never reused.
       if (client && !client.isDestroyed() && clientPartition !== partition) {
@@ -206,9 +208,9 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
       }
       clientPartition = partition;
       if (client && !client.isDestroyed()) {
-        if (clientOrigin !== origin) {
+        if (clientOrigin !== origin || path) {
           clientOrigin = origin;
-          void client.loadURL(`${origin}/`);
+          void client.loadURL(`${origin}${path ?? "/"}`);
         }
         if (client.isMinimized()) {
           client.restore();
@@ -218,7 +220,7 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
         return;
       }
       clientOrigin = origin;
-      client = createClient(origin, partition);
+      client = createClient(origin, partition, path);
     },
     async discardClient() {
       if (client && !client.isDestroyed()) {

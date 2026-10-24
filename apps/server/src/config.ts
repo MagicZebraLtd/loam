@@ -39,6 +39,13 @@ export function defaultLoamConfig(): LoamConfig {
         botId: "llm.ollama.gemma4",
         botDisplayName: "Gemma",
       },
+      // An OpenAI-compatible service (OpenRouter, OpenAI, LM Studio...), off by default; the key is set by
+      // an admin and never returned. The default model is OpenRouter's free-tier spelling of the same family.
+      openai: {
+        enabled: false,
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "google/gemma-4-27b-it:free",
+      },
       // On-device backend, off by default. Enabling it is a no-op unless the host provides the
       // inference hook (the Android host) AND a model has been added — otherwise a graceful error.
       onDevice: {
@@ -114,6 +121,7 @@ export function mergeConfig(base: LoamConfig, update: LoamConfigUpdate): LoamCon
     features: { ...base.features, ...update.features },
     llm: {
       ollama: { ...base.llm.ollama, ...update.llm?.ollama },
+      openai: { ...base.llm.openai, ...update.llm?.openai },
       onDevice: { ...base.llm.onDevice, ...update.llm?.onDevice },
     },
     admin: { ...base.admin, ...update.admin },
@@ -126,6 +134,14 @@ export function mergeConfig(base: LoamConfig, update: LoamConfigUpdate): LoamCon
   };
   const systemPrompt = merged.llm.ollama.systemPrompt?.trim();
   merged.llm.ollama.systemPrompt = systemPrompt || undefined;
+  // The chat service's API key is a bearer secret the node must present, so it is stored in the clear like
+  // `sync.token`. An empty string clears it; an update that leaves it out keeps it (the spread above). The
+  // read-only `apiKeySet` a client may echo back from the redacted config is never stored.
+  // (`?? base` so an in-process caller passing `apiKey: undefined` as a literal keeps the key, like JSON that
+  // leaves it out; only "" clears.)
+  const apiKey = (update.llm?.openai?.apiKey ?? base.llm.openai.apiKey)?.trim();
+  merged.llm.openai.apiKey = apiKey || undefined;
+  merged.llm.openai.apiKeySet = undefined;
 
   // Secrets are stored scrypt-hashed, never in the clear; plaintext arriving from a config file or
   // an admin update is hashed here (already-hashed values pass through unchanged).
@@ -202,7 +218,7 @@ export function sanitizeLegacyConfigJson(json: unknown): { json: unknown; repair
     }
   }
 
-  for (const backend of ["ollama", "onDevice"] as const) {
+  for (const backend of ["ollama", "openai", "onDevice"] as const) {
     const block = isRecord(json.llm) ? json.llm[backend] : undefined;
     if (isRecord(block) && typeof block.model === "string" && block.model.length > LLM_MODEL_MAX_LENGTH) {
       block.model = block.model.slice(0, LLM_MODEL_MAX_LENGTH);
@@ -216,12 +232,19 @@ export function sanitizeLegacyConfigJson(json: unknown): { json: unknown; repair
 /**
  * {@link sanitizeLegacyConfigJson} for a FULL `LoamConfig` snapshot (the wipe journal) rather than a config
  * layer: there is no lower layer to supply a dropped `llm.ollama.botId`, so the default bot id fills it in,
- * which is what the layered load ends up with for a repaired config.json or DB row.
+ * which is what the layered load ends up with for a repaired config.json or DB row. A snapshot written before
+ * the OpenAI-compatible backend existed has no `llm.openai` block: the default (off) fills it, as the
+ * layered load would.
  */
 export function sanitizeLegacyFullConfigJson(json: unknown): { json: unknown; repairs: string[] } {
-  const ollama = isRecord(json) && isRecord(json.llm) ? json.llm.ollama : undefined;
+  const llm = isRecord(json) ? json.llm : undefined;
+  const ollama = isRecord(llm) ? llm.ollama : undefined;
   const hadBotId = isRecord(ollama) && ollama.botId !== undefined;
   const result = sanitizeLegacyConfigJson(json);
+  if (isRecord(llm) && llm.openai === undefined) {
+    llm.openai = defaultLoamConfig().llm.openai;
+    result.repairs.push("llm.openai is missing (a snapshot from before the chat service backend); using the default, off");
+  }
   // Only a bot id the repair DROPPED is filled; a snapshot that never had one stays invalid (corrupt).
   if (hadBotId && isRecord(ollama) && ollama.botId === undefined) {
     ollama.botId = defaultLoamConfig().llm.ollama.botId;

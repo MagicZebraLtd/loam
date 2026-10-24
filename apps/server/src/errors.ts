@@ -235,6 +235,8 @@ export const ERROR_CODES: Record<string, ServerErrorCode> = {
   "Only admins can post in this channel": "channel_admins_post_only",
   "This message was removed by a moderator": "message_removed",
   "The assistant is busy; try again shortly": "assistant_busy",
+  "A cloud assistant is not allowed on a hardened network": "llm_cloud_not_allowed",
+  "Invalid LLM models request": "invalid_llm_models_request",
   // User blocking (docs/30 B3). The first is deliberately generic: it doesn't state the reason (a DM to a
   // banned / awaiting-approval recipient gets it too), never "you're blocked".
   "Direct messages to this person aren't available": "dm_unavailable",

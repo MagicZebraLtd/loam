@@ -191,6 +191,11 @@ export const SettingsUpdateSchema = z.object({
 export type SettingsUpdate = z.infer<typeof SettingsUpdateSchema>;
 
 export const CopyRequestSchema = z.object({ text: z.string().max(4096) });
+/** Which page of the web client to open: its first page, or the admin page's assistant section. */
+export const OpenClientRequestSchema = z.object({ page: z.enum(["home", "assistant"]).optional() });
+export type OpenClientRequest = z.infer<typeof OpenClientRequestSchema>;
+/** The path each `OpenClientRequest.page` loads; the main process allows nothing else. */
+export const CLIENT_PAGE_PATHS: Record<NonNullable<OpenClientRequest["page"]>, string> = { home: "/", assistant: "/admin#admin-llm" };
 export const OpenExternalRequestSchema = z.object({ url: z.string().url().max(2048) });
 export const MakeAdminRequestSchema = z.object({ userId: IdSchema });
 export const RevokeCodeRequestSchema = z.object({ code: z.string().max(128) });
@@ -210,8 +215,9 @@ export type DesktopBridge = {
   stop(): Promise<HostResult<void>>;
   /** Discard this network (an Emergency Reset if it's running, its data otherwise) and go back to setup. */
   newNetwork(): Promise<HostResult<void>>;
-  /** Open (or focus) the web client in its own window, as the host: admin from the first page. */
-  openClient(): Promise<void>;
+  /** Open (or focus) the web client in its own window, as the host: admin from the first page. With a
+   *  `page`, the window shows that page even if it was already open. */
+  openClient(request?: OpenClientRequest): Promise<void>;
   copy(text: string): Promise<void>;
   /** Open a web page in the computer's browser. The main process allows only http(s) pages it knows. */
   openExternal(url: string): Promise<void>;

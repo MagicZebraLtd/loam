@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LOAM for your computer · LOAM</title>
+    <title>LOAM for Mac, Windows and Linux</title>
     <meta
       name="description"
       content="Download LOAM for Mac, Windows or Linux. Run a private messaging network from your laptop: people nearby scan the code and join, no internet and no accounts."
@@ -12,7 +12,7 @@
     <link rel="apple-touch-icon" href="/loam-512.png" />
     <meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0e1511" media="(prefers-color-scheme: dark)" />
-    <link rel="canonical" href="https://loamnet.com/desktop" />
+    <link rel="canonical" href="https://www.loamnet.com/desktop" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -32,6 +32,7 @@
           <li><a href="/#how">How it works</a></li>
           <li><a href="/#start">Get started</a></li>
           <li><a href="/#features">Features</a></li>
+          <li><a href="/desktop">Desktop</a></li>
           <li><a href="/#privacy">Privacy</a></li>
           <li>
             <a class="nav-github" href="https://github.com/MagicZebraLtd/loam" rel="noreferrer">
@@ -56,13 +57,14 @@
         <div class="dl-grid">
           <a class="btn btn-primary" data-dl="mac-arm64" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-mac-arm64.dmg">Mac (Apple Silicon)</a>
           <a class="btn btn-primary" data-dl="mac-x64" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-mac-x64.dmg">Mac (Intel)</a>
-          <a class="btn btn-primary" data-dl="win-x64" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-win-x64.exe">Windows</a>
-          <a class="btn btn-primary" data-dl="linux-appimage" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-linux-x64.AppImage">Linux (AppImage)</a>
-          <a class="btn btn-ghost" data-dl="linux-deb" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-linux-x64.deb">Linux (.deb)</a>
+          <a class="btn btn-primary" data-dl="win-x64" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-win-x64.exe">Windows (x64)</a>
+          <a class="btn btn-primary" data-dl="linux-appimage" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-linux-x64.AppImage">Linux AppImage (x64)</a>
+          <a class="btn btn-ghost" data-dl="linux-deb" href="https://github.com/MagicZebraLtd/loam/releases/latest/download/LOAM-linux-x64.deb">Linux .deb (x64)</a>
         </div>
         <p class="legal-meta">
           Not sure which Mac you have? Apple menu, About This Mac: "Apple M1" or newer means Apple Silicon,
-          "Intel" means Intel. Prefer a terminal? <code>npx loamnet</code> does the same job on any computer
+          "Intel" means Intel. The Windows and Linux downloads (x64) are for computers with a 64-bit Intel or
+          AMD processor. Prefer a terminal? <code>npx loamnet</code> does the same job on any computer
           with Node.js 22.14 or newer.
         </p>
 
@@ -72,6 +74,15 @@
           on the same Wi-Fi or hotspot scans the code and chats in their browser: channels, threads, direct
           messages, reactions. There is no account, no cloud and no internet needed. You, as the person who
           runs it, are the network's admin. Closing the window keeps the network running; Quit stops it.
+        </p>
+
+        <h2 id="untested">What hasn't been tested yet</h2>
+        <p>
+          The desktop app is new in LOAM 0.7.0. The Apple Silicon Mac build has been run and checked by hand.
+          The Windows, Linux and Intel Mac builds have so far only been built and checked automatically, not
+          run on real machines, so please <a href="https://github.com/MagicZebraLtd/loam/issues" rel="noreferrer">tell us</a>
+          how they go. There are no builds for ARM Windows or ARM Linux, so a Raspberry Pi runs
+          <code>npx loamnet</code> instead.
         </p>
 
         <h2 id="offgrid">Truly off-grid</h2>
@@ -136,8 +147,9 @@
         <h2 id="updates">Updates and privacy</h2>
         <p>
           The app never checks for updates by itself. <strong>Check for updates</strong> in its Settings asks
-          GitHub for the latest version number only when you tap it. Nothing else leaves your computer. More
-          in the <a href="/privacy">privacy policy</a>.
+          GitHub for the latest version number only when you tap it. Nothing else leaves your computer unless
+          you turn on an online assistant, which the admin page warns about. More in the
+          <a href="/privacy">privacy policy</a>.
         </p>
       </div>
     </main>

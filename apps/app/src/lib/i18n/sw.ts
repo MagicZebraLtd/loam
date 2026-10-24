@@ -313,6 +313,8 @@ export const sw: Partial<AppCatalog> = {
   "encryption.savePassphrase": "Hifadhi kaulisiri",
   "model.title": "Modeli kwenye kifaa",
   "model.intro": "Si lazima na imezimwa kwa chaguomsingi. Pakua modeli ndogo ili kuendesha msaidizi wa LOAM kikamilifu kwenye simu hii, bila intaneti wala kompyuta. Kila kitu kilicho hapa chini hufanya kazi na kubaki kwenye kifaa.",
+  "model.otherBackends": "Hupendi kuendesha modeli kwenye simu hii? Msaidizi anaweza pia kujibu kupitia Ollama kwenye kompyuta ndogo iliyo kwenye mtandao huu, au kupitia huduma ya gumzo ya mtandaoni kama OpenRouter (intaneti inahitajika). Zote mbili husanidiwa kwenye ukurasa wa msimamizi wa LOAM.",
+  "model.openAdmin": "Fungua mipangilio ya msaidizi",
   "model.thisDevice": "Kifaa hiki",
   "model.deviceStats": "RAM: {ram} · Hifadhi iliyo wazi: {free}",
   "model.activeName": "Inatumika: {name}",

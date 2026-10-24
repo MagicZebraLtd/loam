@@ -3,7 +3,7 @@
 LOAM exists so people who share a physical space can talk to each other when the network they'd
 normally rely on is missing, overloaded, or simply not there. That covers more everyday situations
 than it might first suggest: a festival or campsite with no signal, a conference venue where the
-WiFi buckles under load, a disaster shelter or a multilingual refugee setting with no infrastructure
+Wi-Fi buckles under load, a disaster shelter or a multilingual refugee setting with no infrastructure
 at all, or a public gathering where people don't share a language, let alone a network.
 
 LOAM's answer is a node anyone can stand up on a laptop, a Raspberry Pi, or a phone, with no internet,

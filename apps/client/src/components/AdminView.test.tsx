@@ -34,6 +34,7 @@ const config: LoamConfig = {
   },
   llm: {
     ollama: { enabled: false, baseUrl: "http://localhost:11434", model: "llama3", botId: "llm.bot", botDisplayName: "Assistant" },
+    openai: { enabled: false, baseUrl: "https://openrouter.ai/api/v1", model: "google/gemma", apiKeySet: false },
     onDevice: { enabled: false },
   },
   admin: { bootstrap: "firstUser" },
@@ -101,6 +102,21 @@ describe("AdminView", () => {
 
     expect(host.querySelector(".admin-section")).toBeNull();
     expect(host.querySelector(".empty-note")).not.toBeNull();
+  });
+
+  it("jumps to the section a #admin-<key> address names once the config has loaded (the hosts' assistant deep link)", async () => {
+    window.location.hash = "#admin-llm";
+    try {
+      const host = mount(
+        <AdminView currentUser={admin} joinUrl="http://192.168.0.10:3000" onChannelUpsert={() => {}} onWiped={async () => {}} />,
+      );
+      await flush();
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      expect(host.querySelector("#admin-llm")).not.toBeNull();
+      expect(document.activeElement?.id).toBe("admin-llm");
+    } finally {
+      window.location.hash = "";
+    }
   });
 
   it("loads and renders the config sections for an admin", async () => {

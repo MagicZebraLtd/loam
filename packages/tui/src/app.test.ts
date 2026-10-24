@@ -1,4 +1,4 @@
-import type { HostApi, HostStatus, HostUser, LoamConfig, LoamConfigUpdate } from "@loam/schema";
+import type { HostApi, HostStatus, HostUser, LlmModelsResponse, LoamConfig, LoamConfigUpdate } from "@loam/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { plain } from "./ansi.js";
@@ -20,7 +20,11 @@ function fakeHost(overrides: Partial<{ users: HostUser[]; profile: LoamConfig["s
     retention: {},
     killSwitch: { enabled: false, requireConfirmation: true },
     features: { enablePresence: true },
-    llm: { ollama: { enabled: false, model: "llama3.2" } },
+    llm: {
+      ollama: { enabled: false, baseUrl: "http://localhost:11434", model: "llama3.2", botId: "llm.ollama.gemma4", botDisplayName: "Gemma" },
+      openai: { enabled: false, baseUrl: "https://openrouter.ai/api/v1", model: "google/gemma-4-27b-it:free", apiKeySet: false },
+      onDevice: { enabled: false },
+    },
   } as unknown as LoamConfig;
   const users: HostUser[] = overrides.users ?? [];
   let minted = 0;
@@ -79,6 +83,7 @@ function fakeHost(overrides: Partial<{ users: HostUser[]; profile: LoamConfig["s
     setLogLevel: vi.fn(),
     transportPublicKey: vi.fn(() => KEY),
     emergencyReset: vi.fn(async (): Promise<{ complete: boolean; journaled: boolean }> => ({ complete: true, journaled: false })),
+    llmModels: vi.fn(async (): Promise<LlmModelsResponse> => ({ ok: true, models: ["gemma4", "qwen3"] })),
   } satisfies HostApi;
   return host;
 }
@@ -660,6 +665,63 @@ describe("Settings, row by row", () => {
     await openRow(tui, 13);
     await tui.input("y");
     expect(saved.at(-1)?.kiosk).toBeUndefined();
+  });
+});
+
+describe("the Assistant rows", () => {
+  async function openRow(tui: Tui, index: number): Promise<void> {
+    await tui.input("4" + "\x1b[A".repeat(20));
+    for (let step = 0; step < index; step += 1) {
+      await tui.input("\x1b[B");
+    }
+    await tui.input("\r");
+  }
+
+  it("is one Off row until a backend is chosen, and choosing one switches exactly that backend on", async () => {
+    const { tui, host, screenText } = setup();
+    await openRow(tui, 7);
+    expect(screenText()).toContain("Choose where it runs");
+    await tui.input("\x1b[B\x1b[B\r");
+    expect(host.updateConfig).toHaveBeenLastCalledWith({
+      llm: { ollama: { enabled: false }, openai: { enabled: true }, onDevice: { enabled: false } },
+    });
+  });
+
+  it("shows a chat service's rows, names where messages go, offers the backend's models and keeps the key secret", async () => {
+    const host = fakeHost();
+    host.config().llm.openai.enabled = true;
+    const { tui, screenText } = setup({ host });
+    await tui.input("4");
+    const text = screenText();
+    expect(text).toContain("Chat service, google/gemma-4-27b-it:free");
+    expect(text).toContain("OpenRouter  (messages go to openrouter.ai)");
+    expect(text).toContain("Not set");
+
+    // Model: the list the backend offers, with the saved one chosen.
+    await openRow(tui, 10);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.llmModels).toHaveBeenCalledWith({ provider: "openai", baseUrl: "https://openrouter.ai/api/v1" });
+    expect(screenText()).toContain("2 models offered");
+    await tui.input("\x1b[B\r");
+    expect(host.updateConfig).toHaveBeenLastCalledWith({ llm: { openai: { model: "gemma4" } } });
+
+    // API key: typed blind, sent once, never echoed.
+    await openRow(tui, 9);
+    await tui.input("sk-or-secret\r");
+    expect(host.updateConfig).toHaveBeenLastCalledWith({ llm: { openai: { apiKey: "sk-or-secret" } } });
+    expect(screenText()).not.toContain("sk-or-secret");
+  });
+
+  it("falls back to a typed model name when the backend can't be asked", async () => {
+    const host = fakeHost();
+    host.config().llm.ollama.enabled = true;
+    host.llmModels.mockResolvedValueOnce({ ok: false, code: "llm_unreachable" });
+    const { tui, screenText } = setup({ host });
+    await openRow(tui, 9);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screenText()).toContain("Could not reach the service");
+    await tui.input("\x7f".repeat(12) + "phi4\r");
+    expect(host.updateConfig).toHaveBeenLastCalledWith({ llm: { ollama: { model: "phi4" } } });
   });
 });
 

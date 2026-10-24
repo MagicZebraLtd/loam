@@ -9,8 +9,10 @@
 > plaintext and rejects the wrong key, and a live server booted with `LOAM_DB_KEY` writes an
 > encrypted DB. **`LOAM_DB_KEY=ephemeral`** uses a random RAM-only key (never persisted), and the
 > **kill switch now does a cryptographic wipe** (delete files + rotate key) — see docs/02.
-> **Remaining:** passphrase key-derivation hardening, config/security-profile integration (docs/09),
-> and RAM key-zeroing. **Update (PR B):** the on-device *key handoff* is now wired — see
+> **Remaining:** a stronger passphrase key derivation than today's single SHA-256 pass
+> (`apps/app/src/lib/db-encryption.ts`; SQLCipher's own PBKDF2 still runs behind it), making encryption a
+> security-profile axis (docs/09; today it is the separate `security.dbEncryption` setting), and RAM
+> key-zeroing. **Update (PR B):** the on-device *key handoff* is now wired — see
 > ["On-device key handoff (Android host, PR B)"](#on-device-key-handoff-android-host-pr-b) below. RN
 > (`apps/app/src/lib/db-encryption.ts`) resolves/generates the key per `security.dbEncryption` mode,
 > stores it Keystore-backed (`expo-secure-store`), and hands it to the embedded launcher
@@ -71,9 +73,9 @@ a discriminated union on `type`). `SessionRecord = { token, userId }` is defined
 found the embedded Android Node is **18.20.4 (ABI 108)**, where `node:sqlite` **does not exist**
 (verified on-device: `ERR_UNKNOWN_BUILTIN_MODULE`; it needs Node ≥ 22.5). Outcomes:
 
-- **Chosen: `better-sqlite3-multiple-ciphers`** (decision recorded; the dependency itself is not yet
-  in the workspace manifests — it lands with the initiative-4 embedding work once the ABI-108
-  prebuilds exist) — actively maintained (v12.11.1, June 2026), same synchronous API/build system as
+- **Chosen: `better-sqlite3-multiple-ciphers`** (decision recorded; it is now a dependency of
+  `apps/server` (v12), `cli` (v13, optional) and `apps/desktop` (v13), and the ABI-108 Android prebuild is
+  vendored) — actively maintained (v12.11.1, June 2026), same synchronous API/build system as
   better-sqlite3, encryption via SQLite3MultipleCiphers (**no OpenSSL**; ChaCha20-Poly1305 default,
   SQLCipher-compatible mode). The Android path is proven by
   **`digidem/better-sqlite3-nodejs-mobile`**, which publishes plain better-sqlite3 prebuilds against
