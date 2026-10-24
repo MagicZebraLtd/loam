@@ -103,6 +103,8 @@ export function resolveEphemeralDbKey(dbKeyEnv: string | undefined): boolean {
 export type EmbeddedServerOptions = {
   /** Where the server's log lines go instead of stdout (the `loamnet` terminal UI reads them). */
   logStream?: { write(line: string): void };
+  /** Log a line per request (default true). See `AppOptions.requestLogging`; the Android host turns it off. */
+  requestLogging?: boolean;
   /** A per-boot host token; overrides `LOAM_HOST_TOKEN`. See `AppOptions.hostToken`. */
   hostToken?: string;
   /** Install SIGINT/SIGTERM handlers that close the server and exit (default true). A launcher that
@@ -167,6 +169,7 @@ export async function startEmbeddedServer(launcher: EmbeddedServerOptions = {}):
     // admin bootstrap and gates the loopback mesh bridge — see `AppOptions.hostToken`. Never logged.
     hostToken: launcher.hostToken || process.env.LOAM_HOST_TOKEN || undefined,
     logStream: launcher.logStream,
+    requestLogging: launcher.requestLogging,
   });
 
   if (app.adminSetupCode) {

@@ -62,6 +62,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # The same day's wait as for npm: a freshly moved action tag is the one most likely to be pulled again.
+    cooldown:
+      default-days: 1
     # One weekly PR for routine bumps, as for npm above; a major still arrives on its own for review.
     groups:
       minor-and-patch:

@@ -275,6 +275,13 @@ export type AppOptions = {
   logger?: boolean;
   /** Where server logs go (default stdout). Tests pass a capturing sink to assert what is (not) logged. */
   logStream?: { write(line: string): void };
+  /**
+   * Log one line per request and response (default true). A launcher whose log goes somewhere outside the
+   * encrypted database and outside its own control, such as the Android host's stdout (copied to logcat by
+   * nodejs-mobile), turns it off: those lines carry each joiner's address and a timestamp, an activity record a
+   * device backup or `adb` could read. Errors and warnings are still logged.
+   */
+  requestLogging?: boolean;
 };
 
 export type LoamApp = {

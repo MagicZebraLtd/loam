@@ -15,7 +15,9 @@ At the moment, only the most recent release is considered supported for security
 
 Please do not open a public GitHub issue for suspected security vulnerabilities.
 
-If you believe you have found a security issue in LOAM, please report it privately by emailing:
+If you believe you have found a security issue in LOAM, please report it privately, either through
+GitHub's private vulnerability reporting for this repository
+(<https://github.com/MagicZebraLtd/loam/security/advisories/new>) or by emailing:
 
 **opensource@magiczebra.co.uk**
 
@@ -44,6 +46,8 @@ This policy covers security issues in:
 
 - the LOAM web application
 - the LOAM server
+- the host apps that run it: the Android app, the desktop app (Mac, Windows, Linux) and the `loamnet`
+  terminal app
 - shared LOAM packages in this repository
 - authentication, identity, messaging, syncing, storage, and network communication code
 - the official project repository and published packages, if any
@@ -93,6 +97,15 @@ trade-offs, not open bugs:
 - **No end-to-end encryption**: the server processes plaintext (search, LLM, audience filtering).
   Optional E2EE is a future initiative ([docs/07](docs/07-more-features.md)), strongest once a
   signed native client exists (a host-served PWA can replace its own JavaScript).
+- **The web client is delivered over plain HTTP**, so the transport encryption protects the protocol,
+  not the code that runs it. An attacker on the LAN who can *rewrite* traffic between a phone and the host
+  while the page loads (ARP spoofing on an open hotspot, a malicious router) can serve a modified client
+  that reads messages before they are encrypted, or forges what is shown. A passive listener learns
+  nothing from the sealed traffic, and an attacker who can only impersonate the host at join time is
+  defeated by the QR key; one who can alter the page load is not. This is architectural: only a signed
+  native client closes it. The host's own windows (the Android app's WebView, the desktop app's Electron
+  window) load the client from loopback and are not exposed; phones joining over the LAN are
+  ([docs/08](docs/08-transport-security.md), threat 4).
 - **Node-to-node sync peers are coarsely authenticated**: an optional shared bearer token
   (`sync.token`) gates the sync endpoints, and only public content is exposed with defensive imports
   ([docs/11](docs/11-node-sync.md)). Honest residuals: peer transport keys are TOFU-learned unless
@@ -118,9 +131,12 @@ trade-offs, not open bugs:
   builds have not yet been run on real machines. The Windows installer is not yet signed.
 - **The optional online assistant** sends the messages people write to the assistant, and the recent
   history of that conversation, to the chat service the host chooses (OpenRouter, OpenAI and so on), under
-  that service's own terms. The admin page says where those messages go, and a `hardened` network only
-  accepts a service on the host or the local network. The service's API key is never returned by the API,
-  but it is stored with the node's configuration, which is encrypted only when the database is (and is
+  that service's own terms. The admin page says where those messages go, and members see a notice naming
+  the service in the assistant's own chat, which each device acknowledges once before its first message is
+  sent. When the host changes where the assistant runs, the earlier history is not sent to the new
+  destination: the conversation's history starts again from that change. A `hardened` network only
+  accepts a service, or an Ollama address, on the host or the local network. The service's API key is
+  never returned by the API, but it is stored with the node's configuration, which is encrypted only when the database is (and is
   plain text if the host writes it into `config.json` by hand).
 
 ## Review history

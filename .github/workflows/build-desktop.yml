@@ -29,8 +29,8 @@ name: Build desktop
 #   - Signing secrets reach ONLY the one step that needs them, never a job.
 #
 # Signing (all optional; without the secrets the build still succeeds, unsigned):
-#   macOS    The Apple Developer enrolment is pending, so today the .dmg files are unsigned and not notarized.
-#            Once enrolled, add these repository secrets and the next tag build signs and notarizes:
+#   macOS    Signed with the Developer ID certificate and notarized when these repository secrets are present
+#            (set 2026-10-22 for Magic Zebra Limited); without them the .dmg files build unsigned:
 #              CSC_LINK            the Developer ID Application certificate, a .p12 file, base64-encoded
 #              CSC_KEY_PASSWORD    the password of that .p12
 #              APPLE_API_KEY       the contents of the App Store Connect API key (the AuthKey_XXXX.p8 file)
