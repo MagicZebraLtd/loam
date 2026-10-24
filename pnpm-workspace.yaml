@@ -47,3 +47,7 @@ auditConfig:
     # braces <=3.0.3: stack exhaustion on deeply nested patterns. Path: expo > @expo/cli >
     # @expo/metro-file-map > micromatch > braces (Metro file watching at build time, fixed patterns).
     - GHSA-vfj7-8cjw-p6xm
+    # zod <4.6.6: memory exhaustion validating oversized constrained collections. Path: expo > @expo/cli >
+    # zod 3.25.76 (dev-tools plugin schemas; @expo/cli 57.0.32, the newest, still asks for ^3.25.76 and no
+    # 3.x fix exists). LOAM's own schemas use zod 4.6.7, which is patched.
+    - GHSA-mrhx-c7xc-m3w5

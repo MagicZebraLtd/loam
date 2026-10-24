@@ -92,7 +92,7 @@ which has a dedicated `typecheck` script (`pnpm --filter app typecheck`), `apps/
 records the formatting. CI (`.github/workflows/ci.yml`) runs `node
 scripts/check-versions.mjs` (every workspace `package.json`, `cli/package.json` and `app.json`
 `expo.version` must agree), `pnpm build`, `pnpm test`, the apps/app and server-test typechecks, `pnpm audit --prod
---audit-level=high` (two build-time advisories with no fix are listed in `pnpm-workspace.yaml` `auditConfig.ignoreGhsas`),
+--audit-level=high` (three build-time advisories with no fix, all via Expo's CLI, are listed in `pnpm-workspace.yaml` `auditConfig.ignoreGhsas`),
 then `pnpm smoke:cli` (packs + installs `loamnet` and drives the installed `loam`: port fallback, taken `--port`, `--encrypt` + reopen) on push/PR to
 `master` (a newer push to a PR cancels the older run). `build-apk.yml` (tag builds) pins every action to a commit SHA, runs `check-versions
 --release-tag vX.Y.Z[-rc.N|-beta.N]` (the tag's X.Y.Z == version, `versionCode` > every earlier release
