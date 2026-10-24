@@ -4,7 +4,64 @@ All notable changes to LOAM are recorded here. LOAM is a local-first, off-grid m
 `README.md` and `MISSION.md`). Format loosely follows [Keep a Changelog](https://keepachangelog.com);
 the project is pre-1.0, so the surface can still change. Dates are UTC.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-25
+
+The launch release: the desktop app's first release, the assistant through any OpenAI-style chat service,
+and the fixes from two independent pre-launch reviews (one external, one internal) of the whole code base.
+The Google Play bundle is `versionCode` 13.
+
+### Security
+- **The Android host keeps no plaintext copy of messages outside its encrypted database.** On an encrypted
+  network the host app's own browser view now tells the web client to keep no local copy (the same
+  `window.__loamHostNoLocalCache` the desktop app has set since it was built) and switches its page cache
+  off, and the web client deletes the copy an earlier version of the app left behind the first time it
+  loads. Pictures and files are also served with `Cache-Control: no-store` whenever the database is
+  encrypted, so neither host window can cache them on disk. Phones that join a network are unaffected.
+  Not yet verified on a physical phone (docs/21).
+- **A hardened (Private) network now refuses an Ollama address off the local network**, as it already
+  refused an online chat service: the rule covers both backends when a setting is saved, at boot from a
+  hand-edited `config.json`, and for the admin screens' Test connection. Requests from a hardened network to
+  its assistant never follow an HTTP redirect either, so a local address can't hand the conversation to a
+  public one. The admin page and the `loamnet` Settings screen now say so for an Ollama address too.
+- **People are told where the assistant runs, in the assistant's own chat.** The network tells every client
+  whether replies come from the host's phone, the host's computer, another computer on the local network,
+  or an online service (`NetworkConfig.assistantDestination`, named by its hostname); the assistant's
+  chat shows it under the name, and an online service shows a notice that each device confirms once before
+  its first message goes out. When the host changes where the assistant runs, the earlier conversation is
+  not sent along: the assistant's memory of each chat starts again from that change. Before, only the admin
+  page said where messages went, and switching a local assistant to an online service could send up to 40
+  earlier turns there with the next message.
+- **The security claims are scoped to what the code does.** The transport encryption protects messages from
+  anyone listening on the Wi-Fi and from a look-alike host at join time; it does not protect a phone from
+  someone who can rewrite traffic while LOAM's page loads over plain HTTP, since the code that checks the
+  key is the code being replaced. docs/08, SECURITY.md, the README, the site and both privacy policies now
+  say so, and the site no longer says `--encrypt` encrypts "everything" (pictures and files are stored
+  beside the database, unencrypted) or that a Private network "leaves nothing readable" (it throws away the
+  key to its messages when LOAM stops; pictures and files are deleted the next time it starts). Deleting a
+  message is removed here and refused on re-import by linked networks, but a copy they already pulled stays
+  there; the operators' guide said otherwise.
+- **The Android host no longer writes a line per request to the device log.** The embedded server's output
+  goes to logcat, which sits outside the encrypted database and can be read with `adb` or from a bug report,
+  and each request line carried a joiner's address and a timestamp. Warnings and errors are still logged;
+  they carry no message text, names or keys. The host app also stops logging the page URL on a load error.
+- **Private channels get an opaque id** (`chan_<hex>`) instead of one made from their name. A channel's id
+  lands where a reset can't reach (joiners' browser history, the host window's remembered last conversation,
+  the plaintext paths of a client that skipped the QR code), so a name-derived id told anyone with that
+  history that a hidden channel of that name existed. Public channels keep their readable slugs. Existing
+  private channels keep the id they have.
+- **The panic route takes the same time to answer whether or not a token is configured**, so a prober on the
+  LAN can no longer tell an armed node from a plain one by timing the 404.
+- **The host app's WebView opens links through its own navigation guard** (`setSupportMultipleWindows` off,
+  so a `target=_blank` link can't be handed to a detached popup) and no longer asks for third-party cookies.
+- **Electron 44.9.1** in the desktop app, which carries the mitigation for the compromised eMudhra
+  intermediate certificates (GHSA-jr5w-w6x2-84p9).
+- **Security reporting:** GitHub private vulnerability reporting is enabled for the repository and named in
+  `SECURITY.md`, whose scope now lists the Android, desktop and terminal host apps.
+- **Third-party licence notices ship with every build.** A generator (`scripts/third-party-notices.mjs`) writes
+  the bundled open-source packages and their licence texts into `THIRD_PARTY_NOTICES.txt` beside the `loamnet`
+  server bundle, the desktop app's and the Android host's, and the web client serves its own at
+  `/third-party-notices.txt`, linked from Settings. Nothing is downloaded or committed; the files are made at
+  build time (docs/14 "Licence notices").
 
 ### Added
 - **The assistant can answer through an online or local chat service**, not only Ollama: OpenRouter,
@@ -24,8 +81,8 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   checksum and a signed build record on the release. It never checks for updates by itself and sends nothing
   anywhere. The Mac builds are signed by Magic Zebra Limited and notarized by Apple, so they open with no
   "Open Anyway" step; the Windows installer is not yet signed (SignPath Foundation is the plan), and the
-  Windows and Linux builds have not yet been run on real machines. Unreleased: the first release ships with
-  0.7.0. See `docs/24-electron-desktop.md`.
+  Windows and Linux builds have not yet been run on real machines. This is its first release. See
+  `docs/24-electron-desktop.md`.
 - **A website page for the desktop app** (`/desktop`) and the code signing policy (`/code-signing`).
 
 ### Changed
@@ -41,8 +98,9 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   app, the Android host, `loamnet` on Ctrl-C) closes its connections when it shuts down instead of waiting
   for every in-flight request, so a stalled upload can't hold a stop open for ever.
 - **The web client keeps no local copy when the host app says not to** (`window.__loamHostNoLocalCache`):
-  the desktop app sets it on every encrypted network, so the host's own window never writes messages to the
-  disk outside the database's key. Nothing changes for phones joining a network.
+  the desktop app sets it on every encrypted network, and from this release the Android host does too (see
+  Security above), so the host's own window never writes messages to the disk outside the database's key.
+  Nothing changes for phones joining a network.
 
 ## [0.6.4] - 2026-10-15
 

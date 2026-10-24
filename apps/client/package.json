@@ -1,12 +1,12 @@
 {
   "name": "client",
   "private": true,
-  "version": "0.6.4",
+  "version": "0.7.0",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "dev": "node ../../scripts/third-party-notices.mjs web && vite --host 0.0.0.0",
+    "build": "node ../../scripts/third-party-notices.mjs web && tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run"
   },
