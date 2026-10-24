@@ -177,6 +177,13 @@ function openConnection(path: string, options: OpenStoreOptions): SqliteConnecti
 }
 
 /**
+ * The config-table key under which the assistant records which destination it answers from and since when
+ * (llm.ts `syncAssistantDestination`, docs/06). It is activity, not a setting (the time it holds says when
+ * the host changed the assistant), so `wipeAll` deletes it with the data while keeping the real config.
+ */
+export const ASSISTANT_DESTINATION_CONFIG_KEY = "assistantDestination";
+
+/**
  * Storage abstraction for all persisted LOAM state.
  *
  * The interface is deliberately driver-agnostic: the default implementation uses `node:sqlite`, but
@@ -389,7 +396,8 @@ export interface LoamStore {
   transaction<T>(fn: () => T): T;
   /** True when no users, channels, messages, or sessions exist (config is ignored). */
   isEmpty(): boolean;
-  /** Delete all users, channels, messages, and sessions in one transaction. Config is preserved. */
+  /** Delete all users, channels, messages, and sessions in one transaction. Config is preserved, except the
+   * assistant's destination record (`ASSISTANT_DESTINATION_CONFIG_KEY`), which is activity. */
   wipeAll(): void;
   /**
    * Rebuild the database file (`VACUUM`), so no page of it holds anything but live rows. The plaintext
@@ -1443,6 +1451,7 @@ function buildStore(db: SqliteConnection, pragma?: (source: string) => unknown):
         db.exec("DELETE FROM channel_join_requests");
         db.exec("DELETE FROM user_blocks");
         db.exec("DELETE FROM sealed_offers_seen");
+        db.prepare("DELETE FROM config WHERE key = ?").run(ASSISTANT_DESTINATION_CONFIG_KEY);
       });
       // Quarantined rows are ordinary rows: the DELETEs above removed them, so nothing is held any more.
       quarantinedUsers.clear();

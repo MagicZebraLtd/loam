@@ -71,8 +71,8 @@ backend's failure is the answer, not an HTTP error: 200 with `{ ok: false, code 
 local one (`isLocalNetworkUrl`: loopback, RFC 1918, link-local, `.local`/`.localhost`, a bare host name);
 `PATCH /api/admin/config` refuses a cloud `baseUrl` with `llm_cloud_not_allowed` (also when switching an
 already-cloud node to hardened), `ensureBotUser` treats a hand-edited config.json that pairs them as
-"assistant off" with a boot warning, and the models endpoint answers `llm_not_allowed`. Ollama and the
-on-device model are local by construction.
+"assistant off" with a boot warning, and the models endpoint answers `llm_not_allowed`. Ollama is held to
+the same rule (its address can point anywhere); only the on-device model is local by construction.
 
 **Where it is set up.** The web admin page's Assistant panel (`LlmPanel.tsx`: a "where the assistant runs"
 picker, a service preset, address, key field with Clear, Test connection that fills a model list, and a
@@ -85,6 +85,35 @@ jumps to a `#admin-<section>` hash once its config has loaded); the Android host
 
 **Still not built:** channel participation / `@mention` (docs/29 Track 3's consent model), a token
 budget, cancellation, tool use.
+
+## What members are told
+
+Only the admin screens used to say where the assistant's messages go. Now every member sees it in the
+assistant's own DM, whichever backend answers.
+
+- **`NetworkConfig.assistantDestination`** (in `/api/bootstrap`, `/api/config` and every `configUpdated`;
+  present exactly when `enableLLMChat` is): `{ kind: "onDevice" }` for the host phone's model, `host` for a
+  loopback address (`localhost`, `*.localhost`, `127.*`, `::1`), `lan` for any other `isLocalNetworkUrl`
+  address, and `{ kind: "online", host }` otherwise, named by its lower-cased hostname alone (no scheme,
+  port, path or credentials). `classifyBackendUrl` in `llm.ts` decides it.
+- **The DM header** shows it in place of presence ("Runs on the host's computer", "Answers come from
+  openrouter.ai, an online service"). For an `online` destination the DM also carries a notice: what the
+  member writes there and the chat's recent history go to that service under its own privacy policy, the
+  host chose it, nothing else of theirs goes there. The composer stays disabled until they press "I
+  understand"; after that the notice shrinks to one line. The acknowledgement is per service and per
+  device (`loam.assistantAck.<host>` in localStorage, `lib/assistant-ack.ts`), so a switch to a different
+  online service asks again, and it is cleared with the cached content by a wipe or identity change.
+- **History never crosses a destination change.** The server keeps `{ key, since }` in the config table
+  under `assistantDestination` (`key` = provider plus hostname, or `onDevice`). `syncAssistantDestination`
+  runs from `ensureBotUser` (boot and every config save) and before each reply: a key that differs from the
+  stored one records `since = now` (logged without the address's path), so `llmMessagesForUser` sends only
+  DM turns written at or after `since` (still at most `MAX_LLM_CONTEXT_MESSAGES`, system prompt kept, and
+  always the message being answered). Switching a local model to an online service therefore uploads
+  none of the conversation members had while it was local. The first record (an upgrade, a fresh node)
+  starts at 0, so an unchanged assistant keeps its memory; while the assistant is off nothing is touched,
+  so turning the same one off and on again keeps it too; an unreadable record counts as a change.
+  `wipeAll` deletes the record (it says when the host changed the assistant), and an encrypted reset's fresh
+  database starts without one.
 
 ## On-device model (Android host) — optional, off by default
 

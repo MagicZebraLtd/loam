@@ -2,6 +2,7 @@
 // DM-driven assistant reply, behind the shared `Runtime` view.
 import {
   activeLlmProvider,
+  type AssistantDestination,
   isLocalNetworkUrl,
   LLM_MODEL_MAX_LENGTH,
   type LlmModelsRequest,
@@ -14,6 +15,7 @@ import {
   UserSchema,
 } from "@loam/schema";
 import { isRecord } from "./config.js";
+import { ASSISTANT_DESTINATION_CONFIG_KEY } from "./db.js";
 import { MAX_LLM_CONTEXT_MESSAGES } from "./defaults.js";
 import { makeBotUser } from "./identity.js";
 import { newMessageId } from "./ids.js";
@@ -43,21 +45,95 @@ const MODELS_MAX = 500;
 export const CLOUD_ASSISTANT_REFUSED = "A cloud assistant is not allowed on a hardened network";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+/** `fetch`'s redirect option (`follow` | `error` | `manual`), without the DOM lib. */
+type RedirectPolicy = NonNullable<RequestInit["redirect"]>;
 
 /**
  * Why `config`'s assistant backend may not run, or undefined when it may: a `hardened` network keeps every
- * message on the local network, so an OpenAI-compatible service there must be a local one (LM Studio,
- * llama.cpp on this computer or the LAN), never a cloud API (docs/09, docs/29 Track 3). Ollama and the
- * on-device model are local by construction. Checked before a save is persisted and again at boot, so a
- * hand-edited config.json can't route a hardened network's DMs to the internet either.
+ * message on the local network, so a network-backed assistant there must run on this computer or the LAN
+ * (LM Studio, llama.cpp, Ollama on a laptop), never behind a public address (docs/09, docs/29 Track 3). Ollama
+ * is held to the same rule as an OpenAI-compatible service: it answers wherever its address points, so an
+ * Ollama address on the internet is a cloud assistant too. Only the on-device model is local by construction.
+ * Checked before a save is persisted and again at boot, so a hand-edited config.json can't route a hardened
+ * network's DMs to the internet either.
  */
 export function llmProviderRefusal(config: LoamConfig): string | undefined {
-  if (
-    config.security.profile === "hardened" &&
-    activeLlmProvider(config.llm) === "openai" &&
-    !isLocalNetworkUrl(config.llm.openai.baseUrl)
-  ) {
+  const baseUrl = activeBackendUrl(config.llm);
+  if (config.security.profile === "hardened" && baseUrl !== undefined && !isLocalNetworkUrl(baseUrl)) {
     return CLOUD_ASSISTANT_REFUSED;
+  }
+  return undefined;
+}
+
+/** The address the active network-backed assistant answers from; undefined for the on-device model or off. */
+export function activeBackendUrl(llm: LoamConfig["llm"]): string | undefined {
+  switch (activeLlmProvider(llm)) {
+    case "ollama":
+      return llm.ollama.baseUrl;
+    case "openai":
+      return llm.openai.baseUrl;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * How a backend request treats an HTTP redirect. A hardened network never follows one: a local address that
+ * answered with a redirect to a public host would otherwise carry the conversation off the LAN after the
+ * locality check passed. Everywhere else `fetch`'s default (follow) stands, so a service behind a redirecting
+ * proxy keeps working.
+ */
+export function backendRedirectPolicy(config: LoamConfig): RedirectPolicy {
+  return config.security.profile === "hardened" ? "error" : "follow";
+}
+
+/**
+ * The hostname a backend address names: lower-cased, without port or IPv6 brackets. An address `new URL`
+ * can't parse (the schema validates it as a URL, so this is defensive) gives whatever precedes its first
+ * `/`, `:`, `?` or `#`, so it is still named, never treated as local.
+ */
+function backendHostname(baseUrl: string): string {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    host = (baseUrl.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/:?#]/)[0] ?? "").toLowerCase();
+  }
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  return host.slice(0, 253) || "unknown";
+}
+
+/**
+ * Where a network-backed assistant at `baseUrl` answers from, as members are told it (docs/06): this
+ * computer (a loopback address), another computer on the local network (`isLocalNetworkUrl`), or an online
+ * service named by its hostname.
+ */
+export function classifyBackendUrl(baseUrl: string): AssistantDestination {
+  const host = backendHostname(baseUrl);
+  if (host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "::1") {
+    return { kind: "host" };
+  }
+  return isLocalNetworkUrl(baseUrl) ? { kind: "lan" } : { kind: "online", host };
+}
+
+/** The record under `ASSISTANT_DESTINATION_CONFIG_KEY`: which destination the assistant last answered from,
+ * and since when (ms epoch; 0 = since before this record existed). */
+type AssistantDestinationRecord = { key: string; since: number };
+
+/** Parse a stored destination record; undefined when it is absent or unreadable. */
+function parseDestinationRecord(raw: string | undefined): AssistantDestinationRecord | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (isRecord(parsed) && typeof parsed.key === "string" && typeof parsed.since === "number" && Number.isFinite(parsed.since)) {
+      return { key: parsed.key, since: parsed.since };
+    }
+  } catch {
+    // Unreadable: treated as a change (see syncAssistantDestination).
   }
   return undefined;
 }
@@ -82,13 +158,19 @@ function isAbort(error: unknown): boolean {
  * dropped), for the newline-delimited JSON Ollama streams and the SSE `data:` lines an OpenAI-compatible
  * service streams. One timeout covers the whole exchange; the reader is cancelled however the caller leaves.
  */
-async function* streamLines(url: string, headers: Record<string, string>, body: unknown, what: string): AsyncGenerator<string> {
+async function* streamLines(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  what: string,
+  redirect: RedirectPolicy,
+): AsyncGenerator<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
   let response: Response;
 
   try {
-    response = await fetch(url, { method: "POST", headers, signal: controller.signal, body: JSON.stringify(body) });
+    response = await fetch(url, { method: "POST", headers, signal: controller.signal, body: JSON.stringify(body), redirect });
   } catch (error) {
     clearTimeout(timeout);
     throw isAbort(error) ? new Error(`${what} request timed out before streaming started.`) : error;
@@ -176,6 +258,66 @@ export function createLlmLayer(rt: Runtime) {
     return activeProvider() !== "off";
   }
 
+  /**
+   * Where the assistant's replies come from, for `NetworkConfig.assistantDestination`; undefined while no
+   * backend is active, so it is present exactly when `enableLLMChat` is.
+   */
+  function assistantDestination(): AssistantDestination | undefined {
+    const provider = activeProvider();
+    if (provider === "off") {
+      return undefined;
+    }
+    if (provider === "onDevice") {
+      return { kind: "onDevice" };
+    }
+    const baseUrl = activeBackendUrl(rt.appConfig.llm);
+    return baseUrl === undefined ? undefined : classifyBackendUrl(baseUrl);
+  }
+
+  /** The active destination's identity for the history cut: provider plus hostname (`onDevice` alone for the
+   * phone's model); undefined while no backend is active. A change of either means a different recipient. */
+  function destinationKey(): string | undefined {
+    const provider = activeProvider();
+    if (provider === "off") {
+      return undefined;
+    }
+    if (provider === "onDevice") {
+      return "onDevice";
+    }
+    const baseUrl = activeBackendUrl(rt.appConfig.llm);
+    return baseUrl === undefined ? undefined : `${provider}:${backendHostname(baseUrl)}`;
+  }
+
+  /**
+   * Record the assistant's destination, and when it changed, in the config table, and return the time from
+   * which DM history may be sent to it (`llmMessagesForUser`). A conversation held with one destination is
+   * never forwarded to another: switching a local model to an online service must not upload the turns
+   * members wrote while it was local. While no backend is active nothing is touched, so turning the same
+   * assistant off and on again keeps its memory. The first record (an upgrade, or a fresh node) starts at 0
+   * so an unchanged assistant keeps its history; an unreadable record counts as a change. Runs from
+   * `ensureBotUser` (boot and every config save) and again before each reply.
+   *
+   * @returns The cut-off (ms epoch), or undefined while no backend is active.
+   */
+  function syncAssistantDestination(): number | undefined {
+    const key = destinationKey();
+    if (key === undefined) {
+      return undefined;
+    }
+    const raw = rt.store.getConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY);
+    const stored = parseDestinationRecord(raw);
+    if (stored?.key === key) {
+      return stored.since;
+    }
+    const next: AssistantDestinationRecord = { key, since: raw === undefined ? 0 : Date.now() };
+    rt.store.setConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY, JSON.stringify(next));
+    if (next.since !== 0) {
+      // The key is provider + hostname: never the address's path, query or credentials.
+      rt.log.info(`The assistant now answers from ${key}; earlier conversations will not be sent to it`);
+    }
+    return next.since;
+  }
+
   /** The model label shown on assistant replies: whichever backend answers. */
   function activeLlmModel(): string {
     switch (activeProvider()) {
@@ -202,12 +344,14 @@ export function createLlmLayer(rt: Runtime) {
 
     if (refusal && activeLlmProvider(rt.appConfig.llm) !== "off") {
       // A save can't persist this (applyConfigUpdate refuses it); a hand-edited config.json can.
-      rt.log.warn(`LLM assistant disabled: ${refusal.toLowerCase()} (${rt.appConfig.llm.openai.baseUrl})`);
+      rt.log.warn(`LLM assistant disabled: ${refusal.toLowerCase()} (${activeBackendUrl(rt.appConfig.llm)})`);
     }
 
     if (!llmEnabled()) {
       return undefined;
     }
+
+    syncAssistantDestination();
 
     // Non-fatal by design: this runs at boot (loadData) and after every config save, and a bad bot config
     // must never take the node down — it just means no assistant contact until the config is fixed.
@@ -305,11 +449,18 @@ export function createLlmLayer(rt: Runtime) {
   }
 
   /**
-   * Build a sequence of chat messages for the configured Ollama model from the DM history between a bot and a user.
+   * Build a sequence of chat messages for the active backend from the DM history between a bot and a user:
+   * only turns written since the assistant's destination last changed (`syncAssistantDestination`), plus the
+   * message being answered whatever its time (a change noticed only now must not drop the question itself).
    */
-  function llmMessagesForUser(botId: string, currentUserId: string): ChatMessage[] {
-    const history = rt.dmMessages(botId, currentUserId).flatMap((message) => {
+  function llmMessagesForUser(botId: string, userMessage: Message & { type: "dm" }): ChatMessage[] {
+    const since = syncAssistantDestination() ?? Date.now();
+    const history = rt.dmMessages(botId, userMessage.authorId).flatMap((message) => {
       if (message.type !== "dm" || !message.body.trim()) {
+        return [];
+      }
+
+      if (message.createdAt < since && message.id !== userMessage.id) {
         return [];
       }
 
@@ -337,7 +488,13 @@ export function createLlmLayer(rt: Runtime) {
   /** Stream a reply from Ollama's own `/api/chat`: newline-delimited JSON, one object per delta. */
   async function* streamOllamaChat(messages: ChatMessage[]): AsyncGenerator<string> {
     const { baseUrl, model } = rt.appConfig.llm.ollama;
-    const lines = streamLines(joinUrl(baseUrl, "/api/chat"), { "content-type": "application/json" }, { model, stream: true, messages }, "Ollama");
+    const lines = streamLines(
+      joinUrl(baseUrl, "/api/chat"),
+      { "content-type": "application/json" },
+      { model, stream: true, messages },
+      "Ollama",
+      backendRedirectPolicy(rt.appConfig),
+    );
 
     for await (const line of lines) {
       const parsed: unknown = JSON.parse(line);
@@ -371,7 +528,13 @@ export function createLlmLayer(rt: Runtime) {
    */
   async function* streamOpenAiChat(messages: ChatMessage[]): AsyncGenerator<string> {
     const { baseUrl, model, apiKey } = rt.appConfig.llm.openai;
-    const lines = streamLines(joinUrl(baseUrl, "/chat/completions"), openAiHeaders(apiKey), { model, stream: true, messages }, "Chat service");
+    const lines = streamLines(
+      joinUrl(baseUrl, "/chat/completions"),
+      openAiHeaders(apiKey),
+      { model, stream: true, messages },
+      "Chat service",
+      backendRedirectPolicy(rt.appConfig),
+    );
 
     for await (const line of lines) {
       if (!line.startsWith("data:")) {
@@ -523,7 +686,9 @@ export function createLlmLayer(rt: Runtime) {
     const baseUrl = request.baseUrl ?? (request.provider === "ollama" ? llm.ollama.baseUrl : llm.openai.baseUrl);
     const apiKey = request.provider === "openai" ? (request.apiKey === undefined ? llm.openai.apiKey : request.apiKey || undefined) : undefined;
 
-    if (request.provider === "openai" && security.profile === "hardened" && !isLocalNetworkUrl(baseUrl)) {
+    // The same locality rule as `llmProviderRefusal`, for both backends: a hardened network's admin can't
+    // even probe a public address from here.
+    if (security.profile === "hardened" && !isLocalNetworkUrl(baseUrl)) {
       return { ok: false, code: "llm_not_allowed" };
     }
 
@@ -533,7 +698,12 @@ export function createLlmLayer(rt: Runtime) {
     let response: Response;
 
     try {
-      response = await fetch(url, { method: "GET", headers: openAiHeaders(apiKey), signal: controller.signal });
+      response = await fetch(url, {
+        method: "GET",
+        headers: openAiHeaders(apiKey),
+        signal: controller.signal,
+        redirect: backendRedirectPolicy(rt.appConfig),
+      });
     } catch (error) {
       clearTimeout(timeout);
       rt.log.debug(error, "LLM model list: the backend could not be reached");
@@ -652,7 +822,7 @@ export function createLlmLayer(rt: Runtime) {
     rt.broadcastStreamEvent(audience, { type: "start", messageId: assistantMessage.id });
 
     try {
-      for await (const delta of streamChat(llmMessagesForUser(bot.id, userMessage.authorId))) {
+      for await (const delta of streamChat(llmMessagesForUser(bot.id, userMessage))) {
         if (wiped() || withdrawn()) {
           abandon();
           return;
@@ -694,6 +864,7 @@ export function createLlmLayer(rt: Runtime) {
     llmEnabled,
     activeProvider,
     activeLlmModel,
+    assistantDestination,
     ensureBotUser,
     botConfigError,
     assistantBusyFor,

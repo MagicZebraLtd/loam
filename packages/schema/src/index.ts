@@ -366,6 +366,22 @@ export const ChannelUpdateRequestSchema = z
   .partial();
 export type ChannelUpdateRequest = z.infer<typeof ChannelUpdateRequestSchema>;
 
+/**
+ * Where the assistant's replies come from, so a member can see it in the assistant's chat before writing
+ * (docs/06). An `online` service is named by its hostname only, never the full address.
+ */
+export const AssistantDestinationSchema = z.discriminatedUnion("kind", [
+  /** The host phone's own model. */
+  z.object({ kind: z.literal("onDevice") }),
+  /** A model on the host computer (a loopback address). */
+  z.object({ kind: z.literal("host") }),
+  /** A model on another computer on the local network. */
+  z.object({ kind: z.literal("lan") }),
+  /** An online service, named by its hostname. */
+  z.object({ kind: z.literal("online"), host: z.string().min(1).max(253) }),
+]);
+export type AssistantDestination = z.infer<typeof AssistantDestinationSchema>;
+
 export const NetworkConfigSchema = z.object({
   /** The operator-chosen name of this network, shown in the client (sidebar, join screen). */
   nodeName: z.string().min(1).max(80),
@@ -384,6 +400,8 @@ export const NetworkConfigSchema = z.object({
   enableMesh: z.boolean(),
   enableLLMChat: z.boolean(),
   enableLLMStreaming: z.boolean(),
+  /** Where the assistant's replies come from; present exactly when `enableLLMChat` is true. */
+  assistantDestination: AssistantDestinationSchema.optional(),
   allowUserDisplayNameEdit: z.boolean(),
   allowUserAvatarEdit: z.boolean(),
   allowUserAvatarUpload: z.boolean(),

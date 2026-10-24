@@ -348,7 +348,66 @@ describe("POST /api/admin/llm/models", () => {
   });
 });
 
-describe("a hardened network and a cloud chat service", () => {
+describe("a hardened network and a cloud assistant", () => {
+  it("holds Ollama to the same rule as a service: an address off the local network is refused, a local one allowed", async () => {
+    const app = await makeApp();
+    const { cookie } = await adminSession(app);
+
+    const cloud = await app.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie },
+      payload: { security: { profile: "hardened" }, llm: { ollama: { enabled: true, baseUrl: "https://ollama.example.com", model: "m" } } },
+    });
+    expect(cloud.statusCode).toBe(400);
+    expect(cloud.json()).toMatchObject({ code: "llm_cloud_not_allowed" });
+    expect((await adminConfig(app, cookie)).security.profile).toBe("custom");
+    expect(await assistantAdvertised(app)).toBe(false);
+
+    const local = await app.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie },
+      payload: { security: { profile: "hardened" }, llm: { ollama: { enabled: true, baseUrl: "http://192.168.1.20:11434", model: "m" } } },
+    });
+    expect(local.statusCode).toBe(200);
+    expect(await assistantAdvertised(app)).toBe(true);
+
+    // A hardened node booted from a hand-edited config.json pairing them advertises no assistant and won't
+    // probe the public address either.
+    const booted = await makeApp({ security: { profile: "hardened" }, llm: { ollama: { enabled: true, baseUrl: "https://ollama.example.com", model: "m" } } });
+    expect(await assistantAdvertised(booted)).toBe(false);
+    expect(booted.host.config().llm.ollama.enabled).toBe(true);
+    expect(await booted.host.llmModels({ provider: "ollama", baseUrl: "https://ollama.example.com" })).toEqual({ ok: false, code: "llm_not_allowed" });
+  });
+
+  it("never follows a redirect off a local address on a hardened network, and follows one elsewhere", async () => {
+    const target = startChatService({ models: ["behind-the-redirect"], deltas: ["followed"] });
+    const targetUrl = await target.url;
+    // A local address that answers every request with a redirect to the target: the locality check passes on
+    // the address the admin typed, so the redirect is where the conversation would leak.
+    const redirector = createServer((req, res) => {
+      res.writeHead(307, { location: `${targetUrl}${req.url ?? ""}` });
+      res.end();
+    });
+    const redirectorUrl = await new Promise<string>((resolve) => {
+      redirector.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(redirector.address() as AddressInfo).port}`));
+    });
+    cleanups.push(() => new Promise<void>((resolve) => redirector.close(() => resolve())));
+
+    const hardened = await makeApp({ security: { profile: "hardened" }, llm: { openai: { enabled: true, baseUrl: redirectorUrl, model: "m" } } });
+    expect(await hardened.host.llmModels({ provider: "openai", baseUrl: redirectorUrl })).toEqual({ ok: false, code: "llm_unreachable" });
+    expect(target.seen).toHaveLength(0);
+
+    const open = await makeApp({ llm: { openai: { enabled: true, baseUrl: redirectorUrl, model: "m" } } });
+    expect(await open.host.llmModels({ provider: "openai", baseUrl: redirectorUrl })).toEqual({ ok: true, models: ["behind-the-redirect"] });
+    const { cookie } = await adminSession(open);
+    expect((await askBot(open, cookie, "hi"))?.body).toBe("followed");
+    expect(target.seen.map((entry) => entry.path)).toEqual(["/models", "/chat/completions"]);
+  });
+});
+
+describe("a hardened network and a cloud chat service (OpenAI-compatible)", () => {
   it("refuses to save a cloud service under the hardened profile, but allows a local one", async () => {
     const app = await makeApp();
     const { cookie } = await adminSession(app);
@@ -393,6 +452,179 @@ describe("a hardened network and a cloud chat service", () => {
     expect(await app.host.llmModels({ provider: "openai", baseUrl: "https://openrouter.ai/api/v1" })).toEqual({ ok: false, code: "llm_not_allowed" });
     // A local service is still listed under hardened.
     expect(await app.host.llmModels({ provider: "openai", baseUrl: await service.url })).toEqual({ ok: true, models: ["a"] });
+  });
+});
+
+/** A mock Ollama answering `POST /api/chat` with newline-delimited JSON deltas; every request body is kept. */
+function startOllamaChat(deltas: string[]) {
+  const seen: Seen[] = [];
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk: Buffer) => (raw += chunk));
+    req.on("end", () => {
+      if (req.method !== "POST" || req.url !== "/api/chat") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      seen.push({ path: req.url, body: JSON.parse(raw || "{}") as Seen["body"] });
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      for (const delta of deltas) {
+        res.write(`${JSON.stringify({ message: { role: "assistant", content: delta }, done: false })}\n`);
+      }
+      res.end(`${JSON.stringify({ message: { role: "assistant", content: "" }, done: true })}\n`);
+    });
+  });
+  const url = new Promise<string>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`));
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  return { url, seen };
+}
+
+async function advertisedDestination(app: LoamApp): Promise<unknown> {
+  const response = await app.server.inject({ method: "GET", url: "/api/bootstrap" });
+  return (response.json() as { networkConfig: { assistantDestination?: unknown } }).networkConfig.assistantDestination;
+}
+
+/** DM the bot and wait until it has finished `replies` replies in this conversation. */
+async function askBotFor(app: LoamApp, cookie: string, body: string, replies: number): Promise<void> {
+  const posted = await app.server.inject({
+    method: "POST",
+    url: "/api/messages",
+    headers: { cookie },
+    payload: { type: "dm", recipientUserId: BOT_ID, body },
+  });
+  expect(posted.statusCode).toBe(201);
+  const done = await waitFor(async () => (await botReplies(app, cookie)).filter((row) => row.meta?.streaming === false).length >= replies);
+  expect(done).toBe(true);
+}
+
+/** The destination record the history cut keys on. */
+function destinationRecord(app: LoamApp): { key: string; since: number } | undefined {
+  const raw = app.store.getConfigValue("assistantDestination");
+  return raw === undefined ? undefined : (JSON.parse(raw) as { key: string; since: number });
+}
+
+describe("where the assistant's replies come from", () => {
+  it("is advertised to every member: none while off, then this computer, the local network or an online service by hostname", async () => {
+    expect(await advertisedDestination(await makeApp())).toBeUndefined();
+
+    const local = startChatService();
+    expect(await advertisedDestination(await makeApp({ llm: { openai: { enabled: true, baseUrl: await local.url, model: "m" } } }))).toEqual({
+      kind: "host",
+    });
+    expect(
+      await advertisedDestination(await makeApp({ llm: { ollama: { enabled: true, baseUrl: "http://localhost:11434", model: "m" } } })),
+    ).toEqual({ kind: "host" });
+    expect(
+      await advertisedDestination(await makeApp({ llm: { ollama: { enabled: true, baseUrl: "http://192.168.1.20:11434", model: "m" } } })),
+    ).toEqual({ kind: "lan" });
+    // Named by hostname alone: no scheme, port or path (a path can carry an account or a deployment name).
+    expect(
+      await advertisedDestination(
+        await makeApp({ llm: { openai: { enabled: true, baseUrl: "https://OpenRouter.ai:443/api/v1", model: "m", apiKey: KEY } } }),
+      ),
+    ).toEqual({ kind: "online", host: "openrouter.ai" });
+    expect(
+      await advertisedDestination(await makeApp({ llm: { ollama: { enabled: true, baseUrl: "https://ollama.example.com:8443/x", model: "m" } } })),
+    ).toEqual({ kind: "online", host: "ollama.example.com" });
+    expect(await advertisedDestination(await makeApp({ llm: { onDevice: { enabled: true } } }))).toEqual({ kind: "onDevice" });
+
+    // Nothing was sent anywhere: advertising a destination is config only.
+    expect(local.seen).toHaveLength(0);
+  });
+
+  it("follows a config save, and is gone when the assistant is turned off", async () => {
+    const app = await makeApp({ llm: { ollama: { enabled: true, baseUrl: "http://127.0.0.1:11434", model: "m" } } });
+    const { cookie } = await adminSession(app);
+    expect(await advertisedDestination(app)).toEqual({ kind: "host" });
+
+    const online = await app.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie },
+      payload: { llm: { openai: { enabled: true, baseUrl: "https://api.groq.com/openai/v1", model: "m" } } },
+    });
+    expect(online.statusCode).toBe(200);
+    expect(await advertisedDestination(app)).toEqual({ kind: "online", host: "api.groq.com" });
+
+    const off = await app.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie },
+      payload: { llm: { openai: { enabled: false }, ollama: { enabled: false } } },
+    });
+    expect(off.statusCode).toBe(200);
+    expect(await advertisedDestination(app)).toBeUndefined();
+  });
+});
+
+describe("the assistant's history across a change of destination", () => {
+  it("sends the new destination only what was written after the change, and a restart keeps the cut", async () => {
+    const before = startOllamaChat(["local answer"]);
+    const after = startChatService({ deltas: ["service answer"] });
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-llm-destination-"));
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({ llm: { ollama: { enabled: true, baseUrl: await before.url, model: "m" } } }));
+    const boot = () => buildApp({ requireRulesAcceptance: false, dataDir, logger: false, maxNewIdentitiesPerWindow: 1_000_000 });
+    let app = await boot();
+    cleanups.push(async () => {
+      await app.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+    const { cookie } = await adminSession(app);
+
+    // An unchanged assistant keeps everything it was told before this record existed.
+    expect(destinationRecord(app)).toEqual({ key: `ollama:127.0.0.1`, since: 0 });
+    await askBotFor(app, cookie, "first, said locally", 1);
+    await askBotFor(app, cookie, "second, said locally", 2);
+    expect(before.seen.at(-1)?.body?.messages).toHaveLength(3);
+
+    const switched = await app.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie },
+      payload: { llm: { openai: { enabled: true, baseUrl: await after.url, model: "svc" } } },
+    });
+    expect(switched.statusCode).toBe(200);
+    const record = destinationRecord(app);
+    expect(record?.key).toBe("openai:127.0.0.1");
+    expect(record?.since).toBeGreaterThan(0);
+
+    await askBotFor(app, cookie, "third, after the switch", 3);
+    expect(after.seen.at(-1)?.body?.messages).toEqual([{ role: "user", content: "third, after the switch" }]);
+
+    // Same destination after a restart: the record and its cut-off stand.
+    await app.close();
+    app = await boot();
+    expect(destinationRecord(app)).toEqual(record);
+    await askBotFor(app, cookie, "fourth, after a restart", 4);
+    expect(after.seen.at(-1)?.body?.messages).toEqual([
+      { role: "user", content: "third, after the switch" },
+      { role: "assistant", content: "service answer" },
+      { role: "user", content: "fourth, after a restart" },
+    ]);
+    expect(JSON.stringify(after.seen)).not.toContain("said locally");
+  });
+
+  it("keeps the history when the same assistant is turned off and on again", async () => {
+    const service = startChatService({ deltas: ["ok"] });
+    const app = await makeApp({ llm: { openai: { enabled: true, baseUrl: await service.url, model: "m" } } });
+    const { cookie } = await adminSession(app);
+    await askBotFor(app, cookie, "before the pause", 1);
+
+    for (const enabled of [false, true]) {
+      const saved = await app.server.inject({ method: "PATCH", url: "/api/admin/config", headers: { cookie }, payload: { llm: { openai: { enabled } } } });
+      expect(saved.statusCode).toBe(200);
+    }
+    expect(destinationRecord(app)?.since).toBe(0);
+
+    await askBotFor(app, cookie, "after the pause", 2);
+    expect(service.seen.at(-1)?.body?.messages).toEqual([
+      { role: "user", content: "before the pause" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "after the pause" },
+    ]);
   });
 });
 

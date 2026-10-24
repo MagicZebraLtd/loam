@@ -1,9 +1,10 @@
 import { generateDisplayName } from "@loam/display-name";
-import type { Channel, Message, MessageAttachment, MessageLocation, User } from "@loam/schema";
+import type { AssistantDestination, Channel, Message, MessageAttachment, MessageLocation, User } from "@loam/schema";
 import { useLocation } from "preact-iso";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { t } from "../i18n";
+import { acknowledgeAssistantHost, hasAcknowledgedAssistantHost } from "../lib/assistant-ack";
 import { withoutBlockedAuthors, withoutBlockedReactions } from "../lib/blocks";
 import { dayLabel } from "../lib/dates";
 import { ArrivalCoalescer } from "../lib/live-announcer";
@@ -44,6 +45,8 @@ export function conversationIdentity(conversation: Conversation): string {
 export interface ConversationViewProps {
   allowAttachments: boolean;
   allowLocationSharing: boolean;
+  /** Where the assistant's replies come from (`NetworkConfig.assistantDestination`), told in its DM (docs/06). */
+  assistantDestination?: AssistantDestination;
   /** Who the current user has blocked (docs/30 B3): their channel content is collapsed, their DM is read-only. */
   blockedUserIds?: ReadonlySet<string>;
   channels: Channel[];
@@ -109,6 +112,20 @@ function backRouteForThread(conversation: Conversation): string {
     : `/dm/${encodeURIComponent(conversation.id)}`;
 }
 
+/** The assistant DM's subtitle: where its answers come from. */
+function assistantDestinationText(destination: AssistantDestination): string {
+  switch (destination.kind) {
+    case "onDevice":
+      return t("assistant.runsOnDevice");
+    case "host":
+      return t("assistant.runsOnHost");
+    case "lan":
+      return t("assistant.runsOnLan");
+    case "online":
+      return t("assistant.runsOnline", { host: destination.host });
+  }
+}
+
 /** The typing line: "Ada is typing…", "Ada and Bo are typing…", or "Several people are typing…". */
 function typingText(typers: string[]): string {
   return typers.length === 1
@@ -122,6 +139,7 @@ function typingText(typers: string[]): string {
 function ConversationPane({
   allowAttachments,
   allowLocationSharing,
+  assistantDestination,
   blockedUserIds = NO_BLOCKS,
   channels,
   conversation,
@@ -178,15 +196,26 @@ function ConversationPane({
   // Only people can be blocked — not the assistant bot, and not a mesh sender (the server refuses both).
   const canBlockPeer = !!onSetBlocked && dmPeer?.type === "human" && !conversation.id.startsWith("mesh.");
   const dmBlocked = conversation.kind === "dm" && blockedUserIds.has(conversation.id);
+  // The assistant's DM says where its answers come from. An online service is acknowledged once per service
+  // on this device before anything is written to it (docs/06); a different service asks again.
+  const assistantDm = dmPeer?.type === "bot" ? assistantDestination : undefined;
+  const onlineHost = assistantDm?.kind === "online" ? assistantDm.host : undefined;
+  const [acknowledgedHost, setAcknowledgedHost] = useState<string>();
+  const onlineAcknowledged =
+    onlineHost !== undefined && (acknowledgedHost === onlineHost || hasAcknowledgedAssistantHost(onlineHost));
+  const awaitingAssistantAck = onlineHost !== undefined && !onlineAcknowledged;
   // Archived channels are readable but read-only: the composer (and the thread panel's) disable
-  // with an explanation instead of letting a send fail server-side. So does a DM with someone you blocked.
+  // with an explanation instead of letting a send fail server-side. So does a DM with someone you blocked,
+  // and the assistant's DM until its online service is acknowledged.
   const composerDisabledReason = activeChannel?.archived
     ? t("composer.archived")
     : dmBlocked
       ? t("block.composerDisabled")
-      : timedOut
-        ? t("composer.timedOut")
-        : undefined;
+      : awaitingAssistantAck
+        ? t("assistant.composerUntilAck")
+        : timedOut
+          ? t("composer.timedOut")
+          : undefined;
   const channelName = activeChannel?.name ?? conversation.id;
   const title = conversation.kind === "channel" ? channelName : dmPeer?.displayName ?? conversation.id;
   const memberCount = isPrivateChannel
@@ -215,10 +244,12 @@ function ConversationPane({
       </span>
     );
   // A DM's subtitle says "Online" while the peer is connected, and is otherwise empty (a raw user id would
-  // mean nothing to people). A channel's is its topic.
+  // mean nothing to people). The assistant's says where its answers come from instead. A channel's is its topic.
   const subtitle =
     conversation.kind === "dm" ? (
-      peerOnline ? (
+      assistantDm ? (
+        assistantDestinationText(assistantDm)
+      ) : peerOnline ? (
         <span className="presence-text">{t("sidebar.online")}</span>
       ) : undefined
     ) : (
@@ -302,6 +333,29 @@ function ConversationPane({
                 </button>
               ) : null}
             </div>
+          </div>
+        ) : null}
+        {onlineHost !== undefined ? (
+          <div className="conversation-banner">
+            {onlineAcknowledged ? (
+              <div className="notice assistant-banner assistant-banner-compact" role="note">
+                <span>{t("assistant.onlineNotice", { host: onlineHost })}</span>
+              </div>
+            ) : (
+              <div className="notice assistant-banner" role="status">
+                <span>{t("assistant.onlineBanner", { host: onlineHost })}</span>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    acknowledgeAssistantHost(onlineHost);
+                    setAcknowledgedHost(onlineHost);
+                  }}
+                  type="button"
+                >
+                  {t("assistant.onlineAck")}
+                </button>
+              </div>
+            )}
           </div>
         ) : null}
         <MessageList

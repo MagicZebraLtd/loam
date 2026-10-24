@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeLlmProvider,
+  AssistantDestinationSchema,
   ChannelSchema,
   DbEncryptionModeSchema,
   IdSchema,
@@ -137,6 +138,17 @@ describe("@loam/schema", () => {
         locale: "xx",
       }).success,
     ).toBe(false);
+  });
+
+  it("carries where the assistant's replies come from, an online service by its hostname only", () => {
+    expect(AssistantDestinationSchema.safeParse({ kind: "onDevice" }).success).toBe(true);
+    expect(AssistantDestinationSchema.safeParse({ kind: "host" }).success).toBe(true);
+    expect(AssistantDestinationSchema.safeParse({ kind: "lan" }).success).toBe(true);
+    expect(AssistantDestinationSchema.parse({ kind: "online", host: "openrouter.ai" })).toEqual({ kind: "online", host: "openrouter.ai" });
+    expect(AssistantDestinationSchema.safeParse({ kind: "online" }).success).toBe(false);
+    expect(AssistantDestinationSchema.safeParse({ kind: "online", host: "" }).success).toBe(false);
+    expect(AssistantDestinationSchema.safeParse({ kind: "online", host: "a".repeat(254) }).success).toBe(false);
+    expect(AssistantDestinationSchema.safeParse({ kind: "cloud" }).success).toBe(false);
   });
 
   it("validates the node configuration and partial updates", () => {

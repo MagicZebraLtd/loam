@@ -79,6 +79,9 @@ export function LlmPanel({
   const provider = activeLlmProvider(llm);
   const [tests, setTests] = useState<Record<"ollama" | "openai", TestState>>({ ollama: { kind: "idle" }, openai: { kind: "idle" } });
   const cloud = !isLocalNetworkUrl(openai.baseUrl);
+  // Ollama answers wherever its address points, so an Ollama address off the local network is a cloud
+  // assistant too, and the server refuses it on a hardened network just like a service (llmProviderRefusal).
+  const ollamaCloud = !isLocalNetworkUrl(ollama.baseUrl);
 
   /** Exactly one backend is on at a time; the server's precedence (on-device, service, Ollama) then agrees. */
   function choose(next: LlmProvider): void {
@@ -179,6 +182,9 @@ export function LlmPanel({
             {testStatus("ollama")}
           </div>
           {modelField("ollama")}
+          <p className={ollamaCloud ? "form-error" : "field-hint"} role="note">
+            {ollamaCloud ? t("admin.llmCloudNote", { host: hostOf(ollama.baseUrl) }) : t("admin.llmLocalNote")}
+          </p>
         </div>
       ) : null}
 
