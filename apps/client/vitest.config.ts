@@ -9,5 +9,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Lets Preact 11's after-paint effect cleanups finish before each file's environment is torn down.
+    setupFiles: ["src/test-setup.ts"],
   },
 });
