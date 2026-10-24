@@ -103,8 +103,8 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "The host can store the network encrypted. With encryption on, a reset also replaces the key on the " +
             "Android host app, and on a computer using a temporary key, so the deleted data can't be recovered " +
             "from the device's storage. A computer that uses a fixed passphrase deletes the database files but " +
-            "keeps the same passphrase. Pictures and files are stored beside the encrypted database, and a reset " +
-            "deletes them.",
+            "keeps the same passphrase. Pictures and files are stored beside the database without encryption. A " +
+            "reset deletes them, but on flash storage a deleted picture or file may still be recoverable.",
           "Uninstalling the Android host app deletes everything it stored.",
         ],
       },

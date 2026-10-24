@@ -139,7 +139,8 @@
             the key on the Android host app, and on a computer using a temporary key, so the deleted data
             cannot be recovered from the device's storage. A computer that uses a fixed passphrase deletes the
             database files but keeps the same passphrase. Uploaded images and files are stored outside the
-            encrypted database, and a reset deletes them.
+            database without encryption. A reset deletes them, but on flash storage a deleted image or file may
+            still be recoverable.
           </li>
           <li>
             Uninstalling the Android host app deletes everything it stored.

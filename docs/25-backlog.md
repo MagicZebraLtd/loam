@@ -74,7 +74,7 @@ Size key: **S** ≈ hours–1 day · **M** ≈ days · **L** ≈ 1–2 weeks · 
 | S4 | **Mesh delivery-acks.** Convergence rests on TTL/hop/cap only. Design **now decided** (external review): a **hash-lock capability receipt**. The sender commits `SHA-256("loam.mesh.ack.v1"‖msgId‖ackSecret)` in the public envelope, recipient publishes the preimage, carriers verify + delete + gossip. No recipient identity revealed; the sender can only prematurely delete its own message. Ready to build (docs/23 §11). | 16,19,23 | M | — |
 | S5 | **Inter-node sync MITM hardening** — unpinned peer keys are TOFU-learned over plain HTTP; `SyncPeer.transportKey` pinning exists in config and the admin-UI pinned-key field has shipped (see "Shipped since" below); longer-term per-peer signed authors. | 08,11,15#1/#6a | S (UI) / L | — |
 | S6 | **Sync peer auth: per-member / rotating creds** — only a single shared `sync.token`; revoking one courier re-keys every node. | 16,19 | M | Product decision |
-| S7 | **Transport-encryption join-QR follow-ups** (the join-QR surfaces are done, see "Shipped since" below) — thread the `#k=` host-key through the remaining join-QR surfaces (`InviteControl`, Android host-panel, `NodeLinkControl`) + live re-handshake on a runtime mode flip. | 08,15#5 | S–M | — |
+| S7 | **Transport-encryption follow-up** (every join-QR surface carries `#k=` now, see "Shipped since" below) — live re-handshake on a runtime mode flip. | 08,15#5 | S–M | — |
 | S8 | **Mesh key lifecycle vs kill switch** — decide per profile whether a panic wipe destroys the `mesh.` keyseed (likely `hardened` → yes). | 16 | S | Product decision |
 
 ## 2. Product features
