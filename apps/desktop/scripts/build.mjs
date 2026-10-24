@@ -7,6 +7,7 @@
 //   dist/client/              the web client the node serves (copied from apps/client/dist)
 //   dist/renderer/            the host shell (vite build of src/renderer, when its config exists)
 //   dist/assets/icon.png      the LOAM mark, for the tray
+//   dist/THIRD_PARTY_NOTICES.txt  the licences of the open-source software all of the above bundles
 // The SQLCipher driver is scripts/native.mjs's job (dist/main/node_modules/), and survives a rebuild here.
 //
 // Needs the workspace packages and the web client built first: `pnpm -r build` (or the packages one by one)
@@ -21,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import { assertServerInputsBuilt, bundleServer, repoRoot, SQLITE_DRIVERS } from "../../../scripts/lib/bundle-server.mjs";
+import { writeNotices } from "../../../scripts/third-party-notices.mjs";
 
 const appDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(appDir, "dist");
@@ -97,6 +99,9 @@ if (existsSync(viteConfig)) {
 } else {
   console.warn("! No vite.config.ts yet: skipping the renderer. The host window shows a placeholder page until it is built.");
 }
+
+// 7. The third-party licence notices (scripts/third-party-notices.mjs), packed with the rest of dist/.
+writeNotices("desktop");
 
 const megabytes = (path) => (statSync(path).size / 1024 / 1024).toFixed(2);
 console.log(

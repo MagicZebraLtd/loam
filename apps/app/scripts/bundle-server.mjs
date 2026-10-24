@@ -7,6 +7,7 @@
 //   - inline the workspace packages from their compiled dist/ (run `pnpm -r build` first)
 //   - keep Node builtins external (esbuild does this for `node:` specifiers automatically)
 //   - copy the built web client into the output so the server can serve it offline
+//   - write THIRD_PARTY_NOTICES.txt beside the bundle (scripts/third-party-notices.mjs)
 //
 // Usage: pnpm --filter app bundle:server   (or: node ./scripts/bundle-server.mjs)
 
@@ -15,6 +16,8 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
+
+import { writeNotices } from "../../../scripts/third-party-notices.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = join(here, "..");
@@ -147,6 +150,11 @@ for (const name of templateFiles) {
 // file present in the runtime dir. Catches the exact class of packaging bug (a referenced helper not
 // copied → Node throws MODULE_NOT_FOUND at boot before the server starts). Fails the build loudly.
 assertRelativeRequiresResolve(join(outDir, "main.js"), outDir);
+
+// The licences of the open-source software the APK ships (the host app, this bundle, the SQLite drivers in
+// node_modules/ and the native libraries), as THIRD_PARTY_NOTICES.txt beside loam-server.js. Written after
+// fetch:native has placed the drivers, whose own packages it lists.
+writeNotices("android");
 
 // Both SQLite native prebuilds must be in place. The plain driver is what
 // every `off`-mode boot opens; the SQLCipher one (better-sqlite3-multiple-ciphers) backs every encrypted

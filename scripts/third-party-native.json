@@ -1,0 +1,79 @@
+{
+  "$comment": "Hand-maintained list of the non-npm (native) components LOAM's builds ship, appended to THIRD_PARTY_NOTICES.txt by scripts/third-party-notices.mjs. `builds` names the presets an entry belongs to (cli, desktop, android). `version` is either fixed, or `versionFrom` reads it from an installed package ({ dir, package }, resolved from that workspace dir). `licenseFrom` reads the licence text from an installed package's file; `licenseText` is the text used when that file can't be found, or when there is none to read. Check apps/app/native-prebuilds/*/README.md, docs/04, docs/14 and docs/24 when changing anything here.",
+  "components": [
+    {
+      "name": "Electron",
+      "builds": ["desktop"],
+      "versionFrom": { "dir": "apps/desktop", "package": "electron" },
+      "license": "MIT",
+      "url": "https://github.com/electron/electron",
+      "note": "The desktop app's runtime (Chromium and Node.js). Chromium and the libraries it bundles are under their own licences, listed in the LICENSES.chromium.html file inside every Electron release download (https://github.com/electron/electron/releases); the Windows and Linux installs also carry it in the app's folder, beside Electron's LICENSE.electron.txt.",
+      "licenseFrom": { "dir": "apps/desktop", "package": "electron", "file": "LICENSE" }
+    },
+    {
+      "name": "nodejs-mobile (Node.js for Android)",
+      "builds": ["android"],
+      "version": "Node.js 18.20.4",
+      "license": "MIT",
+      "url": "https://github.com/nodejs-mobile/nodejs-mobile",
+      "note": "The Node.js runtime (libnode) that runs LOAM's server inside the Android app, shipped by @comapeo/nodejs-mobile-react-native (listed above with its own licence). Node.js also bundles externally maintained libraries (V8, libuv, OpenSSL, ICU, zlib, llhttp and others) under their own licences; the complete list and texts for this version are in https://github.com/nodejs/node/blob/v18.20.4/LICENSE.",
+      "licenseText": "Node.js is licensed for use as follows:\n\n\"\"\"\nCopyright Node.js contributors. All rights reserved.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to\ndeal in the Software without restriction, including without limitation the\nrights to use, copy, modify, merge, publish, distribute, sublicense, and/or\nsell copies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS\nIN THE SOFTWARE.\n\"\"\"\n\nThis license applies to parts of Node.js originating from the\nhttps://github.com/joyent/node repository:\n\n\"\"\"\nCopyright Joyent, Inc. and other Node contributors. All rights reserved.\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to\ndeal in the Software without restriction, including without limitation the\nrights to use, copy, modify, merge, publish, distribute, sublicense, and/or\nsell copies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS\nIN THE SOFTWARE.\n\"\"\"\n\nThe Node.js license applies to all parts of Node.js that are not externally\nmaintained libraries."
+    },
+    {
+      "name": "llama.cpp / ggml (inside llama.rn)",
+      "builds": ["android"],
+      "versionFrom": { "dir": "apps/app", "package": "llama.rn" },
+      "versionPrefix": "the copy in llama.rn ",
+      "license": "MIT",
+      "url": "https://github.com/ggml-org/llama.cpp",
+      "note": "The on-device language model engine. llama.rn (listed above with its own licence) compiles it into its native libraries (librnllama*.so).",
+      "licenseFrom": { "dir": "apps/app", "package": "llama.rn", "file": "cpp/LICENSE" },
+      "licenseText": "MIT License\n\nCopyright (c) 2023-2024 The ggml authors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE."
+    },
+    {
+      "name": "better-sqlite3 Android prebuild (digidem/better-sqlite3-nodejs-mobile)",
+      "builds": ["android"],
+      "version": "12.10.0 (android-arm64, Node ABI 108)",
+      "license": "MIT",
+      "url": "https://github.com/digidem/better-sqlite3-nodejs-mobile",
+      "note": "The plain SQLite driver's native binary (better_sqlite3.node), vendored under apps/app/native-prebuilds/better-sqlite3/. It compiles in SQLite (see below). Its JavaScript side is the better-sqlite3 package listed above.",
+      "licenseFrom": { "dir": "apps/app/nodejs-assets/nodejs-project", "package": "better-sqlite3", "file": "LICENSE" },
+      "licenseText": "The MIT License (MIT)\n\nCopyright (c) 2017 Joshua Wise\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE."
+    },
+    {
+      "name": "better-sqlite3-multiple-ciphers",
+      "builds": ["cli", "desktop"],
+      "versionFrom": { "dir": "apps/desktop", "package": "better-sqlite3-multiple-ciphers" },
+      "license": "MIT",
+      "url": "https://github.com/m4heshd/better-sqlite3-multiple-ciphers",
+      "note": "The encrypted SQLite driver. The desktop app ships it in dist/main/node_modules; loamnet installs it from npm as an optional dependency, only for --encrypt. It compiles in SQLite3 Multiple Ciphers and SQLite (see below).",
+      "licenseFrom": { "dir": "apps/desktop", "package": "better-sqlite3-multiple-ciphers", "file": "LICENSE" }
+    },
+    {
+      "name": "better-sqlite3-multiple-ciphers Android prebuild (built by LOAM)",
+      "builds": ["android"],
+      "version": "12.11.1 (android-arm64, Node ABI 108)",
+      "license": "MIT",
+      "url": "https://github.com/m4heshd/better-sqlite3-multiple-ciphers",
+      "note": "The encrypted SQLite driver's native binary, cross-compiled from the unmodified 12.11.1 sources by apps/app/native-prebuilds/multiple-ciphers/build-mc-android-arm64.sh. It compiles in SQLite3 Multiple Ciphers and SQLite (see below). Its JavaScript side is the better-sqlite3-multiple-ciphers package listed above, under the same licence."
+    },
+    {
+      "name": "SQLite3 Multiple Ciphers",
+      "builds": ["cli", "desktop", "android"],
+      "version": "the release bundled with better-sqlite3-multiple-ciphers",
+      "license": "MIT",
+      "url": "https://github.com/utelle/SQLite3MultipleCiphers",
+      "note": "The encryption extension compiled into the better-sqlite3-multiple-ciphers driver.",
+      "licenseText": "MIT License\n\nCopyright (c) 2006-2025 Ulrich Telle\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE."
+    },
+    {
+      "name": "SQLite",
+      "builds": ["cli", "desktop", "android"],
+      "version": "the release bundled with each SQLite driver",
+      "license": "blessing (public domain)",
+      "url": "https://sqlite.org/copyright.html",
+      "note": "The database engine compiled into the better-sqlite3 and better-sqlite3-multiple-ciphers drivers. (Where LOAM uses Node.js's built-in node:sqlite, SQLite comes with Node.js itself.)",
+      "licenseText": "The author disclaims copyright to this source code. In place of\na legal notice, here is a blessing:\n\n   May you do good and not evil.\n   May you find forgiveness for yourself and forgive others.\n   May you share freely, never taking more than you give.\n\nAll of the code and documentation in SQLite has been dedicated to the\npublic domain by the authors of the code. See https://sqlite.org/copyright.html."
+    }
+  ]
+}

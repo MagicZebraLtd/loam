@@ -294,11 +294,17 @@ export function SettingsView({
           <BlockedUsersPanel blockedUserIds={blockedUserIds} onSetBlocked={onSetBlocked} usersById={usersById} />
           {config?.networkConfig.securityProfile === "hardened" ? <DeviceWipePanel onWipeDevice={onWipeDevice} /> : null}
           {/* The privacy policy is served by this node (/privacy, lib/privacy-policy.ts): it reads with no
-              internet and never sends anyone to another website. */}
+              internet and never sends anyone to another website. So are the third-party licence notices: a
+              plain-text file the client build generates (scripts/third-party-notices.mjs), opened in a new tab
+              so the router doesn't take the click. */}
           <p className="screen-footnote privacy-policy-link">
             <a href="/rules">{t("settings.rules")}</a>
             {" · "}
             <a href="/privacy">{t("settings.privacyPolicy")}</a>
+            {" · "}
+            <a href="/third-party-notices.txt" target="_blank" rel="noreferrer">
+              {t("settings.thirdParty")}
+            </a>
           </p>
           {/* No telemetry, so a report is the only way a problem reaches us. Plain text, not links: the
               network may have no internet, and Settings never sends anyone off the node. */}
