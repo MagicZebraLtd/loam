@@ -32,7 +32,7 @@ describe("isHostShellSender", () => {
     const url = hostShellUrl("/Users/sam/100%20off/LOAM.app/Contents/Resources/app.asar/dist/renderer/index.html");
     expect(url).toContain("/100%2520off/");
     expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: url }, url)).toBe(true);
-    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: url.replace("%2520", "%20") }, url)).toBe(false);
+    expect(isHostShellSender({ isWindow: true, isMainFrame: true, frameUrl: url.replaceAll("%2520", "%20") }, url)).toBe(false);
   });
 
   it("refuses the client window, an iframe, and any other page", () => {
