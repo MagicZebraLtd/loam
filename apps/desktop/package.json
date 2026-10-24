@@ -30,7 +30,7 @@
     "better-sqlite3-multiple-ciphers": "^13.0.3",
     "client": "workspace:*",
     "electron": "44.7.2",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.18.0",
     "esbuild": "catalog:",
     "jsdom": "catalog:",
     "preact": "catalog:",
