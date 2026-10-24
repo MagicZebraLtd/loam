@@ -14,9 +14,10 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   computer's keychain, or behind a passphrase, or only in memory. Installers: `LOAM-mac-arm64.dmg`,
   `LOAM-mac-x64.dmg`, `LOAM-win-x64.exe`, `LOAM-linux-x64.AppImage` and `LOAM-linux-x64.deb`, each with a
   checksum and a signed build record on the release. It never checks for updates by itself and sends nothing
-  anywhere. Not yet signed or notarized (Apple enrolment is pending; Windows signing is set up through
-  SignPath Foundation), and not yet run on real Windows and Linux machines. Unreleased: the first release
-  ships with 0.7.0. See `docs/24-electron-desktop.md`.
+  anywhere. The Mac builds are signed by Magic Zebra Limited and notarized by Apple, so they open with no
+  "Open Anyway" step; the Windows installer is not yet signed (SignPath Foundation is the plan), and the
+  Windows and Linux builds have not yet been run on real machines. Unreleased: the first release ships with
+  0.7.0. See `docs/24-electron-desktop.md`.
 - **A website page for the desktop app** (`/desktop`) and the code signing policy (`/code-signing`).
 
 ### Changed

@@ -83,6 +83,9 @@ nsis:
   shortcutName: LOAM
 
 linux:
+  # Linux alone defaults the binary's name to the package name, lowercased: "@loam/desktop" gives "@loamdesktop",
+  # which the AppImage builder refuses (first CI run, 2026-10-17). Mac and Windows name it after productName.
+  executableName: loam
   target:
     - target: AppImage
       arch: [x64]
@@ -97,7 +100,10 @@ linux:
     scanning a QR code: no internet, no accounts.
 
 appImage:
-  artifactName: LOAM-linux-${arch}.${ext}
+  # Spelt out like the deb's: the AppImage target writes ${arch} as "x86_64" (first CI run, 2026-10-17).
+  artifactName: LOAM-linux-x64.${ext}
 
 deb:
-  artifactName: LOAM-linux-${arch}.${ext}
+  # Spelt out: the deb target writes ${arch} as Debian's "amd64", and the workflow, the site and the docs name
+  # the file by the same x64 the other installers use. Only x64 is built (the `linux.target` list above).
+  artifactName: LOAM-linux-x64.${ext}

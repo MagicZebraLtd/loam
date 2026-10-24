@@ -13,7 +13,7 @@
  * Deleting the secret file is the cryptographic wipe a fixed-key Emergency Reset ends with (wipe-phase.ts).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DbEncryptionMode } from "@loam/schema";
@@ -47,8 +47,8 @@ export type SecretBox = {
  *   - Linux depends on the desktop: the backend Electron picked at startup says, and `basic_text` (a fixed,
  *     public key: the secret would be as good as written in the clear) or `unknown` means no.
  * The keychain itself is touched only by {@link fileDeviceSecretStore}, when a persistent or passphrase network
- * needs its secret. An unsigned build has a new code identity with every release, so macOS asks again after
- * each update ("Always Allow" covers that build only) until the app is signed with a stable identity.
+ * needs its secret. The release builds are signed with a stable identity, so one "Always Allow" holds across
+ * updates; an ad-hoc signed local build has a new code identity every build, so macOS asks again after each.
  */
 export function keychainProtects(box: SecretBox, platform: NodeJS.Platform): boolean {
   if (platform === "darwin" || platform === "win32") {
@@ -185,21 +185,11 @@ export function fileDeviceSecretStore(userData: string, box: SecretBox): DeviceS
       if (cached !== undefined) {
         return cached;
       }
-      let stored = readSealed();
-      if (stored === undefined) {
-        const plain = readPlain();
-        if (plain !== undefined && canSeal()) {
-          // Kept in the clear from a time this computer had no keychain; it has one now, so seal it. Best effort:
-          // the plain copy stays if sealing fails, since the network must still open.
-          try {
-            seal(plain);
-            rmSync(plainPath, { force: true });
-          } catch {
-            // Sealing is an improvement, not a requirement, for a secret that already exists.
-          }
-        }
-        stored = plain;
-      }
+      // A plain file is a passphrase network's secret from a session with no keychain. It is deliberately NOT
+      // sealed when a keychain turns up later: on Linux the secret service comes and goes with the desktop
+      // session (a login shell, an SSH session, a different desktop), and a secret sealed by one session is
+      // unreadable in the next, which locked the network. The passphrase is that network's protection.
+      const stored = readSealed() ?? readPlain();
       if (stored !== undefined) {
         cached = stored;
         return stored;

@@ -17,7 +17,7 @@ import { parseArgs } from "./args.js";
 import { createLineBuffer } from "./line-buffer.js";
 import { SUPPORTED_NODE_RANGE, nodeVersionProblem } from "./node-version.js";
 import { createPlainLogPrinter } from "./plain-log.js";
-import { findFreePort, isPortFree } from "./port.js";
+import { PORT_ATTEMPTS, findFreePort, isPortFree } from "./port.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..");
@@ -153,7 +153,8 @@ if (requestedPort !== undefined) {
     port = await findFreePort(preferred, listenHost);
   }
   if (port === undefined) {
-    console.error(`\nPorts ${preferred}–${preferred + 19} are all in use. Pick a free port:  loam --port <n>`);
+    const last = Math.min(preferred + PORT_ATTEMPTS - 1, 65535);
+    console.error(`\nPorts ${preferred}–${last} are all in use. Pick a free port:  loam --port <n>`);
     process.exit(1);
   }
   if (port !== preferred) {

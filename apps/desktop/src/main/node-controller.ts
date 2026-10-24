@@ -887,7 +887,13 @@ export class NodeController {
         this.fail("stop_timeout", STOP_TIMEOUT);
         return { ok: false, error: STOP_TIMEOUT };
       }
-      this.deps.secrets.destroy();
+      try {
+        this.deps.secrets.destroy();
+      } catch (error) {
+        const detail = `The network's key couldn't be destroyed: ${errorDetail(error)}`;
+        this.fail("unknown", detail);
+        return { ok: false, error: detail };
+      }
       this.freshKey = true;
       this.markClientCopyStale();
       this.forgetLog("Starting a new network: the old one was erased, and its log with it.");
@@ -899,7 +905,15 @@ export class NodeController {
         return { ok: false, error: detail };
       }
       const { network: _discarded, ...rest } = this.deps.settings.read();
-      this.deps.settings.write(rest);
+      try {
+        this.deps.settings.write(rest);
+      } catch (error) {
+        // The record would outlive the network it describes: the next launch would mint a key and boot an empty
+        // network under the old name, as if the old one had come back empty.
+        const detail = `The network's record couldn't be removed: ${errorDetail(error)}`;
+        this.fail("unknown", detail);
+        return { ok: false, error: detail };
+      }
       this.setPhase({ phase: "setup" });
       return { ok: true, value: undefined };
     });

@@ -102,7 +102,7 @@ typecheck, then signs; an `attest` job records build provenance for the APK and 
 (`actions/attest-build-provenance`), and a separate least-privilege release job attaches the APK with
 `loam-host.apk.sha256` beside it. Tag builds also run `pnpm --filter
 app aab` and upload the Play bundle as the `loam-host-aab` workflow artifact (never attached to the
-Release). `build-desktop.yml` (the same `v*` tags, or manual) builds the desktop installers on native runners (`LOAM-mac-arm64.dmg`, `LOAM-mac-x64.dmg`, `LOAM-win-x64.exe`, `LOAM-linux-x64.AppImage`, `.deb`), smoke-tests the Linux AppImage, attests them and attaches them with `.sha256` files to the same Release; signing is optional by secrets (Apple `CSC_LINK`/`CSC_KEY_PASSWORD`/`APPLE_API_*` pending enrolment; Windows SignPath). Dependabot (`.github/dependabot.yml`) bumps npm deps and the SHA-pinned `github-actions` weekly (1-day cooldown, matching
+Release). `build-desktop.yml` (the same `v*` tags, or manual) builds the desktop installers on native runners (`LOAM-mac-arm64.dmg`, `LOAM-mac-x64.dmg`, `LOAM-win-x64.exe`, `LOAM-linux-x64.AppImage`, `.deb`), smoke-tests the Linux AppImage, attests them and attaches them with `.sha256` files to the same Release; signing is optional by secrets (Apple `CSC_LINK`/`CSC_KEY_PASSWORD`/`APPLE_API_*`, set 2026-10-22, so macOS builds are signed and notarized; Windows SignPath still pending). Dependabot (`.github/dependabot.yml`) bumps npm deps and the SHA-pinned `github-actions` weekly (1-day cooldown, matching
 `minimumReleaseAge: 1440` in `pnpm-workspace.yaml`, so pnpm won't install a release under a day old).
 
 **Tests**: `packages/*` (schema, display-name, avatar, qr, crypto, tui), `apps/server` (`src/db.test.ts` for the

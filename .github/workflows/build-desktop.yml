@@ -54,6 +54,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # The workspace install also runs the Android app's llama.rn postinstall, which downloads that phone's LLM
+  # libraries and extracts them with GNU tar; on the Windows runner tar reads the `C:\...` archive path as a
+  # remote host and the install fails (first run, 2026-10-17). None of these jobs uses them, so skip it everywhere.
+  RNLLAMA_SKIP_POSTINSTALL: "1"
+
 jobs:
   verify:
     name: Check versions
@@ -90,7 +96,9 @@ jobs:
     name: Build macOS (arm64 + x64)
     needs: verify
     runs-on: macos-15 # Apple Silicon
-    timeout-minutes: 60
+    # Each architecture is notarized on its own, and Apple's notary service has taken close to an hour for
+    # one submission (the team's first, 2026-10-22), so the job gets room for two slow ones plus the build.
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
@@ -160,9 +168,20 @@ jobs:
           unset APPLE_API_KEY_P8
           # Rebuild the native SQLCipher driver for each architecture in turn (it lands in
           # dist/main/node_modules/), then package that architecture before the next overwrites it.
+          # Apple's notary and ticket-delivery services drop connections now and then (stapler codes 65 and
+          # 68: "The network connection was lost"), so one architecture's packaging gets three attempts; a
+          # repeat submission of the same bundle is answered quickly.
           for arch in arm64 x64; do
             pnpm --filter @loam/desktop exec node scripts/native.mjs --arch "$arch"
-            pnpm --filter @loam/desktop exec electron-builder --mac "--$arch" --publish never "${ADHOC[@]}"
+            for attempt in 1 2 3; do
+              if pnpm --filter @loam/desktop exec electron-builder --mac "--$arch" --publish never "${ADHOC[@]}"; then
+                break
+              elif [ "$attempt" = 3 ]; then
+                exit 1
+              fi
+              echo "::warning::Packaging $arch failed (attempt $attempt of 3), retrying in 30 s."
+              sleep 30
+            done
           done
           rm -f "$RUNNER_TEMP"/AuthKey_*.p8
 
@@ -201,7 +220,14 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        # Without build scripts: the SQLCipher driver's install step compiles it with node-gyp, whose Visual
+        # Studio probe crashes on this runner (first run, 2026-10-17), and nothing here needs that build (v13
+        # ships Node-API prebuilds in its tarball, which scripts/native.mjs copies). Electron's own postinstall,
+        # the binary download, runs on its own in the next step.
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download Electron
+        run: pnpm --filter @loam/desktop rebuild electron
 
       - name: Build workspace packages
         run: pnpm run build

@@ -209,11 +209,13 @@ describe("fileDeviceSecretStore", () => {
     expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
   });
 
-  it("seals a plain secret once this computer has a keychain", () => {
+  it("leaves a passphrase network's plain secret alone when a keychain appears, so a later session without one still opens it", () => {
     const secret = fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase", { mayMint: true });
+    // A session with a keychain (a graphical login) reads it...
     expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
-    expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(false);
-    expect(readFileSync(join(dir, DEVICE_SECRET_FILE), "utf8")).not.toContain(secret);
-    expect(fileDeviceSecretStore(dir, fakeBox()).get("passphrase")).toBe(secret);
+    expect(existsSync(join(dir, DEVICE_SECRET_PLAIN_FILE))).toBe(true);
+    expect(existsSync(join(dir, DEVICE_SECRET_FILE))).toBe(false);
+    // ...and so does the next one without (an SSH session, another desktop): sealing it would have locked this.
+    expect(fileDeviceSecretStore(dir, fakeBox(false)).get("passphrase")).toBe(secret);
   });
 });

@@ -115,9 +115,9 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   installed copy), `./LOAM-linux-x64.AppImage --smoke`, each with `LOAM_SMOKE_REQUIRE_ENCRYPTION=1`. Prints one
   JSON line with `"ok":true` and `"driver":"better-sqlite3-multiple-ciphers"`, exits 0, leaves no `loam-smoke-*`
   folder and no keychain prompt.
-- [ ] **Unsigned Gatekeeper path (macOS).** Download the `.dmg` through a browser (so it is quarantined), drag
-  LOAM to Applications, open it: macOS refuses, System Settings, Privacy & Security, **Open Anyway** works once,
-  and the app is not reported as "damaged" on Apple Silicon. Repeat on Intel.
+- [ ] **Signed download (macOS).** Download the `.dmg` through a browser (so it is quarantined), drag LOAM to
+  Applications, open it: it launches with no Gatekeeper refusal and no Open Anyway step. `spctl -a -vv -t install
+  /Applications/LOAM.app` says accepted, source=Notarized Developer ID. Repeat on Intel.
 - [ ] **Windows SmartScreen.** The unsigned installer shows "Windows protected your PC", More info, Run anyway
   installs; with SignPath configured, the publisher reads SignPath Foundation.
 - [ ] **Linux install.** The AppImage runs after `chmod +x`; the `.deb` installs with `sudo apt install` and
@@ -131,8 +131,8 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   shown address is the hotspot's, and a phone on it can join.
 - [ ] **Keychain prompt behaviour.** A **Private** network (ephemeral) and an unencrypted one raise no keychain
   prompt at any point. A **Community** network (persistent) raises it once at setup and once per start as the OS
-  decides; on an unsigned macOS build it asks again after installing a newer build ("Always Allow" covered the old
-  one only). Denying it ends in the Failed screen (`keychain_unavailable` or `db_encryption_locked`), never a
+  decides; on a signed macOS build "Always Allow" still holds after installing a newer build (only an ad-hoc
+  signed local build asks again). Denying it ends in the Failed screen (`keychain_unavailable` or `db_encryption_locked`), never a
   silent plaintext start. Check `device-secret.enc` exists and `device-secret.key` does not.
 - [ ] **No keychain (Linux without a secret service).** Setup does not offer the keychain mode, says why, and
   defaults Community to a passphrase; a passphrase network starts, restarts through the Unlock screen, and
@@ -156,6 +156,9 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   didn't finish" (or restarts to finish a journaled one), never a Running screen over a node answering 503.
 - [ ] **Start a new network** from Settings erases the old network (devices purge), the keychain item or secret
   file, and the client window's stored copy, and returns to Setup.
+- [ ] **Windows reserved ports.** On a PC with Hyper-V or WSL, `netsh interface ipv4 show excludedportrange
+  protocol=tcp` lists blocks the system denies to everyone (EACCES, not "in use"); if one covers 3000, the app
+  still starts, on the first port past the block, and the TUI (`loamnet`) does the same.
 - [ ] **Windows durable writes.** The same crash and power-cut check as docs/25 O3, with the packaged app.
 
 ## Reporting
