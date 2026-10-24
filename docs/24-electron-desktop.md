@@ -52,7 +52,7 @@ Three kinds of process, one contract.
 | **Web client** | copied from `apps/client/dist` → `dist/client/` | What the node serves to joiners and to the host's own window. |
 
 Preloads are `.cts` and compiled to CommonJS `.cjs`: a sandboxed preload cannot be an ES module, and `electron`
-is the only module it may require. Electron 44.7.2 is pinned exactly (a bump means a native re-check); its Node
+is the only module it may require. Electron 44.9.1 is pinned exactly (a bump means a native re-check); its Node
 is 24.21 and its Chromium 152, so the main process is built for `node24` and the renderer for `chrome120`.
 
 ### The IPC contract
@@ -146,7 +146,7 @@ The mirror of the Android launcher (`apps/app/src/lib/db-encryption.ts`). A rand
 | `passphrase` (With a passphrase) | `SHA-256(passphrase + ":" + deviceSecret)`, hex | SQLCipher |
 | `persistent` (Kept in this computer's keychain) | the device secret itself | SQLCipher |
 
-The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2),
+The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2 and 44.9.1),
 so an unencrypted network has no native dependency, as with the CLI. Presets pick the default: **Private**
 is `ephemeral`; **Community** and **Choose every setting myself** are `persistent`, or `passphrase` when this
 computer has no keychain.
