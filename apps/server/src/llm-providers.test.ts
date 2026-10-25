@@ -575,7 +575,7 @@ describe("the assistant's history across a change of destination", () => {
     const { cookie } = await adminSession(app);
 
     // An unchanged assistant keeps everything it was told before this record existed.
-    expect(destinationRecord(app)).toEqual({ key: `ollama:127.0.0.1`, since: 0 });
+    expect(destinationRecord(app)).toEqual({ key: `ollama:127.0.0.1:${new URL(await before.url).port}`, since: 0 });
     await askBotFor(app, cookie, "first, said locally", 1);
     await askBotFor(app, cookie, "second, said locally", 2);
     expect(before.seen.at(-1)?.body?.messages).toHaveLength(3);
@@ -588,7 +588,7 @@ describe("the assistant's history across a change of destination", () => {
     });
     expect(switched.statusCode).toBe(200);
     const record = destinationRecord(app);
-    expect(record?.key).toBe("openai:127.0.0.1");
+    expect(record?.key).toMatch(/^openai:127\.0\.0\.1:\d+$/);
     expect(record?.since).toBeGreaterThan(0);
 
     await askBotFor(app, cookie, "third, after the switch", 3);
@@ -637,7 +637,7 @@ describe("the assistant's first destination record", () => {
   it("keeps an unchanged local assistant's history (since 0) but starts an online service's at the moment it is chosen", async () => {
     // A node upgraded with a local assistant on: its memory is kept.
     const local = await makeApp({ llm: { ollama: { enabled: true, baseUrl: "http://127.0.0.1:11434", model: "m" } } });
-    expect(record(local)).toEqual({ key: "ollama:127.0.0.1", since: 0 });
+    expect(record(local)).toEqual({ key: "ollama:127.0.0.1:11434", since: 0 });
 
     // A node upgraded with the assistant OFF (no record), whose members wrote to a local model under the old
     // version: the day the host picks an online service, those turns must not be uploaded.
@@ -653,7 +653,7 @@ describe("the assistant's first destination record", () => {
     });
     expect(saved.statusCode).toBe(200);
     const online = record(switched);
-    expect(online?.key).toBe("openai:openrouter.ai");
+    expect(online?.key).toBe("openai:openrouter.ai/api/v1");
     expect(online?.since).toBeGreaterThanOrEqual(before);
   });
 });

@@ -516,7 +516,8 @@ Node 18 reached end-of-life on 30 April 2025.
 - **What limits it:** the attacker must be on a network that reaches the phone (normally the local one);
   LOAM's own request handling (host allowlist, body caps, rate limits) runs after Node's parser, so it
   does not shield the parser itself.
-- **The plan (owner's decision):** track the @comapeo fork for a Node 20 or 22 build and move to it when it
+- **The plan (owner's decision):** track the @comapeo fork for a build on a supported Node line (22 or later; Node 20 reached end of life
+  in March 2026) and move to it when it
   ships; after any bump, re-verify the 16 KB page-size check ([docs/30](30-play-store.md) "Verified fine")
   and rebuild the vendored SQLite prebuilds for the new ABI (they are built for ABI 108). Tracked as
   **O13** in [docs/25](25-backlog.md) §0.
@@ -689,7 +690,7 @@ support it); avoid Android-only Easy Connect for v1.
   `onShouldStartLoadWithRequest`), so a LAN browser never gets it; LAN joiners of an ephemeral-key node
   rescan the QR after each host restart (docs/08). The client also purges its cached data when its
   server-confirmed identity changes, so a missed wipe doesn't leave old messages on screen.
-- **No copy of messages outside the encrypted database.** On every encrypted network (any DB mode but `off`,
+- **No persistent copy of messages outside the encrypted database.** On every encrypted network (any DB mode but `off`,
   read from the persisted choice when the launcher reports `ready`; the WebView waits for it) the injection
   also sets `window.__loamHostNoLocalCache`, as the desktop host's preload does (docs/24 "Storage
   partition"). The web client (`lib/local-store.ts`) then keeps no IndexedDB: what the host's own screen

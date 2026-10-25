@@ -104,13 +104,15 @@ assistant's own DM, whichever backend answers.
   device (`loam.assistantAck.<host>` in localStorage, `lib/assistant-ack.ts`), so a switch to a different
   online service asks again, and it is cleared with the cached content by a wipe or identity change.
 - **History never crosses a destination change.** The server keeps `{ key, since }` in the config table
-  under `assistantDestination` (`key` = provider plus hostname, or `onDevice`). `syncAssistantDestination`
+  under `assistantDestination` (`key` = provider plus the endpoint: hostname, port and path, never credentials
+  or query, so two tenants on one host are two recipients; or `onDevice`). `syncAssistantDestination`
   runs from `ensureBotUser` (boot and every config save) and before each reply: a key that differs from the
-  stored one records `since = now` (logged without the address's path), so `llmMessagesForUser` sends only
+  stored one records `since = now` (logged as provider and hostname only), so `llmMessagesForUser` sends only
   DM turns written at or after `since` (still at most `MAX_LLM_CONTEXT_MESSAGES`, system prompt kept, and
   always the message being answered). Switching a local model to an online service therefore uploads
   none of the conversation members had while it was local. The first record (an upgrade, a fresh node)
-  starts at 0, so an unchanged assistant keeps its memory; while the assistant is off nothing is touched,
+  starts at 0, so an unchanged local assistant keeps its memory, except that a first record for an ONLINE
+  destination starts now (a node upgraded with the assistant off may hold turns written to a local model); while the assistant is off nothing is touched,
   so turning the same one off and on again keeps it too; an unreadable record counts as a change.
   `wipeAll` deletes the record (it says when the host changed the assistant), and an encrypted reset's fresh
   database starts without one.

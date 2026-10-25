@@ -266,6 +266,9 @@ export function collectPackages({ roots, exclude = [], scanDirs = [] }) {
 
   for (const scanDir of scanDirs) {
     if (!existsSync(scanDir)) {
+      // The Android preset lists the vendored SQLite drivers only from here: a build that ran before
+      // `fetch:native` would otherwise write a file whose header claims them.
+      missing.add(`(folder not found) ${scanDir}`);
       continue;
     }
     const entries = readdirSync(scanDir).sort();

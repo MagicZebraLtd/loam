@@ -143,7 +143,7 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "it and warns that messages will leave the network, and the assistant's chat names it too and asks " +
             "you to confirm once on each device before your first message goes out. Nothing else goes there: not " +
             "your name, not your other messages, and nothing anyone else writes. A Private network only accepts " +
-            "an assistant on the host or the local network.",
+            "an assistant whose address is on the host or the local network, judged by the address as written.",
           "**Mesh delivery** (experimental): messages to your mesh contacts may be carried by other LOAM " +
             "networks, sealed so the networks carrying them can't read them.",
         ],

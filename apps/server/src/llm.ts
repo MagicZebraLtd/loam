@@ -106,6 +106,23 @@ function backendHostname(baseUrl: string): string {
 }
 
 /**
+ * The endpoint a backend address names, as the history cut identifies a recipient (docs/06): hostname, port
+ * when given, and path without a trailing slash (`openrouter.ai/api/v1`, `127.0.0.1:11434`), never the
+ * credentials or query an address might carry. Two tenants on one host (`/tenant-a/v1`, `/tenant-b/v1`) are
+ * two recipients; the same service written with or without a trailing slash is one.
+ */
+function backendEndpoint(baseUrl: string): string {
+  const host = backendHostname(baseUrl);
+  try {
+    const url = new URL(baseUrl);
+    const path = url.pathname.replace(/\/+$/, "");
+    return `${host}${url.port ? `:${url.port}` : ""}${path}`;
+  } catch {
+    return host;
+  }
+}
+
+/**
  * Where a network-backed assistant at `baseUrl` answers from, as members are told it (docs/06): this
  * computer (a loopback address), another computer on the local network (`isLocalNetworkUrl`), or an online
  * service named by its hostname.
@@ -285,7 +302,7 @@ export function createLlmLayer(rt: Runtime) {
       return "onDevice";
     }
     const baseUrl = activeBackendUrl(rt.appConfig.llm);
-    return baseUrl === undefined ? undefined : `${provider}:${backendHostname(baseUrl)}`;
+    return baseUrl === undefined ? undefined : `${provider}:${backendEndpoint(baseUrl)}`;
   }
 
   /**
@@ -318,8 +335,8 @@ export function createLlmLayer(rt: Runtime) {
     const next: AssistantDestinationRecord = { key, since: firstRecord && !online ? 0 : Date.now() };
     rt.store.setConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY, JSON.stringify(next));
     if (next.since !== 0) {
-      // The key is provider + hostname: never the address's path, query or credentials.
-      rt.log.info(`The assistant now answers from ${key}; earlier conversations will not be sent to it`);
+      // Logged as provider + hostname only: the key itself carries the endpoint's path.
+      rt.log.info(`The assistant now answers from ${key.split("/", 1)[0]}; earlier conversations will not be sent to it`);
     }
     return next.since;
   }
