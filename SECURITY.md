@@ -135,7 +135,8 @@ trade-offs, not open bugs:
   the service in the assistant's own chat, which each device acknowledges once before its first message is
   sent. When the host changes where the assistant runs, the earlier history is not sent to the new
   destination: the conversation's history starts again from that change. A `hardened` network only
-  accepts a service, or an Ollama address, on the host or the local network. The service's API key is
+  accepts a service, or an Ollama address, on the host or the local network, judged by the address as
+  written (loopback, private and link-local addresses, `.local` and dotless names), not by resolving it. The service's API key is
   never returned by the API, but it is stored with the node's configuration, which is encrypted only when the database is (and is
   plain text if the host writes it into `config.json` by hand).
 

@@ -309,7 +309,13 @@ export function createLlmLayer(rt: Runtime) {
     if (stored?.key === key) {
       return stored.since;
     }
-    const next: AssistantDestinationRecord = { key, since: raw === undefined ? 0 : Date.now() };
+    // A first record keeps an unchanged local assistant's memory (`since: 0`: an upgrade, or a fresh node). An
+    // ONLINE destination's first record starts now instead: a node upgraded with its assistant off, whose
+    // members wrote to a local model under the old version, must not upload those turns the day the host
+    // picks an online service.
+    const firstRecord = raw === undefined;
+    const online = assistantDestination()?.kind === "online";
+    const next: AssistantDestinationRecord = { key, since: firstRecord && !online ? 0 : Date.now() };
     rt.store.setConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY, JSON.stringify(next));
     if (next.since !== 0) {
       // The key is provider + hostname: never the address's path, query or credentials.
@@ -344,7 +350,9 @@ export function createLlmLayer(rt: Runtime) {
 
     if (refusal && activeLlmProvider(rt.appConfig.llm) !== "off") {
       // A save can't persist this (applyConfigUpdate refuses it); a hand-edited config.json can.
-      rt.log.warn(`LLM assistant disabled: ${refusal.toLowerCase()} (${activeBackendUrl(rt.appConfig.llm)})`);
+      // The hostname only: an address may carry a path or credentials, and the log outlives the setting.
+      const url = activeBackendUrl(rt.appConfig.llm);
+      rt.log.warn(`LLM assistant disabled: ${refusal.toLowerCase()} (${url === undefined ? "no address" : backendHostname(url)})`);
     }
 
     if (!llmEnabled()) {

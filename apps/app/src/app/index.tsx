@@ -203,9 +203,12 @@ let nodeNotice: BootNotice | undefined;
 // The DB-encryption mode the running node booted under, read once per `ready` (the persisted choice the
 // launcher's key request was just answered with; a later picker change only applies on restart, so this
 // keeps the boot's value). `nodeDbModeRead` numbers the reads so a late answer from an earlier boot can't
-// overwrite a newer one. Module scope for the same remount reasoning as `nodeHostToken`.
+// overwrite a newer one, and `nodeDbModePending` is the read in flight, so a screen mounted while it is
+// still running can wait for the same answer (no second `ready` would arrive to start another read, and the
+// WebView waits for the mode). Module scope for the same remount reasoning as `nodeHostToken`.
 let nodeDbMode: DbEncryptionModeOrError | undefined;
 let nodeDbModeRead = 0;
+let nodeDbModePending: Promise<DbEncryptionModeOrError> | undefined;
 
 // The setup screens run once per process, before the runtime starts (it can't restart, so a remount after
 // that goes straight to the host screen). `afterSetup` is what setup asked the host screen to open first.
@@ -487,14 +490,17 @@ function HostScreen() {
         const read = ++nodeDbModeRead;
         nodeDbMode = undefined;
         setBootDbMode(undefined);
-        void getDbEncryptionMode()
+        const pending = getDbEncryptionMode()
           .catch(() => DB_ENCRYPTION_MODE_READ_ERROR)
           .then((mode) => {
             if (read === nodeDbModeRead) {
               nodeDbMode = mode;
+              nodeDbModePending = undefined;
               setBootDbMode(mode);
             }
+            return mode;
           });
+        nodeDbModePending = pending;
         // Clear any leftover start-fresh confirmation state from a PRIOR `db_encryption_unreadable`
         // recovery: that fatal block only exists in the non-ready view (see DB_UNREADABLE_CODE's comment),
         // so once `ready` fires the operator can no longer see it, and a stale confirmation message must
@@ -752,6 +758,33 @@ function HostScreen() {
       clearTimeout(timeoutId);
     };
   }, [status, bootstrapAttempt]);
+
+  // A screen mounted after `ready` (a remount) starts from the module's answer: already read, adopt it; still
+  // in flight, wait for that read rather than for a second `ready` that never comes. Guarded by the read
+  // counter like the `ready` handler, so an answer from an earlier boot is never adopted.
+  useEffect(() => {
+    if (bootDbMode !== undefined) {
+      return;
+    }
+    if (nodeDbMode !== undefined) {
+      setBootDbMode(nodeDbMode);
+      return;
+    }
+    const pending = nodeDbModePending;
+    if (!pending) {
+      return;
+    }
+    const read = nodeDbModeRead;
+    let live = true;
+    void pending.then((mode) => {
+      if (live && read === nodeDbModeRead) {
+        setBootDbMode(mode);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [bootDbMode]);
 
   // On an encrypted network the WebView keeps no HTTP cache (`cacheEnabled={false}` below); drop the one
   // an older version of the app may have written, once per WebView mount. `clearCache(true)` is

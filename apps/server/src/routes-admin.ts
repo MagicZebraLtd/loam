@@ -1,7 +1,7 @@
-import { randomBytes } from "node:crypto";
 // Admin: claim, config read/patch, kill switch, and the unauthenticated panic token, registered over the
 // shared AppContext.
 import { AdminClaimRequestSchema, KillSwitchRequestSchema, LlmModelsRequestSchema, type LoamConfig, type LoamConfigUpdate, LoamConfigUpdateSchema, PanicRequestSchema, UserSchema } from "@loam/schema";
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { AppContext } from "./app-context.js";
@@ -10,15 +10,7 @@ import { llmProviderRefusal } from "./llm.js";
 import { errorBody } from "./errors.js";
 import { makeAdminSetupCode } from "./identity.js";
 import type { KillSwitchResult } from "./kill-switch.js";
-import { hashSecret, timingSafeEqualStrings, verifySecret } from "./secrets.js";
-
-/** The hash a panic attempt is checked against on a node with no token, so the check costs the same (see the route). */
-let unarmedPanicHashValue: string | undefined;
-function unarmedPanicHash(): string {
-  unarmedPanicHashValue ??= hashSecret(randomBytes(32).toString("hex"));
-  return unarmedPanicHashValue;
-}
-
+import { hashSecret, timingSafeEqualStrings, verifySecret, verifySecretAsync } from "./secrets.js";
 
 /**
  * The 503 body for an Emergency Reset that could not finish. With the wipe journal on disk the next boot
@@ -74,6 +66,10 @@ function writeThroughLauncherOwnedOnDevice(ctx: AppContext, previous: LoamConfig
 
 /** Register the admin routes: claim, config get/patch, kill switch, panic token. */
 export function registerAdminRoutes(ctx: AppContext): void {
+  // The hash a panic attempt is checked against on a node with no token, so the check costs the same as a real
+  // one (see the route). Made once here, not lazily: a first probe that paid for two scrypts would stand out.
+  const unarmedPanicHash = hashSecret(randomBytes(32).toString("hex"));
+
   ctx.server.post(
     "/api/admin/claim",
     // `allowList: () => false` so internal tunnel re-dispatches count too: route configs otherwise inherit
@@ -260,11 +256,12 @@ export function registerAdminRoutes(ctx: AppContext): void {
     }
 
     // Spend the scrypt on every well-formed attempt, armed or not, rate-limited or not, against a stand-in
-    // hash when there is no token: a configured node's `verifySecret` takes tens of milliseconds, and
-    // answering an unarmed node's 404 faster than a wrong token's would tell the prober which it is.
+    // hash when there is no token: a configured node's check takes tens of milliseconds, and answering an
+    // unarmed node's 404 faster than a wrong token's would tell the prober which it is. Off the event loop
+    // (`verifySecretAsync`), so a prober can't stall the node by paying for those milliseconds on every request.
     const armed = ctx.appConfig.killSwitch.enabled && !!ctx.appConfig.killSwitch.panicToken;
     const rateLimited = armed && ctx.attemptRateLimited(ctx.panicAttempts, request.ip);
-    const matches = verifySecret(body.data.token, armed ? (ctx.appConfig.killSwitch.panicToken as string) : unarmedPanicHash());
+    const matches = await verifySecretAsync(body.data.token, armed ? (ctx.appConfig.killSwitch.panicToken as string) : unarmedPanicHash);
 
     if (!armed || rateLimited || !matches) {
       return reply.code(404).send(errorBody("Not found"));

@@ -18,7 +18,9 @@ The Google Play bundle is `versionCode` 13.
   loads. Pictures and files are also served with `Cache-Control: no-store` whenever the database is
   encrypted, so neither host window can cache them on disk. Phones that join a network are unaffected.
   Not yet verified on a physical phone (docs/21).
-- **A hardened (Private) network now refuses an Ollama address off the local network**, as it already
+- **A hardened (Private) network now refuses an Ollama address off the local network** (judged by the address
+  as written, as for a chat service: loopback, private and link-local addresses, `.local` and dotless names
+  count as local), as it already
   refused an online chat service: the rule covers both backends when a setting is saved, at boot from a
   hand-edited `config.json`, and for the admin screens' Test connection. Requests from a hardened network to
   its assistant never follow an HTTP redirect either, so a local address can't hand the conversation to a
@@ -42,8 +44,8 @@ The Google Play bundle is `versionCode` 13.
   there; the operators' guide said otherwise.
 - **The Android host no longer writes a line per request to the device log.** The embedded server's output
   goes to logcat, which sits outside the encrypted database and can be read with `adb` or from a bug report,
-  and each request line carried a joiner's address and a timestamp. Warnings and errors are still logged;
-  they carry no message text, names or keys. The host app also stops logging the page URL on a load error.
+  and each request line carried a joiner's address and a timestamp. LOAM's own warnings and errors are still
+  logged; they carry no message text, names or keys. The host app also stops logging the page URL on a load error.
 - **Private channels get an opaque id** (`chan_<hex>`) instead of one made from their name. A channel's id
   lands where a reset can't reach (joiners' browser history, the host window's remembered last conversation,
   the plaintext paths of a client that skipped the QR code), so a name-derived id told anyone with that

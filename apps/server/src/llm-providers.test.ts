@@ -628,6 +628,36 @@ describe("the assistant's history across a change of destination", () => {
   });
 });
 
+describe("the assistant's first destination record", () => {
+  function record(app: LoamApp): { key: string; since: number } | undefined {
+    const raw = app.store.getConfigValue("assistantDestination");
+    return raw === undefined ? undefined : (JSON.parse(raw) as { key: string; since: number });
+  }
+
+  it("keeps an unchanged local assistant's history (since 0) but starts an online service's at the moment it is chosen", async () => {
+    // A node upgraded with a local assistant on: its memory is kept.
+    const local = await makeApp({ llm: { ollama: { enabled: true, baseUrl: "http://127.0.0.1:11434", model: "m" } } });
+    expect(record(local)).toEqual({ key: "ollama:127.0.0.1", since: 0 });
+
+    // A node upgraded with the assistant OFF (no record), whose members wrote to a local model under the old
+    // version: the day the host picks an online service, those turns must not be uploaded.
+    const before = Date.now();
+    const switched = await makeApp();
+    expect(record(switched)).toBeUndefined();
+    const { cookie } = await adminSession(switched);
+    const saved = await switched.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie },
+      payload: { llm: { openai: { enabled: true, baseUrl: "https://openrouter.ai/api/v1", model: "m" } } },
+    });
+    expect(saved.statusCode).toBe(200);
+    const online = record(switched);
+    expect(online?.key).toBe("openai:openrouter.ai");
+    expect(online?.since).toBeGreaterThanOrEqual(before);
+  });
+});
+
 describe("an older wipe-journal snapshot", () => {
   it("gets the chat service block filled in (off) rather than failing validation", () => {
     const { llm, ...rest } = defaultLoamConfig();

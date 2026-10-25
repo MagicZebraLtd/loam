@@ -706,7 +706,7 @@ nodejs-mobile copies the embedded server's stdout and stderr to logcat, and logc
 database: `adb logcat`, a bug report or some backup tools can read it after the fact. So the Android entry
 (`embedded-main.ts`, `startAndroidServer`) starts the server with `requestLogging: false`: no line per request,
 because each one carries the joiner's address, port and a timestamp, an activity record for the whole network.
-Warnings and errors still go to logcat, and they carry no message text, names or keys (the request serializer
+LOAM's own warnings and errors still go to logcat (Fastify's per-request error lines are muted with the request log), and they carry no message text, names or keys (the request serializer
 drops query strings, the tunnel hides paths, and the assistant's error lines are scrubbed of key-shaped text).
 The React Native side logs no URLs either (`onHttpError` logs the status only, since the page URL names a
 conversation). The desktop app keeps its log in memory (docs/24) and the `loamnet` terminal app logs a line per

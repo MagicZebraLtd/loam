@@ -86,6 +86,7 @@ function localCacheRefused(): boolean {
   return typeof window !== "undefined" && window.__loamHostNoLocalCache === true;
 }
 
+/** Whether this browser has IndexedDB at all, refused or not (what a purge or a wipe can act on). */
 function indexedDbPresent(): boolean {
   return typeof indexedDB !== "undefined";
 }
