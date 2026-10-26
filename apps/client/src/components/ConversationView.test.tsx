@@ -409,3 +409,76 @@ describe("the live region for arriving messages", () => {
     }
   });
 });
+
+describe("the assistant's DM says where its answers come from", () => {
+  const bot: User = { id: "llm.ollama.gemma4", displayName: "Assistant", type: "bot", isAdmin: false, createdAt: 1, ephemeral: false };
+  const BOT_DM: Conversation = { kind: "dm", id: bot.id };
+  const withBot = {
+    users: [me, peer, bot],
+    usersById: new Map([
+      [me.id, me],
+      [peer.id, peer],
+      [bot.id, bot],
+    ]),
+  };
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("asks once per online service before anything can be written, then keeps one compact line", async () => {
+    const host = mount(view({ ...withBot, conversation: BOT_DM, assistantDestination: { kind: "online", host: "openrouter.ai" } }));
+    expect(host.querySelector(".conversation .screen-subtitle")?.textContent).toBe("Answers come from openrouter.ai, an online service");
+    const banner = host.querySelector(".conversation .assistant-banner")!;
+    expect(banner.textContent).toContain("go to openrouter.ai, an online service, under its own privacy policy");
+    expect(composerText(host)).toBeNull();
+    expect(host.querySelector(".conversation .composer-disabled-text")?.textContent).toBe(
+      "Read the notice above before writing to the assistant.",
+    );
+
+    banner.querySelector<HTMLButtonElement>("button")!.click();
+    await tick();
+
+    expect(localStorage.getItem("loam.assistantAck.openrouter.ai")).toBe("1");
+    expect(composerText(host)).not.toBeNull();
+    const notice = host.querySelector(".conversation .assistant-banner")!;
+    expect(notice.textContent).toBe("Answers come from openrouter.ai, an online service. Messages here leave this network.");
+    expect(notice.querySelector("button")).toBeNull();
+
+    // Another online service is a different recipient: the full notice asks again.
+    rerender(host, view({ ...withBot, conversation: BOT_DM, assistantDestination: { kind: "online", host: "api.openai.com" } }));
+    await tick();
+    expect(host.querySelector(".conversation .assistant-banner button")).not.toBeNull();
+    expect(composerText(host)).toBeNull();
+  });
+
+  it("remembers an acknowledgement made earlier on this device", () => {
+    localStorage.setItem("loam.assistantAck.openrouter.ai", "1");
+    const host = mount(view({ ...withBot, conversation: BOT_DM, assistantDestination: { kind: "online", host: "openrouter.ai" } }));
+    expect(host.querySelector(".conversation .assistant-banner button")).toBeNull();
+    expect(composerText(host)).not.toBeNull();
+  });
+
+  it("names a local destination in the subtitle, with no banner and an open composer", () => {
+    const cases = [
+      [{ kind: "host" }, "Runs on the host's computer"],
+      [{ kind: "lan" }, "Runs on a computer on this local network"],
+      [{ kind: "onDevice" }, "Runs on the host's phone"],
+    ] as const;
+    for (const [assistantDestination, text] of cases) {
+      const host = mount(view({ ...withBot, conversation: BOT_DM, assistantDestination }));
+      expect(host.querySelector(".conversation .screen-subtitle")?.textContent).toBe(text);
+      expect(host.querySelector(".conversation .assistant-banner")).toBeNull();
+      expect(composerText(host)).not.toBeNull();
+    }
+  });
+
+  it("leaves a DM with a person as it was", () => {
+    const host = mount(
+      view({ ...withBot, conversation: DM, onlineUserIds: new Set([peer.id]), assistantDestination: { kind: "online", host: "openrouter.ai" } }),
+    );
+    expect(host.querySelector(".conversation .screen-subtitle")?.textContent).toBe("Online");
+    expect(host.querySelector(".conversation .assistant-banner")).toBeNull();
+    expect(composerText(host)).not.toBeNull();
+  });
+});

@@ -57,8 +57,10 @@ function isInternalDispatchForLogging(request: { headers?: Record<string, unknow
  * real path + query the tunnel exists to hide (`/api/search?q=…`), and server logs outlive an Emergency
  * Reset. The OUTER `POST /api/transport/tunnel` is still logged, which is all the wire shows too.
  */
-export function loamLogController(): LogController {
-  return new LogController({ disableRequestLogging: (request) => isInternalDispatchForLogging(request) });
+export function loamLogController(requestLogging = true): LogController {
+  // With request logging off (`AppOptions.requestLogging`, the Android host), no request is logged at all;
+  // otherwise only an internal tunnel re-dispatch is skipped (its URL is the path the tunnel hides).
+  return new LogController({ disableRequestLogging: (request) => !requestLogging || isInternalDispatchForLogging(request) });
 }
 
 /**

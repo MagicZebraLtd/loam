@@ -199,6 +199,9 @@ pictures and files unencrypted, and still lets in a device that typed the addres
 **Required** encrypts pictures and files too, refuses those devices, and hides which pages anyone asks
 for. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
 released app) runs unencrypted, and it shows everyone a red warning ([docs/08](08-transport-security.md)).
+Neither setting protects against someone on the Wi-Fi who can alter traffic while a phone loads LOAM: the
+page itself arrives over plain HTTP, so they could hand that phone a changed copy (docs/08, threat 4). On an
+open hotspot with strangers, that is the limit to explain to people who need to know it.
 
 **The other settings:**
 
@@ -226,7 +229,7 @@ confirm. Encryption applies to a new database, so switching erases what's on the
 | **Remove a message** | admin, moderator | Readers see "removed by a moderator" (with an optional reason); it can't be edited, replied to or reacted to afterwards. |
 | **Moderator / Greeter role** | admin | Moderation powers, or letting people in. |
 | **Make admin** | admin | Promotes someone to admin. There's no demote: see the end of this guide. |
-| **Delete a message** | admin (any), author (their own, if nobody else has replied) | Removes it everywhere; a linked network can't bring it back. |
+| **Delete a message** | admin (any), author (their own, if nobody else has replied) | Removes it here, and a linked network won't copy it back. A copy a linked network already pulled stays there: deletions aren't sent to it. |
 
 Admins can't be moderated, and nobody can moderate themselves. Roles never travel to a linked network: a
 moderator there is a stranger here.

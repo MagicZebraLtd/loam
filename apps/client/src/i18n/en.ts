@@ -288,6 +288,15 @@ export const en = {
   "admin.llmOnDeviceModel": "On-device model name",
   "admin.llmOnDeviceNote": "Runs a small model on the phone itself. Works only on the Android host with a model file added in the host app's Assistant screen (never shipped); does nothing elsewhere.",
   "error.llm_cloud_not_allowed": "A hardened network can't use an online chat service. Pick a service on this computer or the local network, or change the security profile.",
+  // The assistant's DM: where its answers come from (NetworkConfig.assistantDestination, docs/06).
+  "assistant.runsOnDevice": "Runs on the host's phone",
+  "assistant.runsOnHost": "Runs on the host's computer",
+  "assistant.runsOnLan": "Runs on a computer on this local network",
+  "assistant.runsOnline": "Answers come from {host}, an online service",
+  "assistant.onlineBanner": "Messages you write here, and this chat's recent history, go to {host}, an online service, under its own privacy policy. The host of this network chose it. Nothing else of yours goes there.",
+  "assistant.onlineAck": "I understand",
+  "assistant.composerUntilAck": "Read the notice above before writing to the assistant.",
+  "assistant.onlineNotice": "Answers come from {host}, an online service. Messages here leave this network.",
   // Admin view — retention panel.
   "admin.retentionHeading": "Message retention",
   "admin.retentionLabel": "Delete messages after (minutes; blank = keep forever)",
@@ -714,6 +723,7 @@ export const en = {
   "settings.blockedNote": "People you block can't send you direct messages, and their channel messages are hidden from you. LOAM doesn't notify them.",
   "settings.blockedEmpty": "You haven't blocked anyone.",
   "settings.privacyPolicy": "Privacy policy",
+  "settings.thirdParty": "Third-party software",
   "settings.reportProblems": "LOAM has no analytics or crash reporting, so we only hear about problems you tell us about. To report one, to ask for a feature, or to find out more about LOAM, visit our website or email us:",
   "welcome.title": "Welcome to {network}",
   "welcome.nameLabel": "Your name on this network",

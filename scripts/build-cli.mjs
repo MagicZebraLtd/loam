@@ -9,6 +9,7 @@
 //   - the entry (cli/cli-entry.ts) re-exports startEmbeddedServer + the @loam/qr helpers + the terminal UI
 //     as a library, so bin/loam.js controls env setup and the join-QR print before booting.
 //   - output lands in cli/ (the publishable package), not nodejs-assets/.
+//   - dist/THIRD_PARTY_NOTICES.txt lists the bundled open-source packages (scripts/third-party-notices.mjs).
 //
 // Usage: node scripts/build-cli.mjs   (or: pnpm build:cli)
 
@@ -16,6 +17,7 @@ import { cpSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { assertServerInputsBuilt, bundleServer, repoRoot } from "./lib/bundle-server.mjs";
+import { writeNotices } from "./third-party-notices.mjs";
 
 const entry = join(repoRoot, "cli/cli-entry.ts");
 const clientDist = join(repoRoot, "apps/client/dist");
@@ -33,6 +35,9 @@ mkdirSync(dirname(outFile), { recursive: true });
 const result = await bundleServer({ entry, outFile });
 
 cpSync(clientDist, clientOut, { recursive: true });
+
+// The licences of everything the bundle inlines travel with it (dist/ is in the package's `files`).
+writeNotices("cli");
 
 const bytes = statSync(outFile).size;
 const inputs = Object.keys(result.metafile.inputs).length;

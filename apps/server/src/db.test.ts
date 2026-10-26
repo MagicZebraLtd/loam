@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { Channel, Message, Report, User } from "@loam/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { assertNotPlaintextSqliteFile, openStore, type LoamStore } from "./db.js";
+import { ASSISTANT_DESTINATION_CONFIG_KEY, assertNotPlaintextSqliteFile, openStore, type LoamStore } from "./db.js";
 
 function makeUser(id: string, overrides: Partial<User> = {}): User {
   return {
@@ -202,11 +202,14 @@ describe("openStore", () => {
     store.insertMessage(makeChannelPost("msg_1"));
     store.putSession("token", "user.abc");
     store.setConfigValue("security.profile", "standard");
+    store.setConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY, JSON.stringify({ key: "openai:openrouter.ai", since: 1 }));
 
     store.wipeAll();
 
     expect(store.isEmpty()).toBe(true);
     expect(store.getConfigValue("security.profile")).toBe("standard");
+    // The assistant's destination record is activity (when the host changed it), so it goes with the data.
+    expect(store.getConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY)).toBeUndefined();
   });
 
   it("wipeAll on a plaintext file leaves none of the deleted text in the database file", () => {

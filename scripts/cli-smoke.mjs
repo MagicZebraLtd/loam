@@ -3,10 +3,11 @@
 // cli/ with `npm pack`, installs the tarball into a scratch project exactly as `npm i loamnet` would (so a
 // file missing from `files`, or an optional SQLCipher driver that won't install, fails here), then runs
 // the installed `loam` bin:
+//   0. the package carries dist/THIRD_PARTY_NOTICES.txt (scripts/third-party-notices.mjs);
 //   1. `--help` exits 0;
 //   2. an invalid `--port` is refused;
 //   3. with the default port 3000 held by another listener, it moves to a free port and serves the
-//      health check and the web client there;
+//      health check, the web client and its /third-party-notices.txt there;
 //   4. an explicit `--port` that is taken is refused with a message (exit 1), not a stack trace;
 //   5. `--encrypt` with $LOAM_DB_KEY starts, writes a database that isn't plaintext SQLite, and reopens
 //      it with the same key;
@@ -18,7 +19,7 @@
 // Usage: node scripts/cli-smoke.mjs
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, openSync, readFileSync, readSync, closeSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -126,6 +127,11 @@ async function main() {
   check(install.status === 0, `npm install of ${tarball} succeeds`);
   check(!/npm warn deprecated/i.test(install.stderr), "install prints no deprecation warnings");
   const bin = join(project, "node_modules/loamnet/bin/loam.js");
+  const notices = join(project, "node_modules/loamnet/dist/THIRD_PARTY_NOTICES.txt");
+  check(
+    existsSync(notices) && /THIRD-PARTY SOFTWARE NOTICES/.test(readFileSync(notices, "utf8")) && /\nfastify@/.test(readFileSync(notices, "utf8")),
+    "the package carries dist/THIRD_PARTY_NOTICES.txt, listing the bundled packages",
+  );
 
   const baseEnv = { ...process.env };
   delete baseEnv.PORT;
@@ -146,6 +152,11 @@ async function main() {
     check(health.ok && (await health.json()).ok === true, "the health check answers on the chosen port");
     const shell = await fetch(`http://127.0.0.1:${node.port}/channels`);
     check(shell.ok && (await shell.text()).includes("<html"), "the web client is served (SPA route → shell)");
+    const webNotices = await fetch(`http://127.0.0.1:${node.port}/third-party-notices.txt`);
+    check(
+      webNotices.ok && /^text\/plain/.test(webNotices.headers.get("content-type") ?? "") && /\npreact@/.test(await webNotices.text()),
+      "the web client's /third-party-notices.txt is served as text",
+    );
     await new Promise((resolve) => setTimeout(resolve, 500));
     check(!/incoming request|request completed/.test(node.output()), "plain mode prints no line per request");
     const linkFile = join(work, "plain", "admin-link.txt");

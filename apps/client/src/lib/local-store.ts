@@ -41,6 +41,7 @@ function clearWipePending(): void {
  * that intent (docs/20) so a reload before the deletion finishes doesn't rehydrate the DB. The app calls
  * this from its device/node wipe flow, separately from destroyDatabase() (docs/15 #4). */
 export function markLocalStoreWiped(): void {
+  purgeRefusedCopy();
   wiped = true;
   try {
     localStorage.setItem(WIPE_PENDING_KEY, "1");
@@ -56,6 +57,7 @@ export function markLocalStoreWiped(): void {
  * the flag set for the next boot. Call once at startup.
  */
 export async function recoverPendingWipe(): Promise<void> {
+  purgeRefusedCopy();
   if (!readWipePending()) {
     return;
   }
@@ -68,13 +70,15 @@ export async function recoverPendingWipe(): Promise<void> {
 export function resetLocalStoreForTests(): void {
   wiped = false;
   databasePromise = undefined;
+  refusedCopyPurged = false;
   clearWipePending();
 }
 
 /**
  * A host app's own window may say that no copy of the network belongs on this device's storage: the desktop
- * app sets `window.__loamHostNoLocalCache` before the page's scripts run (apps/desktop/src/preload/client.cts)
- * on every encrypted network, since this IndexedDB copy would sit on disk outside the database's key. The app
+ * app (apps/desktop/src/preload/client.cts) and the Android host's WebView (apps/app/src/app/index.tsx) set
+ * `window.__loamHostNoLocalCache` before the page's scripts run on every encrypted network, since this
+ * IndexedDB copy would sit on disk outside the database's key. The app
  * then holds what it shows in memory only and loads it from the node (on loopback) on every page load.
  * localStorage (the identity token, preferences) is untouched: it holds no messages.
  */
@@ -82,8 +86,31 @@ function localCacheRefused(): boolean {
   return typeof window !== "undefined" && window.__loamHostNoLocalCache === true;
 }
 
+/** Whether this browser has IndexedDB at all, refused or not (what a purge or a wipe can act on). */
+function indexedDbPresent(): boolean {
+  return typeof indexedDB !== "undefined";
+}
+
 function hasIndexedDb(): boolean {
-  return typeof indexedDB !== "undefined" && !localCacheRefused();
+  return indexedDbPresent() && !localCacheRefused();
+}
+
+// Whether this page load has already asked for the refused copy's deletion (see `purgeRefusedCopy`).
+let refusedCopyPurged = false;
+
+/**
+ * When the host app refuses a local copy, delete the database a build from before the refusal wrote: the
+ * Android host's WebView only started refusing in 0.7.0, so an upgraded phone can still hold one in the
+ * clear. Once per page load, from the first call of any store API; fire-and-forget, so no read waits on
+ * it. This page never opens a connection while refused, so nothing of its own can block the deletion; a
+ * blocked request still lands once the other holder closes.
+ */
+function purgeRefusedCopy(): void {
+  if (refusedCopyPurged || !localCacheRefused() || !indexedDbPresent()) {
+    return;
+  }
+  refusedCopyPurged = true;
+  deleteDatabaseFile().catch(() => undefined);
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
@@ -171,6 +198,7 @@ function openConnection(version: number | undefined): Promise<IDBDatabase> {
 }
 
 export async function getAllRecords<T>(storeName: StoreName): Promise<T[]> {
+  purgeRefusedCopy();
   if (!hasIndexedDb() || wiped) {
     return [];
   }
@@ -186,6 +214,7 @@ export async function putRecords<T extends StoredRecord>(
   storeName: StoreName,
   records: T[],
 ): Promise<void> {
+  purgeRefusedCopy();
   if (!hasIndexedDb() || wiped || !records.length) {
     return;
   }
@@ -214,6 +243,7 @@ export async function deleteRecord(storeName: StoreName, id: string): Promise<vo
 
 /** Delete several records in one transaction (a missing id is not an error). */
 export async function deleteRecords(storeName: StoreName, ids: readonly string[]): Promise<void> {
+  purgeRefusedCopy();
   if (!hasIndexedDb() || wiped || !ids.length) {
     return;
   }
@@ -229,23 +259,9 @@ export async function deleteRecords(storeName: StoreName, ids: readonly string[]
   await transactionDone(transaction);
 }
 
-/**
- * Delete the entire local database (kill-switch purge). Closes the cached connection first, since
- * deletion blocks while a connection is open.
- */
-export async function destroyDatabase(): Promise<void> {
-  if (!hasIndexedDb()) {
-    clearWipePending(); // nothing to delete → the wipe is complete, not pending
-    return;
-  }
-
-  if (databasePromise) {
-    const database = await databasePromise.catch(() => undefined);
-    database?.close();
-    databasePromise = undefined;
-  }
-
-  await new Promise<void>((resolve, reject) => {
+/** One `indexedDB.deleteDatabase` of the local database, rejecting when it is blocked (see `destroyDatabase`). */
+function deleteDatabaseFile(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DB_NAME);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
@@ -254,6 +270,29 @@ export async function destroyDatabase(): Promise<void> {
     // deferred rather than complete — the PERSISTENT flag stays set so a reload retries (docs/20).
     request.onblocked = () => reject(new Error("Database deletion deferred: another tab holds a connection."));
   });
+}
+
+/**
+ * Delete the entire local database (kill-switch purge). Closes the cached connection first, since
+ * deletion blocks while a connection is open. Runs when the host app refuses a local copy too: this page
+ * wrote nothing, but a copy an older build wrote may still be there.
+ */
+export async function destroyDatabase(): Promise<void> {
+  if (!indexedDbPresent()) {
+    clearWipePending(); // nothing to delete → the wipe is complete, not pending
+    return;
+  }
+  if (localCacheRefused()) {
+    refusedCopyPurged = true; // the deletion below is the refused copy's purge too
+  }
+
+  if (databasePromise) {
+    const database = await databasePromise.catch(() => undefined);
+    database?.close();
+    databasePromise = undefined;
+  }
+
+  await deleteDatabaseFile();
 
   // Only reached when deleteDatabase actually RESOLVED — the DB is gone, so the wipe is no longer pending.
   clearWipePending();
@@ -266,6 +305,7 @@ export async function destroyDatabase(): Promise<void> {
  * into — the new one, but unlike a wipe the app carries straight on with the new identity.
  */
 export async function clearAllRecords(): Promise<void> {
+  purgeRefusedCopy();
   if (!hasIndexedDb() || wiped) {
     return;
   }

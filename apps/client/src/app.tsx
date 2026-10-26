@@ -65,6 +65,7 @@ import {
   putRecords,
 } from "./lib/local-store";
 import { clearRecentReactions } from "./lib/reactions";
+import { clearAssistantAcks } from "./lib/assistant-ack";
 import { reconcileRoster, sortUsers } from "./lib/roster";
 import { createLivenessWatchdog, type LivenessWatchdog } from "./lib/ws-liveness";
 import {
@@ -1099,6 +1100,7 @@ function LoamApp() {
     localStorage.removeItem(CURRENT_USER_CREATED_AT_KEY);
     localStorage.removeItem(LAST_CONVERSATION_KEY);
     clearRecentReactions();
+    clearAssistantAcks();
     forgetRememberedSearch();
     forgetConfirmedIdentity();
     tabIdentityRef.current = undefined;
@@ -1169,6 +1171,7 @@ function LoamApp() {
       // Nothing durable to clear.
     }
     clearRecentReactions();
+    clearAssistantAcks();
     await clearAllRecords();
   }, []);
 
@@ -2626,6 +2629,7 @@ function LoamApp() {
       ) : (
         <ConversationView
           allowAttachments={!!config?.networkConfig.enableAttachments}
+          assistantDestination={config?.networkConfig.assistantDestination}
           allowLocationSharing={!!config?.networkConfig.enableLocationSharing}
           blockedUserIds={blockedUserIds}
           channels={channels}

@@ -1,6 +1,6 @@
 # LOAM roadmap
 
-> **Status: current (22 October 2026; 0.6.4 is released, 0.7.0 is next).** What LOAM does today, what comes next, and what is
+> **Status: current (25 October 2026; 0.7.0, the launch release, is on its release branch).** What LOAM does today, what comes next, and what is
 > being considered. Nothing below the "Next" section has a date. The detailed list of open work is
 > [docs/25](25-backlog.md); settled and open design choices are in [decisions.md](decisions.md).
 

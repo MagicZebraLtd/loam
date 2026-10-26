@@ -14,3 +14,14 @@ packages/*/pnpm-lock.yaml
 *.tgz
 # ...except the Android host's vendored, sha256-pinned SQLite wrapper packages (fetch-native-modules.mjs).
 !apps/app/native-prebuilds/npm/*.tgz
+
+# Local secrets and tooling state: never tracked.
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.pem
+.vercel/
+.idea/
+*.sw?

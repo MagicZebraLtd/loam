@@ -50,9 +50,10 @@ Three kinds of process, one contract.
 | **Client preload** | `src/preload/client.cts` → `dist/preload/client.cjs` | Asks the main process, synchronously, for this boot's host token and the node's transport key and exposes them as `window.__loamHostDeviceToken` and `window.__loamHostTransportKey`, which the web client already reads on Android. |
 | **Host shell** | `src/renderer/` → `dist/renderer/` | Preact + Vite, sharing the client's design tokens (`apps/client/src/styles/`) and following `apps/client/DESIGN.md`. Native fonts, light and dark by `prefers-color-scheme`. Loaded from `file://`. |
 | **Web client** | copied from `apps/client/dist` → `dist/client/` | What the node serves to joiners and to the host's own window. |
+| **Licence notices** | `scripts/third-party-notices.mjs desktop` → `dist/THIRD_PARTY_NOTICES.txt` | The open-source packages the bundles above inline, and Electron, each with its licence (docs/14 "Licence notices"). The macOS bundle doesn't yet carry Chromium's `LICENSES.chromium.html` (Windows and Linux keep it in the app folder). |
 
 Preloads are `.cts` and compiled to CommonJS `.cjs`: a sandboxed preload cannot be an ES module, and `electron`
-is the only module it may require. Electron 44.7.2 is pinned exactly (a bump means a native re-check); its Node
+is the only module it may require. Electron 44.9.1 is pinned exactly (a bump means a native re-check); its Node
 is 24.21 and its Chromium 152, so the main process is built for `node24` and the renderer for `chrome120`.
 
 ### The IPC contract
@@ -146,7 +147,7 @@ The mirror of the Android launcher (`apps/app/src/lib/db-encryption.ts`). A rand
 | `passphrase` (With a passphrase) | `SHA-256(passphrase + ":" + deviceSecret)`, hex | SQLCipher |
 | `persistent` (Kept in this computer's keychain) | the device secret itself | SQLCipher |
 
-The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2),
+The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2 and 44.9.1),
 so an unencrypted network has no native dependency, as with the CLI. Presets pick the default: **Private**
 is `ephemeral`; **Community** and **Choose every setting myself** are `persistent`, or `passphrase` when this
 computer has no keychain.
@@ -265,8 +266,8 @@ Rules for every page the app creates:
   what it shows is held in memory and loaded from the node, on loopback, at every page load; its localStorage
   (identity token, preferences, no messages) is what persists. Both partitions are created without an HTTP
   cache, so pictures served in the clear (`optional` transport mode) never land on the disk either. Both are
-  erased on every Emergency Reset and when a network is discarded. (The Android host's WebView could ask for
-  the same with one injected line; docs/25 P30.)
+  erased on every Emergency Reset and when a network is discarded. The Android host's WebView does the same on
+  every encrypted network: it injects the flag and runs without an HTTP cache (docs/04).
 - **CSP.** The built host shell carries `default-src 'self'`, `script-src 'self'`, `style-src 'self'`,
   `img-src 'self' data:`, `connect-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'none'`:
   no network, no inline script. (Added at build time only; Vite's dev server injects `<style>` elements.) The web

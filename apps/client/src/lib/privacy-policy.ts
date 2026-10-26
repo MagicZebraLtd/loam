@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "22 October 2026";
+export const PRIVACY_POLICY_UPDATED = "25 October 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -100,10 +100,11 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "The host can run an **Emergency reset**, which deletes every message, person, picture and file on " +
             "the network and clears the copies on devices connected at the time. A device that was offline " +
             "clears its copy the next time it connects to that network.",
-          "The host can store the network encrypted. With encryption on, a reset also replaces the key on the " +
-            "Android host app, and on a computer using a temporary key, so the deleted data can't be recovered " +
-            "from the device's storage. A computer that uses a fixed passphrase deletes the database files but " +
-            "keeps the same passphrase. Pictures and files are stored beside the database without encryption. A " +
+          "The host can store the network encrypted. With encryption on, a reset also replaces the key in the " +
+            "Android and desktop host apps, and in the `loamnet` terminal app when it uses a temporary key, so " +
+            "the deleted data can't be recovered from the device's storage. `loamnet` with a fixed passphrase " +
+            "deletes the database files but keeps the same passphrase. Pictures and files are stored beside the " +
+            "database without encryption. A " +
             "reset deletes them, but on flash storage a deleted picture or file may still be recoverable.",
           "Uninstalling the Android host app deletes everything it stored.",
         ],
@@ -120,8 +121,10 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts the " +
           "messages between your device and the host, and the pictures and files you upload. Downloading " +
           "pictures and files is encrypted too when the host requires encrypted connections; otherwise they are " +
-          "downloaded unencrypted over the local network. Data leaves the host device only if the host turns on " +
-          "one of these:",
+          "downloaded unencrypted over the local network. The encryption does not protect against someone who " +
+          "can alter the network traffic while LOAM loads on your device: they could give your device a changed " +
+          "copy of LOAM that reads your messages. Data leaves the host device only if the host turns on one of " +
+          "these:",
       },
       {
         kind: "list",
@@ -129,16 +132,20 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "**Linking with other LOAM networks:** public channels (their names and descriptions), the messages, " +
             "replies and reactions in them, their pictures and files, and their authors' ids, names and avatar " +
             "settings are copied to the linked networks. Direct messages and private channels never are.",
-          "**A remote assistant:** if the host connects the assistant to a model on another computer, messages " +
-            "you send the assistant go to that computer. The on-device assistant runs entirely on the host phone.",
+          "**A remote assistant:** if the host connects the assistant to a model on another computer, the " +
+            "messages you send the assistant, and the recent history of that conversation since the host last " +
+            "chose where the assistant runs, go to that computer. The on-device assistant runs entirely on the " +
+            "host phone.",
           "**An online assistant:** the host can set the assistant to use an online chat service, such as " +
             "OpenRouter, OpenAI, Groq or Mistral. The messages you write to the assistant, and the recent history " +
-            "of that conversation, are then sent to that company and handled under its own privacy policy. The " +
-            "host chooses the service, and the admin page names it and warns that messages will leave the " +
-            "network. Nothing else goes there: not your name, not your other messages, and nothing anyone else " +
-            "writes. A Private network only accepts a service on the host or the local network.",
+            "of that conversation since the host last chose where the assistant runs, are then sent to that " +
+            "company and handled under its own privacy policy. The host chooses the service. The admin page names " +
+            "it and warns that messages will leave the network, and the assistant's chat names it too and asks " +
+            "you to confirm once on each device before your first message goes out. Nothing else goes there: not " +
+            "your name, not your other messages, and nothing anyone else writes. A Private network only accepts " +
+            "an assistant whose address is on the host or the local network, judged by the address as written.",
           "**Mesh delivery** (experimental): messages to your mesh contacts may be carried by other LOAM " +
-            "networks, sealed so only the recipient can read them.",
+            "networks, sealed so the networks carrying them can't read them.",
         ],
       },
       {

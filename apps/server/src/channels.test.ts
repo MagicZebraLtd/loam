@@ -299,8 +299,8 @@ describe("private channels", () => {
 
     const first = await createPrivateChannel(app, alice.cookie, "Secret");
     const second = await createPrivateChannel(app, bob.cookie, "Secret");
-    expect(first.id).toMatch(/^secret-[0-9a-f]{6}$/);
-    expect(second.id).toMatch(/^secret-[0-9a-f]{6}$/);
+    expect(first.id).toMatch(/^chan_[0-9a-f]{12}$/);
+    expect(second.id).toMatch(/^chan_[0-9a-f]{12}$/);
     expect(first.id).not.toBe(second.id);
 
     // A public channel keeps its clean slug, and the hidden ones left no trace in it.

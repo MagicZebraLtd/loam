@@ -119,6 +119,15 @@ describe("SettingsView", () => {
     expect(host.querySelector(".node-version")?.textContent).toBe("LOAM v9.9.9");
   });
 
+  it("links the node's own third-party licence notices in a new tab", () => {
+    const host = mountSettings();
+    const link = host.querySelector<HTMLAnchorElement>('.privacy-policy-link a[href="/third-party-notices.txt"]');
+
+    expect(link?.textContent).toBe("Third-party software");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noreferrer");
+  });
+
   it("wipes the device only after the alertdialog's typed confirmation", async () => {
     const onWipeDevice = vi.fn(async () => {});
     const host = mountSettings(onWipeDevice);

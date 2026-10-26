@@ -254,6 +254,32 @@ describe("encryption at rest + key-discard kill switch", () => {
     expect(config.networkConfig.dbEncryption).toBe("persistent");
   });
 
+  it("serves pictures with no-store on an encrypted node, so the host's own window keeps no plaintext copy on disk", async () => {
+    const avatarConfig = { identity: { allowUserAvatarEdit: true, allowUserAvatarUpload: true } };
+    const webp = Buffer.from("RIFF\0\0\0\0WEBP").toString("base64");
+    async function avatarCacheControl(app: LoamApp): Promise<string | undefined> {
+      const { cookie } = await session(app);
+      const uploaded = await app.server.inject({
+        method: "PUT",
+        url: "/api/users/me/avatar-image",
+        headers: { cookie },
+        payload: { mimeType: "image/webp", data: webp },
+      });
+      expect(uploaded.statusCode).toBe(200);
+      const { imageId } = (uploaded.json() as { avatar: { imageId: string } }).avatar;
+      const served = await app.server.inject({ method: "GET", url: `/api/avatars/${imageId}.webp`, headers: { cookie } });
+      expect(served.statusCode).toBe(200);
+      return served.headers["cache-control"] as string | undefined;
+    }
+
+    const encrypted = await makeEncryptedApp({ dbEncryptionKey: "a fixed host passphrase" }, avatarConfig);
+    expect(await avatarCacheControl(encrypted.app)).toBe("no-store");
+
+    // Without encryption at rest there is nothing on disk the cache would undercut: an hour of private caching.
+    const plain = await makeEncryptedApp({}, avatarConfig);
+    expect(await avatarCacheControl(plain.app)).toBe("private, max-age=3600");
+  });
+
   it("kill switch on a passphrase-key node also empties and recovers", async () => {
     const { app } = await makeEncryptedApp(
       { dbEncryptionKey: "a fixed host passphrase" },

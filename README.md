@@ -164,7 +164,8 @@ also carries the network's encryption key, so messages to and from the host are 
 - **An assistant, if you want one.** It answers in direct messages, from a small AI model on the host
   phone, from [Ollama](https://ollama.com) or another model server on a computer nearby, or from an online
   service with an OpenAI-style API, such as OpenRouter or OpenAI. The first two need no internet. An
-  online service gets the messages people write to the assistant, and the admin page says so. Off unless
+  online service gets the messages people write to the assistant, and both the admin page and the
+  assistant's chat say so. Off unless
   you turn it on ([docs/06](docs/06-llm.md)).
 
 ## Kinds of network
@@ -185,25 +186,29 @@ computer, the same settings live in the admin area as **security profiles**
 ## Privacy and security
 
 - **Nothing to collect.** No accounts, no analytics, no advertising, no crash reporting. Messages stay
-  on the host and on the phones that received them. That also means LOAM never tells us when something
+  on the host and on the phones that received them, unless the host links another network or turns on an
+  online assistant ([How it works](#how-it-works)). That also means LOAM never tells us when something
   goes wrong, so if you find a problem, or would like to ask for a feature, please
   [open an issue](https://github.com/MagicZebraLtd/loam/issues) or email Magic Zebra Ltd at
   opensource@magiczebra.co.uk.
 - **Encrypted connections.** Joining by the code sets up an encrypted connection to the host (an X25519
-  handshake and XChaCha20-Poly1305), so nobody else on the Wi-Fi can read the messages. By default,
-  pictures and files are downloaded unencrypted, so someone on the same Wi-Fi could see them; a network
-  that requires encryption (the Private one does) encrypts those too, and refuses anyone who didn't join
-  by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
+  handshake and XChaCha20-Poly1305), so someone listening on the Wi-Fi can't read the messages. The app
+  itself still arrives over plain HTTP, so someone who can change traffic on the network while the page
+  loads could give a phone a tampered copy that reads its messages (the host app's own window isn't
+  exposed to that). By default, pictures and files are downloaded unencrypted, so someone on the same
+  Wi-Fi could see them; a network that requires encryption (the Private one does) encrypts those too,
+  and refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
   can't get a certificate, so LOAM serves plain HTTP and encrypts inside the app instead, using the
   [noble](https://paulmillr.com/noble/) libraries and the host key carried in the code. It has had no
   outside security audit yet.
 - **Encrypted storage.** The host can keep its database encrypted with SQLCipher, under a key held in
-  the phone's keystore, a passphrase, or a key that lives only in memory. An encrypted setting never
-  falls back to storing data unencrypted. Pictures and files are stored beside the database, not
+  the device's keystore or keychain, a passphrase, or a key that lives only in memory. An encrypted
+  setting never falls back to storing data unencrypted. Pictures and files are stored beside the database, not
   encrypted; an Emergency reset deletes them.
 - **Emergency reset.** Erases every message, person, picture and file, and tells connected phones to
-  clear their copy. On the Android app, and on a computer using a key that lives only in memory, the key
-  is replaced too, so what's left on the storage can't be read ([docs/02](docs/02-kill-switch.md)).
+  clear their copy. On an encrypted network in the Android or desktop app, and in `loamnet` with a key
+  that lives only in memory, the key is replaced too, so what's left in the database files can't be
+  read ([docs/02](docs/02-kill-switch.md)).
 
 **Know the limits.** The host can read every message: it's the server, as the operator of any chat
 service can. A host device taken while it's running, with the key in memory, can give up what it holds.

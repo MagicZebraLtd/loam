@@ -149,6 +149,16 @@ type BootState = "idle" | "booting" | "ready" | "boot_recoverable" | "failed";
 let bootState: BootState = "idle";
 
 /**
+ * The Android host's `startEmbeddedServer`: nothing it reads from the environment changes, but the server
+ * writes no line per request. This process's stdout is copied to logcat by nodejs-mobile, where a device
+ * backup or `adb` can read it, outside the encrypted database, and a request line carries each joiner's
+ * address and a timestamp (docs/04 "What the host phone logs"). Warnings and errors still go there.
+ */
+function startAndroidServer(): Promise<LoamApp> {
+  return startEmbeddedServer({ requestLogging: false });
+}
+
+/**
  * Boot the embedded server, reporting any async startup failure — a rejection from `start()` itself,
  * or one that escapes its promise chain entirely (e.g. an un-awaited fire-and-forget task started
  * during `buildApp`) — over the RN bridge instead of silently exiting. `start` is injectable so a
@@ -170,7 +180,7 @@ let bootState: BootState = "idle";
  * the settled state is already `"ready"`, in which case this no-ops instead: a server is already up
  * and healthy, and a second `listen()` against its own port can only ever fail destructively.
  */
-export function bootEmbeddedServer(start: () => Promise<LoamApp> = startEmbeddedServer): Promise<void> {
+export function bootEmbeddedServer(start: () => Promise<LoamApp> = startAndroidServer): Promise<void> {
   if (bootInFlight) {
     return bootInFlight;
   }

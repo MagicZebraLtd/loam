@@ -205,6 +205,21 @@ describe("request logs never reveal tunnelled paths or query strings", () => {
     return { app, logs };
   }
 
+  it("a launcher can turn request lines off altogether (the Android host: its stdout is logcat), keeping warnings", async () => {
+    const logs: string[] = [];
+    const { app } = await makeApp(undefined, { logger: true, logStream: { write: (line) => void logs.push(line) }, requestLogging: false });
+    await app.server.inject({ method: "GET", url: "/api/health" });
+    await app.server.inject({ method: "GET", url: "/api/bootstrap" });
+    expect(logs.filter((line) => line.includes('"req"') || line.includes('"res"') || line.includes("remoteAddress"))).toEqual([]);
+    app.server.log.warn("still logged");
+    expect(logs.some((line) => line.includes("still logged"))).toBe(true);
+
+    // The default keeps one line per request, with the caller's address.
+    const { app: logged, logs: loggedLines } = await makeLoggedApp();
+    await logged.server.inject({ method: "GET", url: "/api/health" });
+    expect(loggedLines.some((line) => line.includes('"req"') && line.includes("remoteAddress"))).toBe(true);
+  });
+
   it("a tunnelled request's real path + query never reach the log; the outer tunnel request does", async () => {
     const { app, logs } = await makeLoggedApp();
     const tunnel = await boundTunnel(app);

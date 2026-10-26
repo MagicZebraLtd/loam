@@ -118,7 +118,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     // Logged request URLs drop their query string, and tunnel re-dispatches aren't request-logged at all
     // (their URL is the path the tunnel hides) — see `loamLoggerOptions` / `loamLogController`.
     logger: options.logger === false ? false : loamLoggerOptions(devMode ? "debug" : "info", options.logStream),
-    logController: loamLogController(),
+    // No per-request lines when the launcher says its log leaves its control (`AppOptions.requestLogging`).
+    logController: loamLogController(options.requestLogging !== false),
     // The global body ceiling stays at Fastify's 1 MiB default. Only the two routes that genuinely
     // carry large envelopes — `POST /api/attachments` and `POST /api/transport/tunnel` — raise it
     // per-route (`LARGE_BODY_LIMIT`); a blanket 4 MiB would hand every endpoint (including the
@@ -829,6 +830,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       enableMesh: appConfig.mesh.enabled,
       enableLLMChat: llmEnabled(),
       enableLLMStreaming: llmEnabled(),
+      // Where the assistant's replies come from (absent while it is off), shown in its chat (docs/06).
+      assistantDestination: llm.assistantDestination(),
       allowUserDisplayNameEdit: appConfig.identity.allowUserDisplayNameEdit,
       allowUserAvatarEdit: appConfig.identity.allowUserAvatarEdit,
       allowUserAvatarUpload: appConfig.identity.allowUserAvatarUpload,
@@ -1286,13 +1289,24 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   }
 
   /**
-   * Derives a stable, collision-free channel id from a display name: a URL-friendly slug (so routes
-   * read `/channel/general`), with a short random suffix appended when the slug is already taken or
-   * empty (e.g. a name made entirely of emoji or punctuation). A channel that isn't public ALWAYS gets
-   * the suffix: if a private "Secret" took the bare `secret`, the next person to
-   * create a "Secret" would be handed `secret-<hex>` and learn a hidden channel of that name exists.
+   * Derives a stable, collision-free channel id from a display name: for a public channel a URL-friendly
+   * slug (so routes read `/channel/general`), with a short random suffix appended when the slug is already
+   * taken or empty (e.g. a name made entirely of emoji or punctuation). A channel that isn't public gets an
+   * opaque id (`chan_<12 hex>`) that says nothing about its name: the id lands in places a reset never
+   * reaches and that sit outside the database's key (joiners' browser history as `/channel/<id>`, the host
+   * window's remembered last conversation, the plaintext paths of a client that skipped the QR), and a
+   * name-derived id there would reveal that a hidden channel of that name exists; it also can't collide
+   * with a public slug, so creating a public "Secret" never leaks that a private one took the name.
    */
   function uniqueChannelId(name: string, visibility: Channel["visibility"] = "public"): string {
+    if (visibility !== "public") {
+      let opaque: string;
+      do {
+        opaque = `chan_${randomBytes(6).toString("hex")}`;
+      } while (ensureChannel(opaque) || store.quarantine().channels.has(opaque));
+      return opaque;
+    }
+
     const slug = name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -1307,7 +1321,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     // taken too: a new channel under it would inherit that row's retained messages.
     const taken = (id: string) => !!ensureChannel(id) || store.quarantine().channels.has(id);
 
-    if (visibility === "public" && slug && !taken(slug) && !tombstones.has(slug)) {
+    if (slug && !taken(slug) && !tombstones.has(slug)) {
       return slug;
     }
 

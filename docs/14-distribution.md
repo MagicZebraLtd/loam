@@ -14,6 +14,7 @@ bundled into one self-contained file plus the web client:
 loamnet/
 ├─ bin/loam.js          # the `loam` CLI: sets env, prints the join QR, boots the node
 ├─ dist/loam-server.js  # esbuild ESM bundle of the server (+ @loam/* inlined, QR helper re-exported)
+├─ dist/THIRD_PARTY_NOTICES.txt  # the bundled open-source packages and their licences (see "Licence notices")
 └─ client/              # the built PWA (apps/client/dist), served offline over the LAN
 ```
 
@@ -99,6 +100,29 @@ npm publish        # prepublishOnly runs `pnpm -r build && node scripts/build-cl
 ```
 
 Bump `cli/package.json` `version` per release. The package is `AGPL-3.0-only`, matching the repo.
+
+## Licence notices
+
+LOAM is `AGPL-3.0-only`, but every build bundles third-party code under MIT, ISC, BSD and similar licences
+that ask for their notices to go with each copy. `scripts/third-party-notices.mjs` (no dependencies; it reads
+only `node_modules`) walks the installed production dependency tree of each build's workspace packages and
+writes a plain-text file with each package's name, version, declared licence and the text of its
+LICENSE/LICENCE/COPYING file (or a line saying it ships none). Workspace packages are walked through but not
+listed. The native components no npm tree describes (Electron, Node.js for Android, llama.cpp, the SQLite
+drivers' binaries, SQLite3 Multiple Ciphers, SQLite) come from the hand-maintained
+`scripts/third-party-native.json`. The output has no dates, so the same tree gives the same file. Each build
+writes its own copy at build time; none is committed:
+
+| Build | File | Written by |
+|---|---|---|
+| Web client | `apps/client/public/third-party-notices.txt`, so `/third-party-notices.txt` on every node (gitignored) | the client's `build` (and `dev`) script |
+| `loamnet` | `cli/dist/THIRD_PARTY_NOTICES.txt` (in the package through `files: ["dist"]`) | `scripts/build-cli.mjs` |
+| Desktop | `apps/desktop/dist/THIRD_PARTY_NOTICES.txt` (packed with `dist/**`) | `apps/desktop/scripts/build.mjs` |
+| Android | `apps/app/nodejs-assets/nodejs-project/THIRD_PARTY_NOTICES.txt` (an APK asset) | `apps/app/scripts/bundle-server.mjs`, after `fetch:native` |
+
+Settings in the web client links the web file ("Third-party software"). `pnpm smoke:cli` checks that the
+installed package carries its file and that the node serves the web one. Run
+`node scripts/third-party-notices.mjs <web|cli|desktop|android> [--out <file>]` to write one by hand.
 
 ## Verifying a build
 

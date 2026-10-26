@@ -195,19 +195,31 @@ function llmRows(config: LoamConfig): Row[] {
   ];
 
   if (provider === "ollama") {
+    // An Ollama address off the local network sends the conversation there, like a cloud service.
+    const ollamaCloud = !isLocalNetworkUrl(llm.ollama.baseUrl);
     rows.push(
       {
         section: "Assistant",
         label: "Ollama address",
-        value: llm.ollama.baseUrl,
+        value: `${clean(llm.ollama.baseUrl)}${ollamaCloud ? `  (messages go to ${hostOf(llm.ollama.baseUrl)})` : ""}`,
         activate(view) {
-          llmTextRow(view, "Ollama address", llm.ollama.baseUrl, ["Where Ollama listens. On this computer that is http://localhost:11434."], { maxLength: 200 }, (value) => {
-            if (!/^https?:\/\//.test(value.trim())) {
-              return "Enter an http:// or https:// address.";
-            }
-            save(view, { llm: { ollama: { baseUrl: value.trim() } } }, "Saved");
-            return undefined;
-          });
+          llmTextRow(
+            view,
+            "Ollama address",
+            llm.ollama.baseUrl,
+            [
+              "Where Ollama listens. On this computer that is http://localhost:11434.",
+              "An address outside the local network sends people's messages to the assistant there. A hardened network refuses one.",
+            ],
+            { maxLength: 200 },
+            (value) => {
+              if (!/^https?:\/\//.test(value.trim())) {
+                return "Enter an http:// or https:// address.";
+              }
+              save(view, { llm: { ollama: { baseUrl: value.trim() } } }, "Saved");
+              return undefined;
+            },
+          );
         },
       },
       {

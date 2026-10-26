@@ -1,5 +1,5 @@
 // scrypt-hashed secret storage + constant-time comparison.
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 
 export const secretHashPrefix = "scrypt:";
 
@@ -48,4 +48,27 @@ export function verifySecret(candidate: string, stored: string): boolean {
   const expected = Buffer.from(hashHex, "hex");
   const actual = scryptSync(candidate, Buffer.from(saltHex, "hex"), expected.length);
   return timingSafeEqual(actual, expected);
+}
+
+/**
+ * `verifySecret` without blocking the event loop: the scrypt runs on libuv's thread pool. For a route anyone on
+ * the LAN can call without credentials (`POST /api/panic`), where a synchronous scrypt per attempt would let a
+ * prober stall every other request.
+ */
+export function verifySecretAsync(candidate: string, stored: string): Promise<boolean> {
+  if (!isHashedSecret(stored)) {
+    return Promise.resolve(timingSafeEqualStrings(candidate, stored));
+  }
+
+  const [saltHex = "", hashHex = ""] = stored.slice(secretHashPrefix.length).split(":");
+  const expected = Buffer.from(hashHex, "hex");
+  return new Promise((resolve, reject) => {
+    scrypt(candidate, Buffer.from(saltHex, "hex"), expected.length, (error, actual) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(timingSafeEqual(actual, expected));
+    });
+  });
 }

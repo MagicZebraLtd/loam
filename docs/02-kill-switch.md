@@ -121,6 +121,11 @@ phone.
   keys, unregister the service worker + `caches.delete('loam-poc-v1')`, drop in-memory state, and show a
   neutral "disconnected" screen (avoid a scary banner that signals what happened).
 - The admin who triggers it gets the same purge locally.
+- **What a wipe cannot reach**: the browser's own history and address-bar suggestions on a joiner's phone
+  keep the paths it visited (`/channel/<id>`, `/dm/<user id>`), and a user id yields its generated display
+  name (`@loam/display-name`). That is why a channel that isn't public gets an opaque `chan_<hex>` id rather
+  than one made from its name, and why a reset is not a reason to promise a joiner that nothing is left on
+  their own device: clearing browser history is theirs to do.
 
 ### Data-at-rest caveat (document honestly)
 SQLite leaves data in the main DB file, `-wal`, and `-journal`, and deleted rows/files may be
