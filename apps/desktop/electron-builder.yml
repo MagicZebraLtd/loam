@@ -64,6 +64,15 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   notarize: true
+  # Electron's own licence and the licences of everything Chromium bundles. electron-builder copies both into
+  # the app folder on Windows and Linux by itself, but a Mac bundle gets only Electron.app, so they are copied
+  # into Contents/Resources here (the files sit beside Electron.app in Electron's download, under
+  # node_modules/electron/dist). The 20 MB Chromium file is the price of a complete notice.
+  extraResources:
+    - from: node_modules/electron/dist/LICENSE
+      to: LICENSE.electron.txt
+    - from: node_modules/electron/dist/LICENSES.chromium.html
+      to: LICENSES.chromium.html
 
 dmg:
   artifactName: LOAM-mac-${arch}.${ext}

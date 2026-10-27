@@ -4,6 +4,12 @@ All notable changes to LOAM are recorded here. LOAM is a local-first, off-grid m
 `README.md` and `MISSION.md`). Format loosely follows [Keep a Changelog](https://keepachangelog.com);
 the project is pre-1.0, so the surface can still change. Dates are UTC.
 
+## [Unreleased]
+
+### Fixed
+- **The Mac app now carries Electron's licence files** (`LICENSE.electron.txt` and `LICENSES.chromium.html`,
+  in the bundle's Resources), as the Windows and Linux builds already did.
+
 ## [0.7.0] - 2026-10-25
 
 The launch release: the desktop app's first release, the assistant through any OpenAI-style chat service,
