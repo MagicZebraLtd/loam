@@ -30,7 +30,7 @@
     "@types/node": "catalog:",
     "better-sqlite3-multiple-ciphers": "^13.0.3",
     "client": "workspace:*",
-    "electron": "44.9.1",
+    "electron": "45.1.0",
     "electron-builder": "^26.18.0",
     "esbuild": "catalog:",
     "jsdom": "catalog:",
