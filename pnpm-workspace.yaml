@@ -12,7 +12,7 @@ catalog:
   "@types/node": ^24.19.2
   esbuild: ^0.28.2
   jsdom: ^30.1.3
-  preact: ^11.0.2
+  preact: ^11.1.0
   tsx: ^4.23.15
   typescript: ~7.0.2
   vite: ^8.3.5
@@ -36,14 +36,11 @@ onlyBuiltDependencies:
 # install only fetches what the lockfile already names.
 minimumReleaseAge: 1440
 
-# `pnpm audit --prod --audit-level=high` runs in CI. These advisories have no patched release and reach
-# LOAM only through Expo build tooling (`expo` > `@expo/cli`), which runs on the build machine and is not
-# bundled into the APK or the server. Remove each entry once a fixed version exists.
+# `pnpm audit --prod --audit-level=high` runs in CI. These advisories have no usable patched release and
+# reach LOAM only through Expo (its build tooling, `expo` > `@expo/cli`, which runs on the build machine,
+# or the host app's own router); none reaches the server. Remove each entry once a fixed version exists.
 auditConfig:
   ignoreGhsas:
-    # node-forge <=1.4.0: RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm
-    # elements. Path: expo > @expo/cli > node-forge (dev-server certificates, not used by LOAM at runtime).
-    - GHSA-86w9-cpqp-85rv
     # braces <=3.0.3: stack exhaustion on deeply nested patterns. Path: expo > @expo/cli >
     # @expo/metro-file-map > micromatch > braces (Metro file watching at build time, fixed patterns).
     - GHSA-vfj7-8cjw-p6xm
@@ -51,3 +48,8 @@ auditConfig:
     # zod 3.25.76 (dev-tools plugin schemas; @expo/cli 57.0.32, the newest, still asks for ^3.25.76 and no
     # 3.x fix exists). LOAM's own schemas use zod 4.6.7, which is patched.
     - GHSA-mrhx-c7xc-m3w5
+    # decode-uri-component <=0.5.0: quadratic time on malformed percent-encoding. Path: expo-router 57 >
+    # query-string 7 > decode-uri-component 0.2.2. The fix (0.5.1) is ESM-only and query-string 7 require()s
+    # it, so it can't be overridden; expo-router only parses the host app's own routes on the phone, never
+    # anything a LAN client sends. Goes away with the move to Expo SDK 58 (expo-router 58).
+    - GHSA-qr28-fpjm-wq7f
