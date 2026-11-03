@@ -559,10 +559,16 @@
             <details class="faq-item" id="faq-encryption">
               <summary>Is it end-to-end encrypted?</summary>
               <p>
-                No. Joining by the code encrypts everything between your phone and the host, so someone else on the
-                Wi-Fi can't read it. The host can, the same way a chat server can. That's what lets the host
-                moderate, and it can keep messages encrypted on disk under a key that never leaves that device. So
-                the person you trust is whoever runs the host.
+                No. Joining by the code encrypts your messages between your phone and the host, so someone else on
+                the Wi-Fi can't read them. The host can, the same way a chat server can. That's what lets the host
+                moderate, and it can keep messages encrypted on disk under a key that stays on that device. So the
+                person you trust is whoever runs the host.
+              </p>
+              <p>
+                There's one gap we can't close on plain local Wi-Fi. LOAM itself loads into your browser
+                unencrypted, so someone who can tamper with the network's traffic could hand you a changed copy
+                that reads your messages. Pictures and files are downloaded unencrypted too, unless the host
+                requires encrypted connections. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
               </p>
             </details>
             <details class="faq-item" id="faq-mesh">
@@ -570,7 +576,8 @@
               <p>
                 No. Each network has one host, and phones connect to it over Wi-Fi. To cover more ground, link a
                 second host to the first and their public channels join up. Direct messages and private channels
-                stay on the host they started on.
+                stay on the host they started on. Linked networks can also carry sealed messages for each other,
+                but that's experimental and off unless the host turns it on.
               </p>
             </details>
             <details class="faq-item" id="faq-apk">
