@@ -701,6 +701,42 @@ code {
   font-weight: 500;
 }
 
+/* ---- Google Play badge -------------------------------------------------------
+   Google's own artwork, unaltered: 646x250 with 41px of transparent space on every side
+   around the 168px-tall badge. Sized so the badge itself is as tall as a .btn, with the
+   transparent margin pulled in so it lines up with the buttons beside it. */
+
+.play-badge {
+  --badge: 52px;
+  display: inline-flex;
+  flex: none;
+  border-radius: calc(var(--badge) * 0.12);
+  transition: transform 0.15s ease;
+}
+
+.play-badge img {
+  display: block;
+  width: auto;
+  max-width: none;
+  height: calc(var(--badge) * 250 / 168);
+  margin: calc(var(--badge) * -41 / 168);
+}
+
+.play-badge:hover {
+  transform: translateY(-1px);
+}
+
+.play-badge:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .play-badge {
+    transition: none;
+  }
+}
+
 /* ---- Sections -------------------------------------------------------------- */
 
 .section {
