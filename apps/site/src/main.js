@@ -101,7 +101,7 @@ if (posthogKey) {
     advanced_disable_decide: true,
   });
 
-  // The interest signals beyond a pageview: a download or GitHub click, and copying the npx command.
+  // The interest signals beyond a pageview: a Google Play, download or GitHub click, and copying the npx command.
   // Resolve the real hostname (not a substring match) so a link such as `https://evil.example/github.com`
   // can't mis-fire an event (CodeQL: incomplete URL sanitization).
   document.addEventListener("click", (event) => {
@@ -121,6 +121,10 @@ if (posthogKey) {
       return;
     }
     const host = url.hostname.toLowerCase();
+    if (host === "play.google.com") {
+      posthog.capture("play_store_click");
+      return;
+    }
     if (host !== "github.com" && !host.endsWith(".github.com")) {
       return;
     }
