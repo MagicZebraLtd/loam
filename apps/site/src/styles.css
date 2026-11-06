@@ -701,6 +701,42 @@ code {
   font-weight: 500;
 }
 
+/* ---- Google Play badge -------------------------------------------------------
+   Google's own artwork, unaltered: 646x250 with 41px of transparent space on every side
+   around the 168px-tall badge. Sized so the badge itself is as tall as a .btn, with the
+   transparent margin pulled in so it lines up with the buttons beside it. */
+
+.play-badge {
+  --badge: 52px;
+  display: inline-flex;
+  flex: none;
+  border-radius: calc(var(--badge) * 0.12);
+  transition: transform 0.15s ease;
+}
+
+.play-badge img {
+  display: block;
+  width: auto;
+  max-width: none;
+  height: calc(var(--badge) * 250 / 168);
+  margin: calc(var(--badge) * -41 / 168);
+}
+
+.play-badge:hover {
+  transform: translateY(-1px);
+}
+
+.play-badge:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .play-badge {
+    transition: none;
+  }
+}
+
 /* ---- Sections -------------------------------------------------------------- */
 
 .section {
@@ -1206,9 +1242,9 @@ code {
   font-size: 15.5px;
 }
 
-/* ---- iPhone ---------------------------------------------------------------- */
+/* ---- FAQ ------------------------------------------------------------------- */
 
-.iphone-grid {
+.faq-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: clamp(32px, 5vw, 64px);
@@ -1216,66 +1252,95 @@ code {
 }
 
 @media (min-width: 960px) {
-  .iphone-grid {
-    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  .faq-grid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   }
 
-  .iphone-head {
+  .faq-head {
     position: sticky;
     top: 112px;
   }
 }
 
-.iphone-head .section-lede {
+.faq-head .section-lede {
   margin-top: 18px;
 }
 
-.reasons {
+.faq-list {
   display: grid;
-  gap: 16px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  counter-reset: reason;
+  gap: 12px;
 }
 
-.reason {
-  position: relative;
-  padding: 26px 26px 26px 84px;
+.faq-item {
   border-radius: var(--radius);
   background: var(--surface);
   border: 1px solid var(--line);
-  counter-increment: reason;
+  scroll-margin-top: 96px;
 }
 
-.reason::before {
-  content: counter(reason);
+.faq-item summary {
+  position: relative;
+  padding: 22px 64px 22px 26px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  list-style: none;
+  cursor: pointer;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::after {
+  content: "+";
   position: absolute;
-  top: 24px;
-  left: 26px;
+  top: 50%;
+  right: 22px;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 30px;
+  height: 30px;
+  margin-top: -15px;
+  border-radius: 10px;
   background: var(--moss-soft);
   color: var(--moss);
-  font-family: var(--font-display);
-  font-size: 19px;
-  font-weight: 700;
+  font-family: var(--font-body);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1;
 }
 
-.reason h3 {
-  font-size: 21px;
-  margin-bottom: 8px;
+.faq-item[open] summary::after {
+  content: "\2212";
 }
 
-.reason p {
+.faq-item summary:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+.faq-item p {
+  padding: 0 26px;
   color: var(--ink-2);
   font-size: 15.5px;
 }
 
-.reason code {
+.faq-item p:last-child {
+  padding-bottom: 24px;
+}
+
+.faq-item p + p {
+  margin-top: 12px;
+}
+
+.faq-item a {
+  color: var(--moss);
+}
+
+.faq-item code {
   padding: 1px 6px;
   border-radius: 6px;
   background: var(--moss-soft);
@@ -1285,13 +1350,17 @@ code {
 }
 
 @media (max-width: 520px) {
-  .reason {
-    padding: 22px;
+  .faq-item summary {
+    padding: 18px 56px 18px 20px;
+    font-size: 18px;
   }
 
-  .reason::before {
-    position: static;
-    margin-bottom: 14px;
+  .faq-item summary::after {
+    right: 16px;
+  }
+
+  .faq-item p {
+    padding: 0 20px;
   }
 }
 
