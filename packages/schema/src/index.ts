@@ -593,7 +593,7 @@ export const LlmModelsResponseSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), models: z.array(z.string().min(1).max(LLM_MODEL_MAX_LENGTH)).max(500) }),
   z.object({
     ok: z.literal(false),
-    code: z.enum(["llm_unreachable", "llm_unauthorized", "llm_bad_response", "llm_not_allowed"]),
+    code: z.enum(["llm_unreachable", "llm_unauthorized", "llm_bad_response", "llm_not_allowed", "llm_unencrypted"]),
   }),
 ]);
 export type LlmModelsResponse = z.infer<typeof LlmModelsResponseSchema>;
@@ -1648,6 +1648,7 @@ export const SERVER_ERROR_CODES = [
   "message_removed",
   "assistant_busy",
   "llm_cloud_not_allowed",
+  "llm_unencrypted_not_allowed",
   "invalid_llm_models_request",
   "internal_error",
   "dm_unavailable",

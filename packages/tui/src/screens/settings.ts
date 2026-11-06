@@ -88,6 +88,7 @@ const LLM_TEST_WORDS: Record<string, string> = {
   llm_unauthorized: "The service refused the key.",
   llm_bad_response: "The service answered, but not in a way loam understands. Check the address.",
   llm_not_allowed: "A hardened network can only use a service on this computer or the local network.",
+  llm_unencrypted: "This network only reaches a service on another computer over HTTPS. Use an https:// address.",
 };
 
 /** The host name a cloud service's messages go to, for the note; the URL as typed if it won't parse. */

@@ -335,9 +335,10 @@ export function applyConfigUpdate(
     return { ok: false, status: 400, error: "Invalid config values" };
   }
 
-  // A hardened network never sends its members' messages to a cloud service (docs/09): refuse the save,
-  // with a code the admin screen words, rather than persist a backend `ensureBotUser` would then skip.
-  const refusal = llmProviderRefusal(next);
+  // A hardened network never sends its members' messages to a cloud service (docs/09), and a network whose
+  // launcher requires encryption never sends them over plain HTTP to another machine: refuse the save, with
+  // a code the admin screen words, rather than persist a backend `ensureBotUser` would then skip.
+  const refusal = llmProviderRefusal(next, ctx.options);
   if (refusal) {
     return { ok: false, status: 400, error: refusal };
   }

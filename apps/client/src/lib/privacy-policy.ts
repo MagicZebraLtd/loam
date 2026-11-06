@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "25 October 2026";
+export const PRIVACY_POLICY_UPDATED = "6 November 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -118,10 +118,13 @@ export const PRIVACY_POLICY: PolicySection[] = [
         kind: "p",
         text:
           "Normally nothing leaves the host device except the messages delivered to the people on that network, " +
-          "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts the " +
-          "messages between your device and the host, and the pictures and files you upload. Downloading " +
-          "pictures and files is encrypted too when the host requires encrypted connections; otherwise they are " +
-          "downloaded unencrypted over the local network. The encryption does not protect against someone who " +
+          "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts everything " +
+          "between your device and the host: messages, pictures and files, both ways. A network hosted on the " +
+          "Android app only lets in people who joined by the code. On a network hosted on a computer, someone " +
+          "who types the address instead gets less protection unless the host requires encryption: their " +
+          "messages are encrypted with a key their device can't check, so someone who can alter the network " +
+          "traffic could read them, and their pictures and files are sent unencrypted. The encryption does not " +
+          "protect against someone who " +
           "can alter the network traffic while LOAM loads on your device: they could give your device a changed " +
           "copy of LOAM that reads your messages. Data leaves the host device only if the host turns on one of " +
           "these:",

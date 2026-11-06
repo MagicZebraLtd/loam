@@ -27,7 +27,12 @@
 > — a QR-joiner gets the `#k=` key and encrypts automatically, plaintext clients still work — so the
 > default prevents *accidental* plaintext for normal QR joiners at no UX cost (it does not block a client
 > that deliberately skips the QR; `required` is what refuses plaintext outright). Every named profile encrypts: `open`/`standard` force
-> `optional`, `hardened` forces `required`. `required` mode
+> `optional`, `hardened` forces `required`. **The Android host always requires it:** its launcher sets
+> `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` (`AppOptions.requireTransportEncryption`), which projects the
+> effective mode to `required` at read time whatever the profile says (the stored config keeps the
+> operator's choice, as with Developer Mode), so a phone-hosted network refuses every client that didn't
+> join by the code, syncs sealed only, and reaches a network assistant only over HTTPS (docs/06). The
+> desktop app and `loamnet` keep the profile's mode. `required` mode
 > is deployable today: a client with no QR-delivered host key simply cannot connect, so there is no
 > silent downgrade to plaintext. **Anti-replay is now built:** every sealed REST request carries a
 > per-session monotonic sequence number *inside* its authenticated envelope, and the server enforces a

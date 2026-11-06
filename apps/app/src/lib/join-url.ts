@@ -92,3 +92,14 @@ export function withInviteCode(fragment: string, code: string | undefined): stri
 export function typedAddress(url: string): string {
   return url.split('#')[0]!;
 }
+
+/**
+ * The host's other addresses as full join URLs carrying the same fragment as `joinUrl`, for the "also at"
+ * line. Every network the app hosts requires encryption, so a bare address opens only the "scan the code"
+ * screen; with the `#k=` key written out, someone can still type a working one.
+ */
+export function alternateJoinUrls(addresses: string[], joinUrl: string): string[] {
+  const hash = joinUrl.indexOf('#');
+  const fragment = hash === -1 ? '' : joinUrl.slice(hash);
+  return addresses.map((address) => `http://${address}:${SERVER_PORT}${fragment}`);
+}

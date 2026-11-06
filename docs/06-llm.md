@@ -74,6 +74,14 @@ already-cloud node to hardened), `ensureBotUser` treats a hand-edited config.jso
 "assistant off" with a boot warning, and the models endpoint answers `llm_not_allowed`. Ollama is held to
 the same rule (its address can point anywhere); only the on-device model is local by construction.
 
+**Networks the Android app hosts reach another machine only over HTTPS.** The Android launcher sets
+`LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` (`AppOptions.requireTransportEncryption`, see docs/08), and on such a
+network `llmProviderRefusal` also refuses a plain `http://` address for either backend unless it is loopback
+(`unencryptedBackendRefused`): the save gets `llm_unencrypted_not_allowed`, a hand-edited config.json boots
+with the assistant off and a warning, the models endpoint answers `llm_unencrypted` (so the key never goes
+over plain HTTP either), and no redirect is followed (one could turn HTTPS into HTTP). An Ollama or LM Studio
+server on the LAN therefore needs HTTPS in front of it to serve a phone-hosted network.
+
 **Where it is set up.** The web admin page's Assistant panel (`LlmPanel.tsx`: a "where the assistant runs"
 picker, a service preset, address, key field with Clear, Test connection that fills a model list, and a
 note naming the host the messages go to when the service is a cloud one); the `loamnet` TUI's Settings

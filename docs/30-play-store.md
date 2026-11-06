@@ -75,6 +75,27 @@ device checks below, and size headroom before a production track.
   "user-initiated transfer" exemption doesn't obviously apply; the service-provider exemption needs a
   developer-instructed processor, which an operator's own peer isn't. Loopback traffic between the launcher
   and the embedded server stays inside the app and isn't sharing.
+- **Data safety answers (for the first release after 0.7.0; written 6 November 2026).** Google's definitions (support answer 10787469):
+  *collected* means "transmitting data from your app off a user's device", to anyone; *shared* means a
+  transfer "to a third party", which is "any organization" other than the developer and its service
+  providers, with exemptions for a "specific user-initiated action, where the user reasonably expects the
+  data to be shared" and for "prominent in-app disclosure and consent". So:
+  - **Collected (purpose App functionality only):** Messages (other in-app messages), Other user-generated
+    content, Name, User IDs: required. Photos, Files and docs: optional (a member chooses to attach one).
+    These leave the host phone for the other members' phones, and for a linked node or an assistant the host
+    sets up. LOAM isn't end-to-end encrypted (the host reads everything), so that exemption doesn't apply.
+  - **Shared: none.** Members are people, not organisations, and see what was posted to them. A linked node
+    is a user-initiated transfer (the host links it with a single-use code). An online assistant needs each
+    member's acknowledgement of where the messages go before the composer opens (docs/06), which is the
+    disclosure-and-consent exemption.
+  - **Location: never declare it.** LOAM doesn't read or send location; Android 12 only makes the hotspot
+    ask for the permission.
+  - **Encrypted in transit: Yes** once that release is live: it forces `required` transport encryption on every network
+    the app hosts (docs/08): content goes only through sealed sessions (X25519 + XChaCha20-Poly1305, keyed
+    from the code), sync is sealed both ways, and a network assistant is HTTPS or the phone itself (docs/06).
+    Not before: 0.7.0 and earlier accept unencrypted clients on Community networks. What stays readable on
+    the wire is the web app's own code and the public bootstrap (network name and settings, no member data),
+    plus a tunnel request's size and timing.
 - **Open question for the owner: Play's AI-generated content policy.** The assistant (on-device, Ollama or
   an OpenAI-compatible service, all off by default) generates text in DMs. Play's policy on apps that
   generate content with AI may apply, and it may expect a way to report offensive AI output inside the

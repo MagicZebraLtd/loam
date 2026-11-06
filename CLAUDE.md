@@ -461,7 +461,12 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   through the tunnel (`encryptedImageUrl`/`useEncryptedImage` → cached `blob:` URL); optional/off serve
   images in clear. So required mode leaves only "a tunnel request happened" + ciphertext size/timing as
   wire metadata. `required` is what `hardened` forces; `open`/`standard` both force `optional` (with
-  identical enforced axes they now differ only in intent). **Secure by default:** a fresh node defaults to
+  identical enforced axes they now differ only in intent). **The Android host always requires it:** main.js
+  sets `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` → `AppOptions.requireTransportEncryption`, a read-time projection
+  (like Developer Mode's, which still wins) that makes `effectiveTransportEncryption()` `required` whatever the
+  profile; on such a network `llmProviderRefusal` also refuses a plain-`http://` assistant that isn't loopback
+  (`llm_unencrypted_not_allowed`, models endpoint `llm_unencrypted`, no redirects), so Play's Data safety can
+  say "encrypted in transit" (docs/30). Desktop and `loamnet` keep the profile's mode. **Secure by default:** a fresh node defaults to
   `optional` — seamless because a QR-joiner (the normal path) gets the `#k=` key and encrypts automatically.
   Be precise about the guarantee: `optional` makes the **QR-join path** encrypted-by-default, but a client
   that skips the QR (a manually-typed URL, curl) can **still connect in plaintext** — `optional` accepts
