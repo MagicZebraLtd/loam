@@ -200,9 +200,10 @@ computer, the same settings live in the admin area as **security profiles**
   handshake and XChaCha20-Poly1305), so someone listening on the Wi-Fi can't read the messages. The app
   itself still arrives over plain HTTP, so someone who can change traffic on the network while the page
   loads could give a phone a tampered copy that reads its messages (the host app's own window isn't
-  exposed to that). By default, pictures and files are downloaded unencrypted, so someone on the same
-  Wi-Fi could see them; a network that requires encryption (the Private one does) encrypts those too,
-  and refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
+  exposed to that). Pictures and files are encrypted too. Someone who types the address instead of
+  scanning gets less: their messages are encrypted under the key the host announces, which their phone
+  can't check, and their pictures and files travel unencrypted. A network that requires encryption (the
+  Private one does) refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
   can't get a certificate, so LOAM serves plain HTTP and encrypts inside the app instead, using the
   [noble](https://paulmillr.com/noble/) libraries and the host key carried in the code. It has had no
   outside security audit yet.

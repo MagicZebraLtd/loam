@@ -568,8 +568,10 @@
               <p>
                 There's one gap we can't close on plain local Wi-Fi. LOAM itself loads into your browser
                 unencrypted, so someone who can tamper with the network's traffic could hand you a changed copy
-                that reads your messages. And someone who types the address instead of scanning the code connects
-                unencrypted, unless the host requires encrypted connections. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
+                that reads your messages. And someone who types the address instead of scanning the code gets less:
+                their messages are still encrypted, but with a key their phone can't check against the code, so
+                someone who can tamper with the traffic could read them, and their pictures and files travel
+                unencrypted. A host that requires encrypted connections asks them to scan the code instead. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
               </p>
             </details>
             <details class="faq-item" id="faq-mesh">
