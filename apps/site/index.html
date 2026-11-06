@@ -490,7 +490,7 @@
             </li>
             <li>
               <strong>Encrypted connections</strong>
-              <span>Joining by the code encrypts messages between your phone and the host, so someone listening on the Wi-Fi can't read them. Pictures and files are encrypted too on a network that requires it.</span>
+              <span>Joining by the code encrypts everything between your phone and the host, pictures and files included, so someone listening on the Wi-Fi can't read it.</span>
             </li>
             <li>
               <strong>Encrypted storage</strong>
@@ -560,16 +560,16 @@
             <details class="faq-item" id="faq-encryption">
               <summary>Is it end-to-end encrypted?</summary>
               <p>
-                No. Joining by the code encrypts your messages between your phone and the host, so someone else on
-                the Wi-Fi can't read them. The host can, the same way a chat server can. That's what lets the host
+                No. Joining by the code encrypts everything between your phone and the host, pictures and files
+                included, so someone else on the Wi-Fi can't read it. The host can, the same way a chat server can. That's what lets the host
                 moderate, and it can keep messages encrypted on disk under a key that stays on that device. So the
                 person you trust is whoever runs the host.
               </p>
               <p>
                 There's one gap we can't close on plain local Wi-Fi. LOAM itself loads into your browser
                 unencrypted, so someone who can tamper with the network's traffic could hand you a changed copy
-                that reads your messages. Pictures and files are downloaded unencrypted too, unless the host
-                requires encrypted connections. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
+                that reads your messages. And someone who types the address instead of scanning the code connects
+                unencrypted, unless the host requires encrypted connections. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
               </p>
             </details>
             <details class="faq-item" id="faq-mesh">
