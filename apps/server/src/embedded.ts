@@ -168,6 +168,9 @@ export async function startEmbeddedServer(launcher: EmbeddedServerOptions = {}):
     // The launcher's per-boot host token (`LOAM_HOST_TOKEN`, minted in main.js): forces the `hostDevice`
     // admin bootstrap and gates the loopback mesh bridge — see `AppOptions.hostToken`. Never logged.
     hostToken: launcher.hostToken || process.env.LOAM_HOST_TOKEN || undefined,
+    // The Android launcher (main.js) sets this so its networks always require encryption. See
+    // `AppOptions.requireTransportEncryption`.
+    requireTransportEncryption: process.env.LOAM_REQUIRE_TRANSPORT_ENCRYPTION === "1",
     logStream: launcher.logStream,
     requestLogging: launcher.requestLogging,
   });

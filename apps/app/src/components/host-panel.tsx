@@ -9,7 +9,7 @@ import { Spacing } from '@/constants/theme';
 import type { HostMode } from '@/lib/host-mode';
 import { androidApiLevel, hotspotAsksForLocation } from '@/lib/hotspot-permissions';
 import { t, type AppCatalogKey } from '@/lib/i18n';
-import { typedAddress } from '@/lib/join-url';
+import { alternateJoinUrls, typedAddress } from '@/lib/join-url';
 
 /** Live host state, supplied by the embedded server + hotspot native module (initiative 4). */
 export type HotspotInfo = {
@@ -122,13 +122,15 @@ export function HostPanel({ state }: { state: HostState }) {
 }
 
 /** "If that doesn't load, this host is also at: …" — only when there is somewhere else to try. */
-function AlsoAt({ addresses }: { addresses?: string[] }) {
+/** The host's other addresses, each as a URL carrying the join key (`joinUrl`'s fragment): every network the
+ * app hosts requires encryption, so a bare address would only open the "scan the code" screen. */
+function AlsoAt({ addresses, joinUrl }: { addresses?: string[]; joinUrl: string }) {
   if (!addresses || addresses.length === 0) {
     return null;
   }
   return (
     <ThemedText type="small" themeColor="textSecondary" style={styles.manual}>
-      {t('host.alsoAt', { addresses: addresses.join(', ') })}
+      {t('host.alsoAt', { addresses: alternateJoinUrls(addresses, joinUrl).join(', ') })}
     </ThemedText>
   );
 }
@@ -158,7 +160,7 @@ function WifiJoin({ state }: { state: HostState }) {
           <ThemedText type="code" style={styles.manual}>
             {typedAddress(state.serverUrl)}
           </ThemedText>
-          <AlsoAt addresses={state.addresses} />
+          <AlsoAt addresses={state.addresses} joinUrl={state.serverUrl} />
         </>
       ) : state.status === 'starting' ? (
         <ThemedText type="small" themeColor="textSecondary" style={styles.pending}>
@@ -169,7 +171,7 @@ function WifiJoin({ state }: { state: HostState }) {
           <ThemedText type="small" themeColor="textSecondary" style={[styles.manual, styles.pending]}>
             {t('host.wifiNone')}
           </ThemedText>
-          <AlsoAt addresses={state.addresses} />
+          <AlsoAt addresses={state.addresses} joinUrl={state.manualFragment ?? ''} />
         </>
       )}
       <ThemedText type="small" themeColor="textSecondary" style={styles.manual}>
@@ -224,7 +226,7 @@ function HotspotJoin({ state }: { state: HostState }) {
             <ThemedText type="code" style={styles.manual}>
               {typedAddress(state.serverUrl)}
             </ThemedText>
-            <AlsoAt addresses={state.addresses} />
+            <AlsoAt addresses={state.addresses} joinUrl={state.serverUrl} />
           </>
         ) : state.hotspotAddress === 'searching' ? (
           <ThemedText type="small" themeColor="textSecondary" style={styles.pending}>

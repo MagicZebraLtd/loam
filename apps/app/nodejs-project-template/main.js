@@ -54,6 +54,11 @@ process.env.LOAM_DB_DRIVER = 'better-sqlite3';
 // injects it into its own WebView) and attached to this file's own bridge requests. Never logged.
 const hostToken = crypto.randomBytes(32).toString('base64url');
 process.env.LOAM_HOST_TOKEN = hostToken;
+// Every network this app hosts REQUIRES transport encryption, whatever its security profile says: joiners
+// must come in by the code (which carries the key), sync is sealed both ways, and an assistant on another
+// machine must be reached over HTTPS. So everything the network sends off the phone is encrypted, which is
+// what the Play listing's Data safety answer states (docs/30). See `AppOptions.requireTransportEncryption`.
+process.env.LOAM_REQUIRE_TRANSPORT_ENCRYPTION = '1';
 
 /** Post a status update to the React Native host screen (best-effort; never throws). */
 function notify(status, extra) {

@@ -242,4 +242,35 @@ describe("startEmbeddedServer when its port is taken", () => {
     cleanup.push(() => app.close());
     expect((await app.server.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
   });
+
+  it("requires transport encryption when the Android launcher sets LOAM_REQUIRE_TRANSPORT_ENCRYPTION", async () => {
+    for (const key of [...envKeys, "LOAM_REQUIRE_TRANSPORT_ENCRYPTION"]) {
+      saved[key] = process.env[key];
+    }
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-require-enc-test-"));
+    const clientDir = mkdtempSync(join(tmpdir(), "loam-require-enc-client-"));
+    cleanup.push(() => {
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(clientDir, { recursive: true, force: true });
+    });
+    process.env.LOAM_DATA_DIR = dataDir;
+    process.env.LOAM_CLIENT_DIST = clientDir;
+    process.env.HOST = "127.0.0.1";
+    process.env.PORT = "0";
+    process.env.LOAM_REQUIRE_TRANSPORT_ENCRYPTION = "1";
+    cleanup.push(() => {
+      if (saved.LOAM_REQUIRE_TRANSPORT_ENCRYPTION === undefined) {
+        delete process.env.LOAM_REQUIRE_TRANSPORT_ENCRYPTION;
+      } else {
+        process.env.LOAM_REQUIRE_TRANSPORT_ENCRYPTION = saved.LOAM_REQUIRE_TRANSPORT_ENCRYPTION;
+      }
+    });
+
+    const app = await startEmbeddedServer({ logStream: quiet, handleSignals: false });
+    cleanup.push(() => app.close());
+    const bootstrap = (await app.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as {
+      networkConfig: { transportEncryption: string };
+    };
+    expect(bootstrap.networkConfig.transportEncryption).toBe("required");
+  });
 });

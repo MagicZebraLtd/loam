@@ -100,6 +100,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     options.devMode ?? (process.env.LOAM_DEV_MODE === "1" || process.env.LOAM_DEV_MODE === "true");
   const isProductionBuild = process.env.NODE_ENV === "production";
   const devMode = devModeRequested && !isProductionBuild;
+  /** The launcher forces `required` transport encryption (`AppOptions.requireTransportEncryption`). */
+  const requireTransportEncryption = options.requireTransportEncryption === true;
 
   /**
    * The host advertised in the join URL: an explicit `joinHost` wins outright (a caller that
@@ -238,7 +240,10 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
    * deployment (and always on the Android host), so there the effective value is exactly the configured one.
    */
   function effectiveTransportEncryption(): TransportEncryption {
-    return devMode ? "off" : appConfig.security.transportEncryption;
+    if (devMode) {
+      return "off";
+    }
+    return requireTransportEncryption ? "required" : appConfig.security.transportEncryption;
   }
 
   /**

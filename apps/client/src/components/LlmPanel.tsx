@@ -35,6 +35,7 @@ const TEST_ERROR: Record<string, CatalogKey> = {
   llm_unauthorized: "admin.llmTestUnauthorized",
   llm_bad_response: "admin.llmTestBadResponse",
   llm_not_allowed: "admin.llmTestNotAllowed",
+  llm_unencrypted: "admin.llmTestUnencrypted",
 };
 
 /** The preset whose base URL is saved, or "custom" when the URL is the admin's own. */
