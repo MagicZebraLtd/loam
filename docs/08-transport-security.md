@@ -45,8 +45,12 @@
 > `required` mode the avatar/attachment routes are no longer exempt — a direct `<img src>` GET (which
 > can't carry the session header) is refused (401), forcing the client to fetch images through the tunnel
 > (`encryptedImageUrl` / the `useEncryptedImage` hook) and render them from a cached `blob:` object URL,
-> so image bytes are sealed on the wire like everything else. `optional` nodes (and Developer Mode) still
-> serve images directly in clear (lighter). So in `required` mode a **post-handshake REST request** reveals only that
+> so image bytes are sealed on the wire like everything else. Encryption follows how the client joined, not
+> only the node's mode: on an `optional` node a client that joined by the code also tunnels every request,
+> images included (a client holding the QR key treats the join as `required`, `transport.ts` `ensureSession`,
+> and a bound session is tunnel-only on any node, `transport-server.ts`). Only a client that typed the address
+> (no key) loads images and files from their direct URL in clear, and Developer Mode serves everything in clear.
+> So in `required` mode a **post-handshake REST request** reveals only that
 > a `POST /api/transport/tunnel` happened, plus coarse ciphertext size/timing — its method, path/query,
 > and body are all sealed. Still observable (unavoidably): the **bootstrap** — `GET /api/bootstrap` and
 > `POST /api/transport/handshake` run before a session exists — and the **WebSocket upgrade**
@@ -85,7 +89,8 @@
 > stable error code (the wire body is unauthenticated and is dropped). Every other unsealed reply is an
 > `UnsealedResponseError`. A `204` would otherwise be the one unsealed answer to a bound request, so the
 > server seals a bodyless answer to an `r: 1` request as an empty `200` (an older client still gets the
-> `204`). Images and file downloads are unaffected: in `optional` mode they load from their direct URL,
+> `204`). Images and file downloads don't use this path: a client that joined by the code fetches them
+> through the tunnel, and a typed-address client on an `optional` node loads them from their direct URL,
 > never through the sealed fetch.
 >
 > **Client pin rules (pre-release review 2026-09-25).** A `#k=` fragment only ever *establishes* a pin for
@@ -216,6 +221,14 @@ unavailable, so ship one):
   itself. Only a signed native client closes it. The host's own windows (the Android app's WebView and the
   desktop app's Electron window) load the client from loopback, so they are not exposed to it; every
   phone that joins over the LAN is.
+- ❌ Does **not** protect a client that **typed the address** (no `#k=`, no cached pin) on an `optional`
+  node, even from a *passive* listener. Its identity is the anonymous `loam_session` cookie, which rides
+  every request (sealed or not) and the WS upgrade as a plain HTTP header, and the server resolves that
+  cookie with no tie to a transport session (`getSessionUserId`). Anyone who captures one request can replay
+  the cookie in plain requests, read that member's DMs and post as them, until the cookie expires (a year).
+  Its picture and file downloads are in clear, and a first handshake that fails leaves it on plaintext with
+  no notice. docs/20 records the cookie model as an accepted residual of anonymous sessions; joining by the
+  code, or a node in `required` mode, closes it.
 - ❌ Does **not** hide plaintext **from the host** (it decrypts to relay/LLM/search). That's the E2EE
   layer, deliberately separate.
 - ❌ Does not restore the **service worker / offline PWA** (still an insecure context) — see below.

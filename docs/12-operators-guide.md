@@ -20,6 +20,15 @@ network unless you link it to another LOAM network.
 iPhones can join any network but can't host one: iOS doesn't let an app start a hotspot, and pauses apps
 in the background. A Mac can host with `npx loamnet`.
 
+**How many people.** A phone hotspot admits a limited number of devices, set by the phone, and LOAM can't
+read or raise that limit. Nobody has measured a client count or a range yet. For a larger group, host from
+a laptop or Raspberry Pi on a router (or put the phone in Wi-Fi mode on that router).
+
+**Set the clock.** Message lifetimes, timeouts, linking and mesh mail all go by the host's clock. A
+Raspberry Pi has no battery-backed clock, so off-grid it starts from roughly the time it last shut down.
+Set the date before an event (`sudo date -s "2026-11-07 09:00"`) or fit a clock module, and expect the
+clock to jump when the Pi next reaches the internet. LOAM doesn't check its own clock at start-up.
+
 ## 2. Starting a network
 
 ### On an Android phone
@@ -122,7 +131,8 @@ LOAM is built for a local network: a hotspot, a venue's Wi-Fi, a LAN. Nothing st
 on a public address (a VPS, a port forward), but then everyone who finds the address is "nearby": an `open`
 join policy lets anyone in, the identity cap is per source address, and the join QR's key is only as
 secret as the page you show it on. If you must run a node like that, set **Who can join** to approval,
-set the connection encryption to **required** (or the Hardened profile, which does both), hand out the
+set the connection encryption to **required** (or the Hardened profile, which does both; see
+**Connections** in §4 for where each host lets you change it), hand out the
 join link only to the people you mean, and expect the rate limits to be tested. It is not a hosted chat
 product and is not hardened as one.
 
@@ -156,8 +166,9 @@ the QR, and the address it gives when linking networks), and that address doesn'
 
 **The code is the whole invitation.** People connect to the same Wi-Fi or hotspot, scan the code, and
 LOAM opens in their browser. Nothing to install, no account, and the code carries the network's
-encryption key, so their messages are encrypted from the first request. (Pictures and files are
-encrypted too only when the network requires encryption: see **Connections** in [§4](#4-shaping-the-network).)
+encryption key, so everything between their phone and the host is encrypted from the first request,
+pictures and files included. Someone who types the address instead gets much less: see **Connections** in
+[§4](#4-shaping-the-network).
 
 - **From the host phone:** **Invite people** in the host menu shows the codes. On Hotspot there are two, the hotspot's
   Wi-Fi first and then LOAM; on Wi-Fi there's one. The address is printed beside it for anyone who'd
@@ -190,14 +201,19 @@ until you switch back to **Custom** ([docs/09](09-security-profiles.md)):
 |---|---|---|---|---|
 | **Open** / **Standard** | anyone | until deleted | off | encrypted for everyone who scans |
 | **Hardened** (the Private network) | approved first | 1 hour by default (a channel can only be shorter) | on | encrypted only; others refused |
-| **Custom** (the default) | your choice | your choice | your choice | your choice |
+| **Custom** (the default) | your choice | your choice | your choice | your choice (see **Connections**) |
 
 (Open and Standard currently set the same things.)
 
-**Connections.** **Optional** encrypts the messages of everyone who joins by scanning, but downloads
-pictures and files unencrypted, and still lets in a device that typed the address by hand, unencrypted.
-**Required** encrypts pictures and files too, refuses those devices, and hides which pages anyone asks
-for. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
+**Connections.** **Optional** encrypts everything for everyone who joins by scanning, pictures and files
+included, and hides which pages they ask for. It still lets in a device that typed the address by hand,
+and that device gets much less: its sign-in cookie travels unencrypted, so anyone listening on the Wi-Fi
+can copy it and read or post as that person, and its pictures and files download unencrypted.
+**Required** refuses those devices and asks them to scan the code. Optional is the default. The web admin
+and the desktop app reach Required only through the Hardened profile (the desktop app shows the current
+setting); the terminal UI's **Settings** screen changes it on its own, as does
+`security.transportEncryption` in `config.json`. Leaving Hardened for Custom keeps Required, and the web
+admin has no control to turn it back to Optional. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
 released app) runs unencrypted, and it shows everyone a red warning ([docs/08](08-transport-security.md)).
 Neither setting protects against someone on the Wi-Fi who can alter traffic while a phone loads LOAM: the
 page itself arrives over plain HTTP, so they could hand that phone a changed copy (docs/08, threat 4). On an
@@ -223,10 +239,10 @@ confirm. Encryption applies to a new database, so switching erases what's on the
 
 | Action | Who | Effect |
 |---|---|---|
-| **Ban / Unban** | admin, moderator | Locks the person out and ends their sessions. |
+| **Ban / Unban** | admin, moderator | Takes away this identity's access and ends its sessions. On a network anyone can join, the same person can come back under a new name: a ban is not a lockout. To keep someone out, require approval to join. |
 | **Shadow-ban** | admin, moderator | They can still post, but only they see their new messages. |
 | **Timeout** | admin, moderator | Mutes them for up to 7 days, timed on the host's clock. |
-| **Remove a message** | admin, moderator | Readers see "removed by a moderator" (with an optional reason); it can't be edited, replied to or reacted to afterwards. |
+| **Remove a message** | admin, moderator | From the report queue only, in one tap with no confirmation and no reason (the server accepts an optional reason; the app sends none). Readers see "removed by a moderator", its pictures and files are deleted, and it can't be edited, replied to or reacted to afterwards. It can't be undone. A moderator has no remove action in conversations themselves; there, only an admin or the message's author has **Delete**. |
 | **Moderator / Greeter role** | admin | Moderation powers, or letting people in. |
 | **Make admin** | admin | Promotes someone to admin. There's no demote: see the end of this guide. |
 | **Delete a message** | admin (any), author (their own, if nobody else has replied) | Removes it here, and a linked network won't copy it back. A copy a linked network already pulled stays there: deletions aren't sent to it. |
@@ -271,9 +287,18 @@ already pulled: an Emergency reset here doesn't reach it.
 
 ## 7. Emergency reset
 
-Erasing a network deletes every message, person, picture and file, and tells every phone connected to it
-to clear its copy and show a neutral disconnected screen. A phone that was offline clears its copy the
-next time it reaches the network.
+Erasing a network deletes every message, person, picture and file on the host, and tells every phone
+connected to it to clear its copy and show a neutral disconnected screen. A phone that was offline clears
+its copy the next time it reaches the network at the same address. What it doesn't reach:
+
+- **A copy saved under an earlier address.** The hotspot's address can change when the host phone
+  restarts, and a computer that found its port taken uses the next free one. A browser keeps its copy
+  under the old address until its site data is cleared.
+- **Linked networks.** They keep the public channels they pulled, and hand them back (below).
+- **Browser caches.** On an unencrypted network, pictures a phone loaded directly (typed-address joiners)
+  can stay in its browser's HTTP cache. With `loamnet`, the browser you opened as admin is an ordinary
+  browser and keeps its own unencrypted copy until the reset reaches it.
+- **Backups** of the host device (Time Machine, File History and the like).
 
 - **On the host phone:** **Emergency reset** is the last item in the host menu, in red, and also at the
   bottom of **Encryption**. Press and hold for three seconds. When it has finished, LOAM closes
@@ -282,11 +307,14 @@ next time it reaches the network.
 - **From the admin area:** **Emergency Reset**, once enabled there (the Hardened profile enables it).
   The settings survive, so the network starts again empty. Sync settings survive too: if this network is
   linked, the next sync round pulls the linked networks' public channels back in. To keep it empty, turn
-  sync off or remove the peers first. On a computer using a fixed passphrase, the shared mesh token isn't
-  kept (it's never written to disk unencrypted): set it again before syncing with networks that need it.
+  sync off or remove the peers first. When the reset has to restart LOAM with a new key (the host phone and
+  the desktop app on an encrypted network with a fixed key), the sync token and an online assistant's API
+  key aren't carried over, since they're never written to disk unencrypted: sync is turned off if it used
+  a token, and the online assistant is switched off. Set them again afterwards.
 - **Without logging in:** set a **panic token** (16 characters or more) in the same panel, and a request
   to `POST /api/panic` with it erases the network, from a bookmark or another device. The token is stored
-  hashed, and the address answers "not found" unless a token is set.
+  hashed. It works only while Emergency Reset is enabled: the address answers "not found" unless both are
+  set, and a token left in place after Emergency Reset is turned off looks exactly like no token.
 
 **How thorough it is.** With an encrypted database, the files are deleted and the key is replaced (on the
 host phone, and on a computer using a key that lives only in memory), so whatever is left on the storage
