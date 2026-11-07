@@ -410,6 +410,12 @@ export const NetworkConfigSchema = z.object({
   joinPolicy: JoinPolicySchema,
   /** The node's active security posture, surfaced so the client can gate secure-only affordances. */
   securityProfile: SecurityProfileSchema,
+  /**
+   * The effective node-wide message retention (`retention.messageTtlMs` after the security profile's preset),
+   * absent when messages are kept. The client drops cached messages past it (and past a channel's own
+   * shorter `messageTtlMs`), so a device that was away when the node's reaper ran doesn't keep them.
+   */
+  messageTtlMs: z.number().int().positive().optional(),
   /** App-layer transport-encryption posture (docs/08), so the client knows whether to handshake. */
   transportEncryption: TransportEncryptionSchema,
   /** The host's static X25519 public key (base64url) for the transport handshake, when transport

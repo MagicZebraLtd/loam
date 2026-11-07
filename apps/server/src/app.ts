@@ -843,6 +843,9 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
         (effectiveAdminBootstrap() === "passphrase" && !!appConfig.admin.passphrase),
       joinPolicy: appConfig.access.joinPolicy,
       securityProfile: appConfig.security.profile,
+      // The retention the reaper applies (a profile's preset is already merged in), so clients prune their
+      // own copies by age too (docs/07).
+      ...(appConfig.retention.messageTtlMs ? { messageTtlMs: appConfig.retention.messageTtlMs } : {}),
       // Report the EFFECTIVE posture (Developer Mode forces "off"), matching what's actually enforced.
       transportEncryption: effectiveTransportEncryption(),
       // Publish the host's static public key only when transport encryption is in play, so the client

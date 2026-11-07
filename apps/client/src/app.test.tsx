@@ -77,11 +77,13 @@ interface NodeOptions {
   claimStatus?: number;
   /** What `/api/bootstrap` answers instead of a well-formed bootstrap. */
   bootstrapBody?: unknown;
+  /** Flags to change from the default network config. */
+  networkConfig?: Partial<NetworkConfig>;
 }
 
 function stubNode(options: NodeOptions = {}) {
   let currentUser = options.currentUser ?? me;
-  const bootstrap = { joinUrl: "http://node.test/", websocketPath: "/ws", networkConfig };
+  const bootstrap = { joinUrl: "http://node.test/", websocketPath: "/ws", networkConfig: { ...networkConfig, ...options.networkConfig } };
   const fetchMock = vi.fn(async (input: string, _init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/admin/claim") {
@@ -221,6 +223,35 @@ describe("identity-change purge at boot", () => {
     // The cached block list went with it.
     expect((await getAllRecords<{ id: string }>("sync")).map((record) => record.id)).not.toContain("blockList");
     expect(host.textContent).not.toContain("the previous identity's cached post");
+  });
+});
+
+describe("message retention on this device (review 2026-11-07 F-030)", () => {
+  const HOUR = 3_600_000;
+  const aged = (id: string, ageMs: number, body: string): Message => ({ ...post(id, troll.id, body), createdAt: Date.now() - ageMs }) as Message;
+
+  it("drops cached messages past the remembered TTL before anything renders, even if the node no longer says", async () => {
+    localStorage.setItem(CONFIRMED_USER_KEY, me.id);
+    await seedCache({ messages: [aged("old", 2 * HOUR, "expired words"), aged("new", 60_000, "recent words")] });
+    await putRecord("sync", { id: "retention", messageTtlMs: HOUR });
+    resetLocalStoreForTests();
+    stubNode({ blocks: "hang" });
+
+    const host = await boot("/channel/general");
+    expect(host.textContent).toContain("recent words");
+    expect(host.textContent).not.toContain("expired words");
+    expect((await getAllRecords<Message>("messages")).map((message) => message.id)).toEqual(["new"]);
+  });
+
+  it("drops cached messages past the TTL the node reports, and remembers it for an offline start", async () => {
+    localStorage.setItem(CONFIRMED_USER_KEY, me.id);
+    await seedCache({ messages: [aged("old", 2 * HOUR, "expired words"), aged("new", 60_000, "recent words")] });
+    stubNode({ blocks: "hang", networkConfig: { messageTtlMs: HOUR } });
+
+    const host = await boot("/channel/general");
+    expect(host.textContent).not.toContain("expired words");
+    expect((await getAllRecords<Message>("messages")).map((message) => message.id)).toEqual(["new"]);
+    expect(await getAllRecords("sync")).toContainEqual({ id: "retention", messageTtlMs: HOUR });
   });
 });
 
