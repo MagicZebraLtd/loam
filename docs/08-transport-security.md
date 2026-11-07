@@ -77,7 +77,10 @@
 > bare aad as before, so the server stays compatible; the client and server ship together because the
 > node serves the client. Sync pullers don't send `r`, and their responses stay under `#${s}` so 0.6.0
 > peers keep working; a relabelled status there can only fail a pull, since a non-2xx answer carries no
-> data the puller imports.
+> data the puller imports. The sealed identity resume (docs/20 §9) sends `r: 1` too, and the client
+> forgets its identity token only on a `401` that opens under `POST /api/session/resume#${s}#401`; a fake
+> `401` with `x-loam-enc: 1` (both outside the AEAD) is treated as an expired session and the token is
+> kept.
 > Binding only helps if the client also refuses a reply with the seal stripped off. Under a live session
 > it accepts an unsealed reply only for the three refusals the node makes before it has looked the session
 > up: a `401` for a session it doesn't know, a `421` for a Host name it doesn't serve, and a `503` while an

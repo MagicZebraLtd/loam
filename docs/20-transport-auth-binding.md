@@ -180,6 +180,13 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   client sent `p`, the server echoes the same bytes, so no separate canonicalisation is needed and both
   compare identical values). The client **verifies** them before using the response — especially before
   storing a returned identity **token**. Closes review #3 (constant-aad tunnel responses cross-fed).
+- **The resume reply is bound to its status too** (review 2026-11-07, F-001). The resume envelope carries
+  `r: 1`, so the server seals every answer under `POST /api/session/resume#<seq>#<status>`. The client
+  discards its stored identity token only on a `401` that opens under that binding (the handler refusing
+  the token after decrypting it). An unsealed `401`, or one that doesn't open under this request's
+  sequence and status, is treated as an expired session: the client re-handshakes and keeps the token. The
+  outer status and the `x-loam-enc` header travel in the clear, so before this an on-path attacker could
+  answer a resume with a fake `401` and make the member a new person.
 - **Re-handshake resumes before retrying;** concurrent re-handshakes share one in-flight op.
 - **Unsealed tunnel replies are never used** (pre-release review 2026-09-25). On a live tunnel session the
   client acts on exactly one unsealed reply: a `401` to a `GET`/`HEAD`, which triggers one re-handshake +

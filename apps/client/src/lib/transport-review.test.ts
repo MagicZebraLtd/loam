@@ -74,7 +74,7 @@ function tunnelNode(host: Host, reply: (inner: Inner, call: number) => Response 
       const sealed = sealTransport(
         sessionKey!,
         JSON.stringify({ s, m: "POST", p: "/api/session/resume", currentUser: {} }),
-        "POST /api/session/resume",
+        `POST /api/session/resume#${s}#200`,
       );
       return new Response(JSON.stringify({ enc: sealed }), { status: 200, headers: { "x-loam-enc": "1" } });
     }
