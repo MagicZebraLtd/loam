@@ -271,6 +271,14 @@ export const pt: Translation = {
   "admin.syncTokenPlaceholder": "Deixe em branco para sincronização aberta",
   "admin.syncTokenGenerate": "Gerar",
   "admin.syncTokenNote": "Quando definido, apenas os pares que apresentarem este token exato podem sincronizar. Dê o mesmo token a cada nó da sua malha.",
+  "admin.killSwitchLinkedNote":
+    "Esta rede está ligada a outras redes. A redefinição desliga a sincronização para que elas não devolvam os canais públicos, mas elas mantêm a própria cópia, e ligar a sincronização de novo a traz de volta.",
+  "admin.syncPausedByReset":
+    "A Redefinição de emergência desligou a sincronização para que as redes ligadas não devolvessem os canais públicos apagados. Elas ainda têm a própria cópia. Ligue a sincronização de novo quando quiser.",
+  "admin.syncPausedTokenDropped":
+    "A redefinição também removeu o token compartilhado da malha. Defina o mesmo token novo em cada nó ligado antes de ligar a sincronização.",
+  "admin.syncOpenWarning":
+    "A sincronização está ligada sem token, então qualquer pessoa que alcance esta rede pode ler os canais públicos dela pela sincronização, inclusive pessoas que você baniu ou não aprovou. Gere um token e defina-o em cada nó ligado.",
   "admin.noPeers": "Ainda não há pares.",
   "admin.peerChangesNote": "As alterações de pares são aplicadas ao salvar a configuração do nó abaixo.",
   "admin.meshHeading": "Malha oportunista",

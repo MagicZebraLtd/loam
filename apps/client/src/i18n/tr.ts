@@ -271,6 +271,14 @@ export const tr: Translation = {
   "admin.syncTokenPlaceholder": "Açık eşitleme için boş bırakın",
   "admin.syncTokenGenerate": "Oluştur",
   "admin.syncTokenNote": "Ayarlandığında yalnızca tam olarak bu belirteci sunan eşler eşitlenebilir. Ağınızdaki her düğüme aynı belirteci verin.",
+  "admin.killSwitchLinkedNote":
+    "Bu ağ başka ağlara bağlı. Sıfırlama, herkese açık kanalları geri göndermesinler diye eşitlemeyi kapatır, ancak kendi kopyalarını tutarlar ve eşitlemeyi yeniden açmak onu geri getirir.",
+  "admin.syncPausedByReset":
+    "Acil sıfırlama, bağlı ağlar silinen herkese açık kanalları geri göndermesin diye eşitlemeyi kapattı. Onlarda hâlâ kendi kopyaları var. İstediğinizde eşitlemeyi yeniden açın.",
+  "admin.syncPausedTokenDropped":
+    "Sıfırlama, paylaşılan ağ belirtecini de kaldırdı. Eşitlemeyi açmadan önce her bağlı düğüme aynı yeni belirteci ayarlayın.",
+  "admin.syncOpenWarning":
+    "Eşitleme belirteç olmadan açık; bu ağa ulaşabilen herkes, yasakladığınız veya onaylamadığınız kişiler dahil, herkese açık kanalları eşitleme üzerinden okuyabilir. Bir belirteç oluşturun ve her bağlı düğüme ayarlayın.",
   "admin.noPeers": "Henüz eş yok.",
   "admin.peerChangesNote": "Eş değişiklikleri, aşağıdaki düğüm yapılandırmasını kaydettiğinizde uygulanır.",
   "admin.meshHeading": "Fırsatçı ağ (mesh)",

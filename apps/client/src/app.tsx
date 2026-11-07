@@ -474,6 +474,8 @@ function LoamApp() {
   // The node's message retention as the local store last heard it, for pruning before the node answers
   // (an offline start); the live `config` replaces it once loaded (`lib/retention.ts`).
   const [cachedNodeTtlMs, setCachedNodeTtlMs] = useState<number>();
+  // Counts live `configUpdated` events, so the admin screen re-reads the full config it edits.
+  const [configVersion, setConfigVersion] = useState(0);
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   // The app-level error notice. `persistent` marks a connectivity failure (kept until the next boot pass
   // succeeds or the user dismisses it); everything else is a one-off action error that dismisses itself.
@@ -2297,6 +2299,7 @@ function LoamApp() {
         }
 
         if (payload.type === "configUpdated") {
+          setConfigVersion((version) => version + 1);
           setConfig((previous) => {
             // A live transport-mode flip only takes effect through `ensureSession`, which runs on the
             // boot/resync path — so re-run it: an `optional`→`required` flip then
@@ -2653,6 +2656,7 @@ function LoamApp() {
       />
       {routeState.screen === "admin" ? (
         <AdminView
+          configVersion={configVersion}
           currentUser={currentUser}
           joinUrl={config?.joinUrl}
           onChannelRemoved={removeChannel}

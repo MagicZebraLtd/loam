@@ -271,6 +271,14 @@ export const sw: Translation = {
   "admin.syncTokenPlaceholder": "Acha wazi kwa usawazishaji wazi",
   "admin.syncTokenGenerate": "Tengeneza",
   "admin.syncTokenNote": "Ikiwekwa, ni wenzao wanaowasilisha tokeni hii kamili pekee wanaoweza kusawazisha. Mpe kila nodi kwenye mtandao wako tokeni ile ile.",
+  "admin.killSwitchLinkedNote":
+    "Mtandao huu umeunganishwa na mitandao mingine. Uwekaji upya huzima usawazishaji ili isirudishe chaneli za umma, lakini inabaki na nakala yake, na kuwasha usawazishaji tena kunairudisha.",
+  "admin.syncPausedByReset":
+    "Uwekaji upya wa dharura ulizima usawazishaji ili mitandao iliyounganishwa isirudishe chaneli za umma zilizofutwa. Bado zina nakala yao. Washa usawazishaji tena utakapoamua.",
+  "admin.syncPausedTokenDropped":
+    "Uwekaji upya pia uliondoa tokeni ya pamoja ya mtandao. Weka tokeni mpya ile ile kwenye kila nodi iliyounganishwa kabla ya kuwasha usawazishaji.",
+  "admin.syncOpenWarning":
+    "Usawazishaji umewashwa bila tokeni, kwa hiyo yeyote anayeweza kufikia mtandao huu anaweza kusoma chaneli zake za umma kupitia usawazishaji, wakiwemo watu uliowapiga marufuku au hukuwaidhinisha. Tengeneza tokeni na uiweke kwenye kila nodi iliyounganishwa.",
   "admin.noPeers": "Bado hakuna wenza.",
   "admin.peerChangesNote": "Mabadiliko ya wenza hutumika utakapohifadhi usanidi wa nodi hapa chini.",
   "admin.meshHeading": "Mesh ya fursa",

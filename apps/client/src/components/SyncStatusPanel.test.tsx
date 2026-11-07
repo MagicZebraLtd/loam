@@ -53,6 +53,22 @@ describe("SyncStatusPanel", () => {
     expect(host.textContent).toBe("");
   });
 
+  it("says an Emergency Reset paused sync, and that the token has to be set again when it was dropped", async () => {
+    report = {
+      enabled: false,
+      intervalMs: 60_000,
+      peers: [{ url: "http://192.168.0.10:3000", label: "Kitchen Pi" }],
+      pausedByReset: { at: 1_700_000_000_000, tokenDropped: true },
+    } as SyncStatusReport;
+
+    const host = mount(<SyncStatusPanel />);
+    await flush();
+
+    expect(host.textContent).toContain("Emergency Reset turned sync off");
+    expect(host.textContent).toContain("They still have their own copy");
+    expect(host.textContent).toContain("removed the shared mesh token");
+  });
+
   it("lists each peer's status once the report loads", async () => {
     report = {
       enabled: true,
