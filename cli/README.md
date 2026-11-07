@@ -66,6 +66,8 @@ loam [options]
 
 A value goes after a space or an equals sign (`--port 4000` or `--port=4000`). An option `loam` doesn't know stops it with a one-line message, so a typo can't start a node with settings you didn't mean.
 
+Encryption covers the host's database, not the browser you open as admin (`o`): that is an ordinary browser, and like any joiner's it keeps its own unencrypted copy of what it showed, ephemeral networks included, until an Emergency Reset reaches it or it next opens the network.
+
 For a persistent encrypted node, prefer `LOAM_DB_KEY='your passphrase' loam --encrypt`, or run bare `loam --encrypt` and type the passphrase at the prompt. Encryption needs the optional native driver, which installs with `loamnet` and ships prebuilt for 64-bit Linux, macOS and Windows, so nothing compiles during install. If it isn't available, `loam` stops before starting and prints the fix: on those platforms, reinstall `loamnet` (`npm install -g loamnet`); elsewhere (such as 32-bit Raspberry Pi OS), build the driver in place with `node-gyp`. Installing the driver separately doesn't help, because `loam` loads it from its own package.
 
 The default database driver is Node's built in `node:sqlite`, so a plain node needs no native build step. Encryption at rest (`--encrypt`) is the one feature that pulls in the optional native SQLCipher driver.
