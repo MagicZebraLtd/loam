@@ -239,6 +239,13 @@ on `127.0.0.1:3000`, which another app could give; main.js keeps a 5-minute `boo
 any reported failure. For the same reason main.js sends no host-token request (`meshRequest`: the mesh bridge,
 `/api/host/*`) until that signal has arrived, so a squatter on the port never sees the token.
 
+Once that signal has arrived the launcher never runs its key-resolution-and-boot pipeline again in that
+process (`mayRunBootPipeline` in `db-key-gate.js`, checked by `bootWithWipeResume` and the start-fresh
+listener). A new encryption mode picked in Encryption settings on a running network writes the start-fresh
+marker and waits for the next app start, as the screen says. Running the pipeline live would have applied
+the new mode's boot decisions under the open database: Ephemeral deleted `loam.db` and the media folders at
+once, and Passphrase dropped the host screen to Locked while the network kept serving.
+
 ### Message notifications
 
 The host phone's own person gets Android notifications for new messages while LOAM is in the background

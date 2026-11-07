@@ -16,7 +16,7 @@ const crypto = require('crypto');
 const rnBridge = require('rn-bridge');
 // The pure "may a key be resolved this boot?" decision, split out so it can be
 // unit-tested directly (this file itself can't be — see db-key-gate.js's doc comment).
-const { mayResolveDbKeyThisBoot } = require('./db-key-gate');
+const { mayResolveDbKeyThisBoot, mayRunBootPipeline } = require('./db-key-gate');
 // The pure three-outcome durable install of the start-fresh marker, split out for the same
 // reason (unit-testable with an injected `fs` — see start-fresh-marker.js's doc comment). Distinguishes
 // a durable install from a provably-absent write and from an INDETERMINATE post-rename commit, which a
@@ -1126,7 +1126,7 @@ rnBridge.channel.on('loam-db-start-fresh', function (payload) {
 
   // Install the marker DURABLY (fd + fsync + atomic rename + parent-dir fsync) and only ack
   // ok:true AFTER it is on stable storage. When this is requested from the ALREADY-running Settings
-  // screen the in-process reboot below is a no-op (the server is already up), so the marker must survive
+  // screen the in-process reboot below is skipped (`mayRunBootPipeline`), so the marker must survive
   // until the NEXT real app restart; a non-durable write that a power-loss then discarded would report a
   // false "scheduled" success and force the operator to repeat the destructive confirmation.
   //
@@ -1178,6 +1178,15 @@ rnBridge.channel.on('loam-db-start-fresh', function (payload) {
   } catch (postErr) {
     // RN side isn't listening for the ack — still proceed with the in-process reboot below; the operator
     // will see the recovered server's outcome via the next `loam-status` regardless.
+  }
+
+  // Requested from Encryption settings on a RUNNING network: the marker waits on disk for the next app
+  // start, as the Settings copy says. Re-running the boot pipeline now would apply the new mode's boot
+  // decisions under the live server (ephemeral deletes the open database and media at once; passphrase
+  // drops the host screen to Locked), see `mayRunBootPipeline`.
+  if (!mayRunBootPipeline(serverReadyAnnounced)) {
+    console.warn('LOAM-DB: start-fresh scheduled for the next app start (the server is already running)');
+    return;
   }
 
   // Re-attempt boot right here, in the SAME still-alive process. The marker is now on disk, so this time
@@ -1623,6 +1632,12 @@ var wipeResumeWait;
 var bootInFlight;
 
 function bootWithWipeResume() {
+  // Never run key resolution and its boot decisions (an ephemeral delete, a mode hint) under a server that
+  // is already listening, whoever asks (see `mayRunBootPipeline`).
+  if (!mayRunBootPipeline(serverReadyAnnounced)) {
+    return Promise.resolve();
+  }
+
   if (wipeResumeWait) {
     return wipeResumeWait;
   }

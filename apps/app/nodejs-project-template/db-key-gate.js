@@ -30,4 +30,19 @@ function mayResolveDbKeyThisBoot(keyClearPending) {
   return keyClearPending !== true;
 }
 
-module.exports = { mayResolveDbKeyThisBoot: mayResolveDbKeyThisBoot };
+// Pure gate for "may the key-resolution-and-boot pipeline run now?". Once the embedded server is up
+// (main.js's `serverReadyAnnounced`), running it again is never a harmless no-op: it asks RN for the key
+// under whatever mode Settings just committed and applies that mode's boot decisions BEFORE the boot hook
+// sees the server is already running. For `ephemeral` that unlinks the live database and empties
+// avatars/ and attachments/ while the server holds them open; for `passphrase` it reports
+// `db_encryption_locked`, dropping the host screen to the Locked view while the network keeps serving.
+// A mode change made on a running network therefore applies at the next app start (the start-fresh
+// marker waits on disk for it), which is what the Settings copy promises.
+//
+// @param {boolean} serverRunning — true once the embedded server has announced it is listening.
+// @returns {boolean} true when it is safe to resolve a key and run a boot this call.
+function mayRunBootPipeline(serverRunning) {
+  return serverRunning !== true;
+}
+
+module.exports = { mayResolveDbKeyThisBoot: mayResolveDbKeyThisBoot, mayRunBootPipeline: mayRunBootPipeline };
