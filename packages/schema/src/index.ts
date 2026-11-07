@@ -1542,6 +1542,15 @@ export const SyncStatusReportSchema = z.object({
       link: z.enum(["linking", "refused"]).optional(),
     }),
   ),
+  /**
+   * Present while an Emergency Reset's pause still applies: the reset turned sync off (keeping the peers) so
+   * the linked networks couldn't hand the wiped public posts back, and nobody has turned it on since. `at` is
+   * when (0 when unknown); `tokenDropped` says the reset also dropped the sync token (a reset that restarts
+   * the node can't carry it), so a new one is needed before sync goes back on.
+   */
+  pausedByReset: z
+    .object({ at: z.number().int().nonnegative(), tokenDropped: z.boolean() })
+    .optional(),
 });
 export type SyncStatusReport = z.infer<typeof SyncStatusReportSchema>;
 

@@ -3,7 +3,7 @@
 // shared AppContext.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { MeshBroadcastRequestSchema, type MeshContact, MeshIdentityCardSchema, MeshInboundRequestSchema, type MeshInboundResponse, MeshSendRequestSchema, type SealedMessage, SyncAttachmentRequestSchema, type SyncLinkCodeResponse, SyncLinkRequestSchema, type SyncLinkResponse, SyncMessagesRequestSchema } from "@loam/schema";
+import { MeshBroadcastRequestSchema, type MeshContact, MeshIdentityCardSchema, MeshInboundRequestSchema, type MeshInboundResponse, MeshSendRequestSchema, type SealedMessage, SyncAttachmentRequestSchema, type SyncLinkCodeResponse, SyncLinkRequestSchema, type SyncLinkResponse, SyncMessagesRequestSchema, type SyncStatusReport } from "@loam/schema";
 import type { AppContext } from "./app-context.js";
 import { mergeConfig } from "./config.js";
 import { errorBody } from "./errors.js";
@@ -15,6 +15,22 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 /** Most sealed blobs one `GET /api/mesh/outbound` answer hands the radio courier. */
 const MESH_OUTBOUND_BATCH = 200;
+
+/**
+ * The admin Sync panel's report: the sync engine's status plus, while it still applies, the note an
+ * Emergency Reset left when it paused sync (store-lifecycle `syncPausedByReset`).
+ */
+function adminSyncReport(ctx: AppContext): SyncStatusReport {
+  const report = ctx.sync.syncStatusReport();
+  const paused = ctx.lifecycle.syncPausedByReset();
+  if (!paused || ctx.appConfig.sync.enabled || !ctx.appConfig.sync.peers.length) {
+    return report;
+  }
+  return {
+    ...report,
+    pausedByReset: { at: paused.at, tokenDropped: paused.hadToken && ctx.appConfig.sync.token === undefined },
+  };
+}
 
 /** Register the node-to-node sync endpoints and the opportunistic-mesh endpoints (cards, contacts, send, bridge, admin sync). */
 export function registerSyncMeshRoutes(ctx: AppContext): void {
@@ -501,7 +517,7 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
       return reply.code(403).send(errorBody("Admin access required"));
     }
 
-    return ctx.sync.syncStatusReport();
+    return adminSyncReport(ctx);
   });
 
   // Show a "Link a node" code: an admin's deliberate choice to let one more node link to this one.
@@ -533,6 +549,6 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
     }
 
     await ctx.sync.runSyncLoop(true);
-    return ctx.sync.syncStatusReport();
+    return adminSyncReport(ctx);
   });
 }
