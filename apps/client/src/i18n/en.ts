@@ -279,6 +279,7 @@ export const en = {
   "admin.llmTestBadResponse": "The service answered, but not in a way LOAM understands. Check the address.",
   "admin.llmTestNotAllowed": "A hardened network can only use a service on this computer or the local network.",
   "admin.llmTestUnencrypted": "This network only reaches a service on another computer over HTTPS. Use an https:// address.",
+  "admin.llmRefusedOff": "Members can't use the assistant until this is changed.",
   "admin.llmModel": "Model",
   "admin.llmModelHint": "The model's name as the service knows it. Test the connection to pick from a list.",
   "admin.llmModelPick": "Start typing to pick from the service's list.",

@@ -10,7 +10,6 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useAppLocale } from '@/hooks/use-app-locale';
 import { displayCodeSize, EXIT_HEIGHT, HEADING_HEIGHT } from '@/lib/display-layout';
-import { typedAddress } from '@/lib/join-url';
 import { t } from '@/lib/i18n';
 
 /**
@@ -34,17 +33,19 @@ export function DisplayModeScreen({
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const wifi = state.mode === 'hotspot' && state.hotspot ? wifiPayload(state.hotspot.ssid, state.hotspot.password) : undefined;
-  const typedUrl = state.serverUrl ? typedAddress(state.serverUrl) : undefined;
-  const codes: Array<{ title: string; value: string; caption: string; ecLevel?: 'M' }> = [];
+  // The join codes carry no caption: every network the app hosts requires encryption, so the address without
+  // its `#k=` key would only open the "scan the code" screen, and the full link is too long to type off a
+  // poster (the share screen shows it, with a button to share or copy it).
+  const codes: Array<{ title: string; value: string; caption?: string; ecLevel?: 'M' }> = [];
   if (state.mode === 'hotspot') {
     if (wifi && state.hotspot) {
       codes.push({ title: t('display.step1'), value: wifi, caption: `${state.hotspot.ssid} · ${state.hotspot.password}`, ecLevel: 'M' });
     }
     if (state.serverUrl) {
-      codes.push({ title: t('display.step2'), value: state.serverUrl, caption: typedUrl ?? state.serverUrl });
+      codes.push({ title: t('display.step2'), value: state.serverUrl });
     }
   } else if (state.serverUrl) {
-    codes.push({ title: t('display.wifiTitle'), value: state.serverUrl, caption: typedUrl ?? state.serverUrl });
+    codes.push({ title: t('display.wifiTitle'), value: state.serverUrl });
   }
   const { size, sideBySide } = displayCodeSize(
     codes.length === 2 ? 2 : 1,
@@ -66,9 +67,11 @@ export function DisplayModeScreen({
                   <View key={code.title} style={styles.code}>
                     <ThemedText type="smallBold">{code.title}</ThemedText>
                     <QRCode value={code.value} size={size} ecLevel={code.ecLevel} />
-                    <ThemedText type="code" style={styles.caption} numberOfLines={2}>
-                      {code.caption}
-                    </ThemedText>
+                    {code.caption ? (
+                      <ThemedText type="code" style={styles.caption} numberOfLines={2}>
+                        {code.caption}
+                      </ThemedText>
+                    ) : null}
                   </View>
                 ))
               ) : (

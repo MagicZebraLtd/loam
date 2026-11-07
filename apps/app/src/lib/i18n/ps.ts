@@ -20,6 +20,8 @@ export const ps: Partial<AppCatalog> = {
   "host.runningWifi": "د وای‌فای له لارې کوربه‌توب",
   "host.noNetwork": "شبکه نشته",
   "host.alsoAt": "که خلاص نه شو، دا کوربه په دې پتو هم شته: {addresses}",
+  "host.fullLinkHint": "سکن نشئ کولی؟ پر ځای یې دا ټوله لینک پرانیزئ. یوازې پته نه نښلي: د # وروسته برخه اړینه ده.",
+  "host.shareLink": "لینک شریک یا کاپي کړئ",
   "host.wifiTitle": "د دې وای‌فای له لارې یوځای شئ",
   "host.wifiNetwork": "شبکه: {name}",
   "host.wifiScanNamed": "له هغې شبکې سره ونښلئ، بیا د LOAM د پرانیستلو لپاره دا سکن کړئ.",

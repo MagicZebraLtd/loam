@@ -20,6 +20,8 @@ export const uk: Partial<AppCatalog> = {
   "host.runningWifi": "Працює через Wi-Fi",
   "host.noNetwork": "Немає мережі",
   "host.alsoAt": "Якщо не відкривається, цей хост також доступний за адресою: {addresses}",
+  "host.fullLinkHint": "Не вдається відсканувати? Відкрийте це посилання повністю. Сама адреса не підключить: потрібна частина після #.",
+  "host.shareLink": "Поділитися посиланням або скопіювати",
   "host.wifiTitle": "Підключення через цей Wi-Fi",
   "host.wifiNetwork": "Мережа: {name}",
   "host.wifiScanNamed": "Підключіться до цієї мережі, потім відскануйте код, щоб відкрити LOAM.",

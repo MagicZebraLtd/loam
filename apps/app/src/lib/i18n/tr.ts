@@ -20,6 +20,8 @@ export const tr: Partial<AppCatalog> = {
   "host.runningWifi": "Wi-Fi üzerinden sunuluyor",
   "host.noNetwork": "Ağa bağlı değil",
   "host.alsoAt": "Açılmazsa bu sunucu şu adreslerde de var: {addresses}",
+  "host.fullLinkHint": "Tarayamıyor musunuz? Bunun yerine bu bağlantının tamamını açın. Yalnızca adres bağlanmaz: # işaretinden sonraki kısım gerekir.",
+  "host.shareLink": "Bağlantıyı paylaş veya kopyala",
   "host.wifiTitle": "Bu Wi-Fi ile katılın",
   "host.wifiNetwork": "Ağ: {name}",
   "host.wifiScanNamed": "O ağa bağlanın, sonra LOAM'u açmak için bunu tarayın.",

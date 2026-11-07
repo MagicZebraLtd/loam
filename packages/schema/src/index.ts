@@ -744,7 +744,17 @@ export const LoamConfigSchema = z.object({
   node: NodeIdentityConfigSchema,
   identity: IdentityConfigSchema,
   features: FeatureFlagsSchema,
-  llm: z.object({ ollama: OllamaConfigSchema, openai: OpenAiCompatibleConfigSchema, onDevice: OnDeviceLlmConfigSchema }),
+  llm: z.object({
+    ollama: OllamaConfigSchema,
+    openai: OpenAiCompatibleConfigSchema,
+    onDevice: OnDeviceLlmConfigSchema,
+    /**
+     * Read-only, like `apiKeySet`: on the config the admin API returns, why the enabled backend is kept off on
+     * this network (a hardened network and an online service; an Android-hosted network and plain HTTP to
+     * another machine). Never stored, and dropped from an update.
+     */
+    refusal: z.enum(["llm_cloud_not_allowed", "llm_unencrypted_not_allowed"]).optional(),
+  }),
   admin: AdminConfigSchema,
   killSwitch: KillSwitchConfigSchema,
   retention: RetentionConfigSchema,

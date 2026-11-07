@@ -77,8 +77,12 @@ the same rule (its address can point anywhere); only the on-device model is loca
 **Networks the Android app hosts reach another machine only over HTTPS.** The Android launcher sets
 `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` (`AppOptions.requireTransportEncryption`, see docs/08), and on such a
 network `llmProviderRefusal` also refuses a plain `http://` address for either backend unless it is loopback
-(`unencryptedBackendRefused`): the save gets `llm_unencrypted_not_allowed`, a hand-edited config.json boots
-with the assistant off and a warning, the models endpoint answers `llm_unencrypted` (so the key never goes
+by its spelling (`localhost`, 127/8, `::1`; not a `*.localhost` name, which the phone looks up in DNS)
+(`unencryptedBackendRefused`): a save that introduces one gets `llm_unencrypted_not_allowed`, a network
+that already had one (a hand-edited config.json, or a phone upgraded with a LAN Ollama) boots with the
+assistant off and a warning, the admin config carries the read-only `llm.refusal` code so the Assistant
+panel says why, and a save that leaves that backend exactly as it was still goes through (otherwise no
+other setting could be saved). The same holds for a hardened network's online service. The models endpoint answers `llm_unencrypted` (so the key never goes
 over plain HTTP either), and no redirect is followed (one could turn HTTPS into HTTP). An Ollama or LM Studio
 server on the LAN therefore needs HTTPS in front of it to serve a phone-hosted network.
 

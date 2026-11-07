@@ -231,6 +231,7 @@ export const sw: Translation = {
   "admin.llmTestBadResponse": "Huduma imejibu, lakini si kwa namna ambayo LOAM inaelewa. Kagua anwani.",
   "admin.llmTestNotAllowed": "Mtandao wenye wasifu wa Imara unaweza kutumia huduma iliyo kwenye kompyuta hii au mtandao wa karibu pekee.",
   "admin.llmTestUnencrypted": "Mtandao huu huunganishwa na huduma iliyo kwenye kompyuta nyingine kupitia HTTPS pekee. Tumia anwani ya https://.",
+  "admin.llmRefusedOff": "Wanachama hawawezi kutumia msaidizi hadi hili libadilishwe.",
   "admin.llmModel": "Modeli",
   "admin.llmModelHint": "Jina la modeli kama huduma inavyolijua. Jaribu muunganisho ili kuchagua kutoka kwenye orodha.",
   "admin.llmModelPick": "Anza kuandika ili kuchagua kutoka kwenye orodha ya huduma.",

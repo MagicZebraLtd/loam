@@ -465,7 +465,9 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   sets `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` → `AppOptions.requireTransportEncryption`, a read-time projection
   (like Developer Mode's, which still wins) that makes `effectiveTransportEncryption()` `required` whatever the
   profile; on such a network `llmProviderRefusal` also refuses a plain-`http://` assistant that isn't loopback
-  (`llm_unencrypted_not_allowed`, models endpoint `llm_unencrypted`, no redirects), so Play's Data safety can
+  (`llm_unencrypted_not_allowed`, models endpoint `llm_unencrypted`, no redirects; only a save that introduces
+  or changes a refused backend is refused, and the redacted admin config's read-only `llm.refusal` code tells the
+  Assistant panel why it is off; `*.localhost` names don't count as loopback here), so Play's Data safety can
   say "encrypted in transit" (docs/30). Desktop and `loamnet` keep the profile's mode. **Secure by default:** a fresh node defaults to
   `optional` — seamless because a QR-joiner (the normal path) gets the `#k=` key and encrypts automatically.
   Be precise about the guarantee: `optional` makes the **QR-join path** encrypted-by-default, but a client

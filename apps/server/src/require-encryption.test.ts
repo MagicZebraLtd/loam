@@ -66,6 +66,37 @@ describe("a launcher that requires transport encryption", () => {
     };
     expect(bootstrap.networkConfig.enableLLMChat).toBe(false);
     expect(forced.host.config().llm.ollama.enabled).toBe(true);
+    // The admin screen is told why it is off.
+    expect(forced.host.config().llm.refusal).toBe("llm_unencrypted_not_allowed");
+  });
+
+  it("still saves other settings on a network that upgraded with a plain-HTTP assistant", async () => {
+    const config = { llm: { ollama: { enabled: true, baseUrl: "http://192.168.1.20:11434", model: "m" } } };
+    const app = await makeApp(config, { requireTransportEncryption: true });
+
+    // The web admin sends the whole form, the unchanged assistant included, on every save (`updateConfig`
+    // parses and applies an update exactly as `PATCH /api/admin/config` does).
+    const current = app.host.config();
+    expect(current.llm.refusal).toBe("llm_unencrypted_not_allowed");
+    const save = app.host.updateConfig({ node: { ...current.node, name: "Renamed" }, llm: current.llm, features: current.features });
+    expect(save.ok).toBe(true);
+    expect(app.host.config().node.name).toBe("Renamed");
+    expect(app.host.updateConfig({ llm: { ollama: { model: "other" } } }).ok).toBe(true);
+
+    // The assistant stays off, and the read-only reason is never stored.
+    const bootstrap = (await app.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as {
+      networkConfig: { enableLLMChat: boolean };
+    };
+    expect(bootstrap.networkConfig.enableLLMChat).toBe(false);
+    expect(app.store.getConfigValue("config")).not.toContain("refusal");
+
+    // Pointing it at another plain-HTTP machine is still refused, and fixing it clears the reason.
+    expect(app.host.updateConfig({ llm: { ollama: { baseUrl: "http://192.168.1.21:11434" } } })).toEqual({
+      ok: false,
+      error: UNENCRYPTED_ASSISTANT_REFUSED,
+    });
+    expect(app.host.updateConfig({ llm: { ollama: { baseUrl: "https://ollama.example.com" } } }).ok).toBe(true);
+    expect(app.host.config().llm.refusal).toBeUndefined();
   });
 });
 
@@ -77,6 +108,8 @@ describe("unencryptedBackendRefused", () => {
     expect(unencryptedBackendRefused("http://ollama.example.com", forced)).toBe(true);
     expect(unencryptedBackendRefused("http://[fe80::1]:11434", forced)).toBe(true);
     expect(unencryptedBackendRefused("http://localhost:11434", forced)).toBe(false);
+    // A `*.localhost` name is looked up in DNS on the phone, so it may be another machine.
+    expect(unencryptedBackendRefused("http://ollama.localhost:11434", forced)).toBe(true);
     expect(unencryptedBackendRefused("http://127.0.0.1:11434", forced)).toBe(false);
     expect(unencryptedBackendRefused("http://[::1]:11434", forced)).toBe(false);
     expect(unencryptedBackendRefused("http://[::ffff:127.0.0.1]:11434", forced)).toBe(false);

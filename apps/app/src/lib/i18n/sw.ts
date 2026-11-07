@@ -20,6 +20,8 @@ export const sw: Partial<AppCatalog> = {
   "host.runningWifi": "Inahudumia kupitia Wi-Fi",
   "host.noNetwork": "Hakuna mtandao",
   "host.alsoAt": "Ikiwa haifunguki, mwenyeji huyu pia yupo kwenye: {addresses}",
+  "host.fullLinkHint": "Huwezi kuchanganua? Fungua kiungo hiki chote badala yake. Anwani pekee haiunganishi: sehemu iliyo baada ya # inahitajika.",
+  "host.shareLink": "Shiriki au nakili kiungo",
   "host.wifiTitle": "Jiunge kupitia Wi-Fi hii",
   "host.wifiNetwork": "Mtandao: {name}",
   "host.wifiScanNamed": "Unganisha kwenye mtandao huo, kisha changanua hii ili kufungua LOAM.",

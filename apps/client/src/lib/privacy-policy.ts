@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "6 November 2026";
+export const PRIVACY_POLICY_UPDATED = "7 November 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -121,11 +121,10 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts everything " +
           "between your device and the host: messages, pictures and files, both ways. A network hosted on the " +
           "Android app accepts only encrypted connections, so anyone who types the address is asked to scan the " +
-          "code. On a network hosted on a computer, someone " +
-          "who types the address instead gets less protection unless the host requires encryption: their " +
-          "messages are encrypted with a key their device can't check, so someone who can alter the network " +
-          "traffic could read them, and their pictures and files are sent unencrypted. The encryption does not " +
-          "protect against someone who " +
+          "code. On a network hosted on a computer that does not require encryption, someone who types the " +
+          "address can have their messages read and sent on their behalf by anyone listening on the Wi-Fi, " +
+          "because their sign-in cookie travels unencrypted, and their pictures and files are sent unencrypted " +
+          "too. Scanning the code avoids that. The encryption does not protect against someone who " +
           "can alter the network traffic while LOAM loads on your device: they could give your device a changed " +
           "copy of LOAM that reads your messages. Data leaves the host device only if the host turns on one of " +
           "these:",

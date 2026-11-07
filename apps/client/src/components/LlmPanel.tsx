@@ -38,6 +38,12 @@ const TEST_ERROR: Record<string, CatalogKey> = {
   llm_unencrypted: "admin.llmTestUnencrypted",
 };
 
+/** Why the saved backend is kept off on this network (`llm.refusal`, set by the server on the admin config). */
+const REFUSAL_TEXT: Record<NonNullable<LlmConfig["refusal"]>, CatalogKey> = {
+  llm_cloud_not_allowed: "error.llm_cloud_not_allowed",
+  llm_unencrypted_not_allowed: "error.llm_unencrypted_not_allowed",
+};
+
 /** The preset whose base URL is saved, or "custom" when the URL is the admin's own. */
 function presetFor(baseUrl: string): string {
   return OPENAI_COMPATIBLE_PRESETS.find((preset) => preset.baseUrl === baseUrl)?.id ?? "custom";
@@ -158,6 +164,11 @@ export function LlmPanel({
     <div className="card">
       <CardHeader level={3} title={t("admin.llmHeading")} />
       <p className="muted">{t("admin.llmIntro")}</p>
+      {llm.refusal ? (
+        <p className="form-error" role="alert">
+          {t(REFUSAL_TEXT[llm.refusal])} {t("admin.llmRefusedOff")}
+        </p>
+      ) : null}
       <label className="field">
         <span className="field-label">{t("admin.llmProvider")}</span>
         <select className="select" disabled={saving} onInput={(event) => choose(event.currentTarget.value as LlmProvider)} value={provider}>

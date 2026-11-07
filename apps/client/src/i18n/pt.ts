@@ -231,6 +231,7 @@ export const pt: Translation = {
   "admin.llmTestBadResponse": "O serviço respondeu, mas de um jeito que o LOAM não entende. Confira o endereço.",
   "admin.llmTestNotAllowed": "Uma rede com o perfil Reforçado só pode usar um serviço neste computador ou na rede local.",
   "admin.llmTestUnencrypted": "Esta rede só se conecta a um serviço em outro computador por HTTPS. Use um endereço https://.",
+  "admin.llmRefusedOff": "Os membros não podem usar o assistente até que isto seja alterado.",
   "admin.llmModel": "Modelo",
   "admin.llmModelHint": "O nome do modelo como o serviço o conhece. Teste a conexão para escolher de uma lista.",
   "admin.llmModelPick": "Comece a digitar para escolher da lista do serviço.",

@@ -35,7 +35,13 @@ import { generateDisplayName } from "@loam/display-name";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 
 import type { StoredRowReport } from "./db.js";
-import { createLlmLayer, INTERRUPTED_ASSISTANT_BODY } from "./llm.js";
+import {
+  CLOUD_ASSISTANT_REFUSED,
+  createLlmLayer,
+  INTERRUPTED_ASSISTANT_BODY,
+  llmProviderRefusal,
+  UNENCRYPTED_ASSISTANT_REFUSED,
+} from "./llm.js";
 import { createMeshLayer } from "./mesh.js";
 import type { Runtime } from "./runtime.js";
 import { createStoreLifecycle } from "./store-lifecycle.js";
@@ -870,6 +876,18 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     };
   }
 
+  /** `llm.refusal` for the redacted config: the code of `llmProviderRefusal`'s reason, or nothing. */
+  function assistantRefusalCode(): { refusal?: NonNullable<LoamConfig["llm"]["refusal"]> } {
+    const refusal = llmProviderRefusal(appConfig, options);
+    if (refusal === CLOUD_ASSISTANT_REFUSED) {
+      return { refusal: "llm_cloud_not_allowed" };
+    }
+    if (refusal === UNENCRYPTED_ASSISTANT_REFUSED) {
+      return { refusal: "llm_unencrypted_not_allowed" };
+    }
+    return {};
+  }
+
   /** The effective config as exposed to admins — secret values are never returned. */
   function redactedConfig(): LoamConfig {
     return {
@@ -878,6 +896,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
         ...appConfig.llm,
         // The chat service's key is write-only: admins learn whether one is set, never what it is.
         openai: { ...appConfig.llm.openai, apiKey: undefined, apiKeySet: appConfig.llm.openai.apiKey !== undefined },
+        // Why the enabled backend is kept off here, so the admin screen can say so instead of showing it on.
+        ...assistantRefusalCode(),
       },
       admin: { ...appConfig.admin, passphrase: undefined },
       killSwitch: { ...appConfig.killSwitch, panicToken: undefined },

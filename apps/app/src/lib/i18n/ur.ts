@@ -20,6 +20,8 @@ export const ur: Partial<AppCatalog> = {
   "host.runningWifi": "وائی فائی پر میزبانی",
   "host.noNetwork": "کسی نیٹ ورک سے منسلک نہیں",
   "host.alsoAt": "اگر نہ کھلے تو یہ میزبان ان پتوں پر بھی ہے: {addresses}",
+  "host.fullLinkHint": "اسکین نہیں کر سکتے؟ اس کے بجائے یہ پورا لنک کھولیں۔ صرف پتہ کافی نہیں: # کے بعد والا حصہ ضروری ہے۔",
+  "host.shareLink": "لنک شیئر یا کاپی کریں",
   "host.wifiTitle": "اس وائی فائی کے ذریعے شامل ہوں",
   "host.wifiNetwork": "نیٹ ورک: {name}",
   "host.wifiScanNamed": "اس نیٹ ورک سے جڑیں، پھر LOAM کھولنے کے لیے اسے اسکین کریں۔",

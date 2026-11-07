@@ -231,6 +231,7 @@ export const ps: Translation = {
   "admin.llmTestBadResponse": "خدمت ځواب ورکړ، خو داسې نه چې LOAM پرې پوه شي. پته وګورئ.",
   "admin.llmTestNotAllowed": "د «کلک» پروفایل لرونکې شبکه یوازې په دې کمپیوټر یا سیمه‌ییزه شبکه کې خدمت کارولی شي.",
   "admin.llmTestUnencrypted": "دا شبکه په بل کمپیوټر کې له خدمت سره یوازې د HTTPS له لارې نښلي. د https:// پته وکاروئ.",
+  "admin.llmRefusedOff": "تر هغه چې دا بدل نه شي، غړي مرستیال نشي کارولی.",
   "admin.llmModel": "ماډل",
   "admin.llmModelHint": "د ماډل هغه نوم چې خدمت یې پېژني. له لېست څخه د ټاکلو لپاره اړیکه وازمویئ.",
   "admin.llmModelPick": "د خدمت له لېست څخه د ټاکلو لپاره لیکل پیل کړئ.",

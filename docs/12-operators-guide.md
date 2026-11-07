@@ -156,14 +156,18 @@ the QR, and the address it gives when linking networks), and that address doesn'
 
 **The code is the whole invitation.** People connect to the same Wi-Fi or hotspot, scan the code, and
 LOAM opens in their browser. Nothing to install, no account, and the code carries the network's
-encryption key, so their messages are encrypted from the first request. (Pictures and files are
-encrypted too only when the network requires encryption: see **Connections** in [§4](#4-shaping-the-network).)
+encryption key, so everything they post or receive is encrypted from the first request, pictures and files
+included. (Someone who types the address instead gets less: see **Connections** in [§4](#4-shaping-the-network).)
 
 - **From the host phone:** **Invite people** in the host menu shows the codes. On Hotspot there are two, the hotspot's
-  Wi-Fi first and then LOAM; on Wi-Fi there's one. The address is printed beside it for anyone who'd
-  rather type. **Display mode** shows the codes full screen, as large as the screen allows, keeps the
+  Wi-Fi first and then LOAM; on Wi-Fi there's one. A network the phone hosts always requires encryption,
+  so the address on its own only shows a "scan the code" screen. Under the code is the whole join link,
+  key included, and **Share or copy the link** hands it to a laptop or a phone that can't scan.
+  **Display mode** shows the codes full screen, as large as the screen allows, keeps the
   screen on and pins LOAM in front; press and hold to leave it. The network keeps running with the
-  screen off either way.
+  screen off either way. After upgrading to the release that made this the rule, anyone who had joined
+  your phone's network by typing its address gets a new identity once they scan: their old name, messages
+  and roles stay with the old identity.
 - **From inside LOAM:** admins and greeters have **Invite someone** in the sidebar, with the code, a
   **Copy link** button and a note on how to join. It includes the encryption key only when that device
   joined by scanning, so a key can't be passed on second-hand.
@@ -194,10 +198,11 @@ until you switch back to **Custom** ([docs/09](09-security-profiles.md)):
 
 (Open and Standard currently set the same things.)
 
-**Connections.** **Optional** encrypts the messages of everyone who joins by scanning, but downloads
-pictures and files unencrypted, and still lets in a device that typed the address by hand, unencrypted.
-**Required** encrypts pictures and files too, refuses those devices, and hides which pages anyone asks
-for. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
+**Connections.** **Optional** encrypts everything for everyone who joins by scanning, and still lets in a
+device that typed the address by hand. That device's pictures and files go unencrypted, and its sign-in
+cookie travels unencrypted too, so anyone listening on the Wi-Fi can read its messages and send messages as
+it. **Required** refuses those devices (they are asked to scan) and hides which pages anyone asks for. A
+network the Android app hosts is always **Required**, whatever this setting says. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
 released app) runs unencrypted, and it shows everyone a red warning ([docs/08](08-transport-security.md)).
 Neither setting protects against someone on the Wi-Fi who can alter traffic while a phone loads LOAM: the
 page itself arrives over plain HTTP, so they could hand that phone a changed copy (docs/08, threat 4). On an

@@ -20,6 +20,8 @@ export const bn: Partial<AppCatalog> = {
   "host.runningWifi": "ওয়াই-ফাই দিয়ে হোস্টিং",
   "host.noNetwork": "কোনো নেটওয়ার্কে সংযুক্ত নয়",
   "host.alsoAt": "না খুললে, এই হোস্ট এই ঠিকানাগুলোতেও আছে: {addresses}",
+  "host.fullLinkHint": "স্ক্যান করতে পারছেন না? এর বদলে পুরো লিংকটি খুলুন। শুধু ঠিকানা দিয়ে সংযোগ হবে না: # এর পরের অংশটি লাগবে।",
+  "host.shareLink": "লিংক শেয়ার বা কপি করুন",
   "host.wifiTitle": "এই ওয়াই-ফাই দিয়ে যোগ দিন",
   "host.wifiNetwork": "নেটওয়ার্ক: {name}",
   "host.wifiScanNamed": "ওই নেটওয়ার্কে সংযুক্ত হোন, তারপর LOAM খুলতে এটি স্ক্যান করুন।",

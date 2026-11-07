@@ -20,6 +20,8 @@ export const my: Partial<AppCatalog> = {
   "host.runningWifi": "Wi-Fi ဖြင့် လက်ခံနေသည်",
   "host.noNetwork": "ကွန်ရက် မရှိပါ",
   "host.alsoAt": "မဖွင့်နိုင်ပါက ဤလက်ခံစက်ကို ဤလိပ်စာများတွင်လည်း ရနိုင်သည်: {addresses}",
+  "host.fullLinkHint": "စကင်ဖတ်၍ မရပါသလား? ဤလင့်ခ်တစ်ခုလုံးကို ဖွင့်ပါ။ လိပ်စာတစ်ခုတည်းဖြင့် မချိတ်ဆက်နိုင်ပါ: # နောက်ရှိ အပိုင်း လိုအပ်သည်။",
+  "host.shareLink": "လင့်ခ်ကို မျှဝေပါ သို့မဟုတ် ကူးယူပါ",
   "host.wifiTitle": "ဤ Wi-Fi ဖြင့် ဝင်ရောက်ပါ",
   "host.wifiNetwork": "ကွန်ရက်: {name}",
   "host.wifiScanNamed": "ထိုကွန်ရက်သို့ ချိတ်ဆက်ပြီး LOAM ဖွင့်ရန် ဤကုဒ်ကို စကင်ဖတ်ပါ။",

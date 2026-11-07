@@ -20,6 +20,8 @@ export const fa: Partial<AppCatalog> = {
   "host.runningWifi": "میزبانی روی وای‌فای",
   "host.noNetwork": "بدون شبکه",
   "host.alsoAt": "اگر باز نشد، این میزبان در این نشانی‌ها هم هست: {addresses}",
+  "host.fullLinkHint": "نمی‌توانید اسکن کنید؟ به‌جایش کل این پیوند را باز کنید. نشانی به‌تنهایی وصل نمی‌شود: بخش پس از # لازم است.",
+  "host.shareLink": "هم‌رسانی یا کپی پیوند",
   "host.wifiTitle": "پیوستن از طریق این وای‌فای",
   "host.wifiNetwork": "شبکه: {name}",
   "host.wifiScanNamed": "به آن شبکه وصل شوید، سپس این را اسکن کنید تا LOAM باز شود.",

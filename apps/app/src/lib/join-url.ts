@@ -86,14 +86,6 @@ export function withInviteCode(fragment: string, code: string | undefined): stri
 }
 
 /**
- * The address to print beside a join QR: the URL without its fragment. The key and invite code (`#k=…&i=…`)
- * only work scanned, and nobody can type them anyway.
- */
-export function typedAddress(url: string): string {
-  return url.split('#')[0]!;
-}
-
-/**
  * The host's other addresses as full join URLs carrying the same fragment as `joinUrl`, for the "also at"
  * line. Every network the app hosts requires encryption, so a bare address opens only the "scan the code"
  * screen; with the `#k=` key written out, someone can still type a working one.

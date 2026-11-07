@@ -93,7 +93,32 @@ export function unencryptedBackendRefused(baseUrl: string, policy: LlmLauncherPo
   } catch {
     return true;
   }
-  return protocol !== "https:" && classifyBackendUrl(baseUrl).kind !== "host";
+  return protocol !== "https:" && !isLoopbackLiteral(backendHostname(baseUrl));
+}
+
+/**
+ * Whether `host` (as `backendHostname` gives it) is this machine by its spelling alone: `localhost`, 127/8,
+ * `::1` or an IPv4-mapped 127/8. Unlike `classifyBackendUrl`, not a `*.localhost` name: Node's `fetch` and
+ * Android's resolver look such a name up in DNS like any other (only `localhost` is in the hosts file), so
+ * it can answer from another machine.
+ */
+function isLoopbackLiteral(host: string): boolean {
+  return (
+    host === "localhost" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    // URL parsing spells an IPv4-mapped loopback (`[::ffff:127.0.0.1]`) in hex (`::ffff:7f00:1`).
+    /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
+  );
+}
+
+/**
+ * The active network backend as a save changes it: provider and address. Two configs with the same key send
+ * members' messages to the same place, so a save that keeps an already-refused key changes nothing about
+ * where they could go.
+ */
+export function activeBackendKey(llm: LoamConfig["llm"]): string {
+  return `${activeLlmProvider(llm)} ${activeBackendUrl(llm) ?? ""}`;
 }
 
 /** The address the active network-backed assistant answers from; undefined for the on-device model or off. */
@@ -406,7 +431,9 @@ export function createLlmLayer(rt: Runtime) {
     const refusal = llmProviderRefusal(rt.appConfig, rt.options);
 
     if (refusal && activeLlmProvider(rt.appConfig.llm) !== "off") {
-      // A save can't persist this (applyConfigUpdate refuses it); a hand-edited config.json can.
+      // A save can't introduce this (applyConfigUpdate refuses it, though it keeps one a network already had,
+      // such as an Android host upgraded with a LAN Ollama over plain HTTP); a hand-edited config.json can.
+      // The admin screen says why (`llm.refusal` on the redacted config).
       // The hostname only: an address may carry a path or credentials, and the log outlives the setting.
       const url = activeBackendUrl(rt.appConfig.llm);
       rt.log.warn(`LLM assistant disabled: ${refusal.toLowerCase()} (${url === undefined ? "no address" : backendHostname(url)})`);

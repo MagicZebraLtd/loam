@@ -231,6 +231,7 @@ export const tr: Translation = {
   "admin.llmTestBadResponse": "Hizmet yanıt verdi, ancak LOAM'ın anlayabileceği bir biçimde değil. Adresi kontrol edin.",
   "admin.llmTestNotAllowed": "Sıkılaştırılmış profildeki bir ağ yalnızca bu bilgisayardaki veya yerel ağdaki bir hizmeti kullanabilir.",
   "admin.llmTestUnencrypted": "Bu ağ başka bir bilgisayardaki bir hizmete yalnızca HTTPS ile bağlanır. https:// ile başlayan bir adres kullanın.",
+  "admin.llmRefusedOff": "Bu değiştirilene kadar üyeler asistanı kullanamaz.",
   "admin.llmModel": "Model",
   "admin.llmModelHint": "Modelin, hizmetin bildiği adı. Listeden seçmek için bağlantıyı test edin.",
   "admin.llmModelPick": "Hizmetin listesinden seçmek için yazmaya başlayın.",

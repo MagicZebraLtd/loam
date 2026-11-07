@@ -25,6 +25,8 @@ export const en = {
   "host.runningWifi": "Hosting on Wi-Fi",
   "host.noNetwork": "Not on a network",
   "host.alsoAt": "If that doesn't load, this host is also at: {addresses}",
+  "host.fullLinkHint": "Can't scan? Open this whole link instead. The address alone won't connect: the part after # is needed.",
+  "host.shareLink": "Share or copy the link",
   "host.wifiTitle": "Join on this Wi-Fi",
   "host.wifiNetwork": "Network: {name}",
   "host.wifiScanNamed": "Connect to that network, then scan this to open LOAM.",

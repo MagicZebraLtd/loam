@@ -238,6 +238,7 @@ export const ar: Translation = {
   "admin.llmTestBadResponse": "ردّت الخدمة، لكن بطريقة لا يفهمها LOAM. تحقّق من العنوان.",
   "admin.llmTestNotAllowed": "لا يمكن لشبكة على ملف «مُحصّن» أن تستخدم إلا خدمة على هذا الحاسوب أو الشبكة المحلية.",
   "admin.llmTestUnencrypted": "لا تتصل هذه الشبكة بخدمة على حاسوب آخر إلا عبر HTTPS. استخدم عنوانًا يبدأ بـ https://.",
+  "admin.llmRefusedOff": "لا يستطيع الأعضاء استخدام المساعد حتى يُغيَّر هذا.",
   "admin.llmModel": "النموذج",
   "admin.llmModelHint": "اسم النموذج كما تعرفه الخدمة. اختبر الاتصال لتختار من قائمة.",
   "admin.llmModelPick": "ابدأ الكتابة لتختار من قائمة الخدمة.",

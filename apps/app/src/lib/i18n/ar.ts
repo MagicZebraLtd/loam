@@ -20,6 +20,8 @@ export const ar: Partial<AppCatalog> = {
   "host.runningWifi": "الاستضافة عبر Wi-Fi",
   "host.noNetwork": "غير متصل بشبكة",
   "host.alsoAt": "إن لم يُفتح، فهذا المضيف متاح أيضًا على: {addresses}",
+  "host.fullLinkHint": "لا يمكنك المسح؟ افتح هذا الرابط كاملًا بدلًا من ذلك. العنوان وحده لا يتصل: الجزء الذي بعد # ضروري.",
+  "host.shareLink": "شارك الرابط أو انسخه",
   "host.wifiTitle": "انضم عبر شبكة Wi-Fi هذه",
   "host.wifiNetwork": "الشبكة: {name}",
   "host.wifiScanNamed": "اتصل بتلك الشبكة، ثم امسح هذا لفتح LOAM.",

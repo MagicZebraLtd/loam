@@ -20,6 +20,8 @@ export const fr: Partial<AppCatalog> = {
   "host.runningWifi": "Hébergement sur le Wi-Fi",
   "host.noNetwork": "Pas de réseau",
   "host.alsoAt": "Si cela ne charge pas, cet hôte est aussi à : {addresses}",
+  "host.fullLinkHint": "Impossible de scanner ? Ouvrez plutôt ce lien en entier. L’adresse seule ne suffit pas : la partie après # est nécessaire.",
+  "host.shareLink": "Partager ou copier le lien",
   "host.wifiTitle": "Rejoindre sur ce Wi-Fi",
   "host.wifiNetwork": "Réseau : {name}",
   "host.wifiScanNamed": "Connectez-vous à ce réseau, puis scannez ceci pour ouvrir LOAM.",

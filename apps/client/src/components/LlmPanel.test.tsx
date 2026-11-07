@@ -166,4 +166,23 @@ describe("LlmPanel", () => {
     expect(labelled(on, "On-device model name").value).toBe("gemma");
     expect(labelled(on, "Assistant's name").value).toBe("Assistant");
   });
+
+  it("says why a saved backend is kept off, and nothing when none is", () => {
+    const refused = mount(
+      <LlmPanel
+        llm={{ ...base, ollama: { ...base.ollama, enabled: true, baseUrl: "http://192.168.1.20:11434" }, refusal: "llm_unencrypted_not_allowed" }}
+        onListModels={never}
+        onOllamaChange={noop}
+        onOnDeviceChange={noop}
+        onOpenAiChange={noop}
+        saving={false}
+      />,
+    );
+    const alert = refused.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("over HTTPS");
+    expect(alert?.textContent).toContain("Members can't use the assistant");
+
+    const fine = mount(<LlmPanel llm={base} onListModels={never} onOllamaChange={noop} onOnDeviceChange={noop} onOpenAiChange={noop} saving={false} />);
+    expect(fine.querySelector('[role="alert"]')).toBeNull();
+  });
 });

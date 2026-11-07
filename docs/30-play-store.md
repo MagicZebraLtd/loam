@@ -97,9 +97,12 @@ device checks below, and size headroom before a production track.
   - **Encrypted in transit: Yes** once that release is live: it forces `required` transport encryption on every network
     the app hosts (docs/08): content goes only through sealed sessions (X25519 + XChaCha20-Poly1305, keyed
     from the code), sync is sealed both ways, and a network assistant is HTTPS or the phone itself (docs/06).
-    Not before: 0.7.0 and earlier accept unencrypted clients on Community networks. What stays readable on
-    the wire is the web app's own code and the public bootstrap (network name and settings, no member data),
-    plus a tunnel request's size and timing.
+    Not before: 0.7.0 and earlier accept unencrypted clients on Community networks. The answer covers
+    everything members post or receive. What stays readable on the wire is the web app's own code and the
+    public bootstrap (`/api/bootstrap`: the network's settings and its name, which the host types, and no
+    member's data), plus a tunnel request's size and timing. The network name is the operator's setting,
+    not data a member provides, so it isn't counted under Name or Other user-generated content; say so in the
+    form's notes if the reviewer asks.
 - **Open question for the owner: Play's AI-generated content policy.** The assistant (on-device, Ollama or
   an OpenAI-compatible service, all off by default) generates text in DMs. Play's policy on apps that
   generate content with AI may apply, and it may expect a way to report offensive AI output inside the
