@@ -125,9 +125,15 @@ The host runs a `WifiManager.LocalOnlyHotspot`. Joiners **Step 1** scan the WiFi
   once, while the app is in the foreground and before the first start; denying it only hides the
   notification (the overlay says so) and never blocks hosting. Screen-on + app-open is still the most
   reliable state; the FGS path is not yet device-verified.
-- **The Step-2 address.** Android assigns a LocalOnlyHotspot a **random** IPv4 address on every start —
+- **The Step-2 address.** Android assigns a LocalOnlyHotspot a **random** IPv4 address —
   a /24 in 192.168.0.0/16, 172.16.0.0/12 or 10.0.0.0/8 (the /8 ~94% of the time since Android 16), host
-  part never .0/.1/.255 (`packages/modules/Connectivity`, `PrivateAddressCoordinator`). There is no fixed
+  part never .0/.1/.255 (`packages/modules/Connectivity`, `PrivateAddressCoordinator`). AOSP keeps it
+  sticky within one phone boot (`requestStickyDownstreamAddress`), so app relaunches, APK updates and the
+  restart after a reset keep the same address; a phone reboot, an upstream-prefix conflict or a
+  network-stack restart can bring a new one (read from AOSP, not yet confirmed on a phone, Samsung
+  included). Everything a joiner holds is keyed to the origin (`http://<address>:3000`): its identity
+  token, its pin, its IndexedDB copy and its cookie. After an address change members come back as new
+  people, and the old origin's copy stays in their browser where no later reset reaches it. There is no fixed
   gateway: `192.168.49.1`, which 0.4.0–0.5.0 hardcoded, is reserved for **Wi-Fi Direct** group owners, so a
   joiner got `ERR_ADDRESS_UNREACHABLE` (Galaxy S25 Ultra, 2026-09-28). No API hands an app the hotspot's
   address, so the native module **discovers** it: `hotspotAddressCandidates()` enumerates every
@@ -628,7 +634,7 @@ full-screen modal). The overlay starts the hotspot on open and feeds
 `{ssid,password}` + the derived Step-2 display (`src/lib/join-display.ts`) into the presentational
 `HostPanel`, which shows **Step 1** (WiFi-join QR + SSID/password text) and **Step 2** (LOAM-URL QR +
 address text). While the hotspot runs, the join URL is the hotspot's **own discovered address** (see "The
-Step-2 address" above — Android assigns it at random per start, so there is nothing to show until it is
+Step-2 address" above — Android assigns it at random, so there is nothing to show until it is
 found; Step 2 says "Finding the hotspot's address…" meanwhile, and gives the manual Gateway route if it
 never is). When the hotspot can't start, `HostPanel` shows the error in Step 1 while keeping Step 2 with
 the launcher-reported LAN address (graceful degradation).
@@ -726,8 +732,11 @@ support it); avoid Android-only Easy Connect for v1.
   an older version of the app wrote is deleted on the first page load under the flag. The WebView also gets
   `cacheEnabled={false}`, so pictures served in the clear (`optional` transport mode) aren't kept in an HTTP
   cache, and each WebView mount on such a network calls `clearCache(true)` to drop one an older version
-  wrote. localStorage stays on (the identity token and preferences, no messages). An `off` network keeps
-  both caches, as before. Not yet checked on a device.
+  wrote. localStorage stays on (the identity token and preferences, no message text, though
+  `loam.lastConversation` names the last conversation, such as `/dm/user.<id>`), and so do the cookie, the
+  service worker registration and its Cache Storage (build files only). The app never clears WebView storage
+  natively: a reset relies on the page receiving the `wipe` frame, and an in-process reset closes the app
+  300 ms after the reply, which can race the page's purge. An `off` network keeps both caches, as before. Not yet checked on a device.
 
 ### What the host phone logs
 

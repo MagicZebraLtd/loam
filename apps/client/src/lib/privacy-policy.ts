@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "25 October 2026";
+export const PRIVACY_POLICY_UPDATED = "7 November 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -85,7 +85,7 @@ export const PRIVACY_POLICY: PolicySection[] = [
         kind: "p",
         text:
           "Your own device keeps a copy of the conversations you have open so LOAM keeps working when the " +
-          "connection drops. That copy is deleted when the network is reset.",
+          "connection drops. A reset tells your device to delete that copy (see below).",
       },
     ],
   },
@@ -98,12 +98,18 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "By default, data stays on the host device until someone deletes it. You can delete your own " +
             "messages. The host can make messages disappear automatically after a set time.",
           "The host can run an **Emergency reset**, which deletes every message, person, picture and file on " +
-            "the network and clears the copies on devices connected at the time. A device that was offline " +
-            "clears its copy the next time it connects to that network.",
+            "the host and tells devices connected at the time to delete their copies. A device that was offline " +
+            "deletes its copy the next time it connects at the same address. The address can change when the " +
+            "host restarts, and a copy saved under an earlier address stays in that browser until its site data " +
+            "is cleared. A network the host linked keeps its own copy of the public channels, and hands it back " +
+            "if linking stays on.",
           "The host can store the network encrypted. With encryption on, a reset also replaces the key in the " +
             "Android and desktop host apps, and in the `loamnet` terminal app when it uses a temporary key, so " +
-            "the deleted data can't be recovered from the device's storage. `loamnet` with a fixed passphrase " +
-            "deletes the database files but keeps the same passphrase. Pictures and files are stored beside the " +
+            "the deleted data can't be recovered from the database files left on the device. A reset does not " +
+            "reach backups of the host device. `loamnet` with a fixed passphrase deletes the database files but " +
+            "keeps the same passphrase. With `loamnet`, the browser you use as admin is an ordinary browser: " +
+            "like anyone else's, it keeps its own unencrypted copy until the reset reaches it. Pictures and " +
+            "files are stored beside the " +
             "database without encryption. A " +
             "reset deletes them, but on flash storage a deleted picture or file may still be recoverable.",
           "Uninstalling the Android host app deletes everything it stored.",
@@ -118,10 +124,12 @@ export const PRIVACY_POLICY: PolicySection[] = [
         kind: "p",
         text:
           "Normally nothing leaves the host device except the messages delivered to the people on that network, " +
-          "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts the " +
-          "messages between your device and the host, and the pictures and files you upload. Downloading " +
-          "pictures and files is encrypted too when the host requires encrypted connections; otherwise they are " +
-          "downloaded unencrypted over the local network. The encryption does not protect against someone who " +
+          "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts everything " +
+          "between your device and the host: messages, pictures and files, both ways. Someone who types the " +
+          "address instead of scanning gets much less protection, unless the host requires encrypted " +
+          "connections (then they are asked to scan). Their sign-in cookie travels unencrypted, so anyone " +
+          "listening on the Wi-Fi can copy it, then read their messages and send messages as them. Their " +
+          "pictures and files are sent unencrypted too. The encryption does not protect against someone who " +
           "can alter the network traffic while LOAM loads on your device: they could give your device a changed " +
           "copy of LOAM that reads your messages. Data leaves the host device only if the host turns on one of " +
           "these:",

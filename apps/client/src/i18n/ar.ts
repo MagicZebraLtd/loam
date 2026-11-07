@@ -782,7 +782,7 @@ export const ar: Translation = {
   "admin.nav.label": "الأقسام",
   "admin.nav.sync": "المزامنة",
   "admin.nav.mesh": "شبكة mesh",
-  "moderation.banConfirm": "حظر {name}؟ سيفقد الوصول إلى هذه الشبكة حتى يرفع أحد المشرفين الحظر.",
+  "moderation.banConfirm": "حظر {name}؟ تفقد هذه الهوية الوصول إلى هذه الشبكة حتى يرفع أحد المشرفين الحظر. في شبكة يمكن لأي شخص الانضمام إليها، يمكن للشخص نفسه العودة باسم جديد. لمنع شخص من الدخول، اشترط الموافقة على الانضمام.",
   "toast.newMessages": {
     zero: "{n} رسالة جديدة في {place}",
     one: "{n} رسالة جديدة في {place}",

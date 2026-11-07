@@ -4,7 +4,10 @@
 > enforces today**. `security.profile` (`open`/`standard`/`hardened`/`custom`) is a single source of
 > truth (`SECURITY_PROFILE_PRESETS` + `securityProfilePreset()` in `@loam/schema`); the server forces
 > the bundled axes onto the effective config in `mergeConfig()` (`apps/server/src/config.ts`), and the
-> admin UI has a profile selector that locks the managed axes unless `custom`. **Bundled today:**
+> admin UI has a profile selector that locks the managed axes unless `custom` (under `custom` the web admin
+> exposes join policy, retention and the kill switch, but **not** `security.transportEncryption`: only the
+> terminal UI's Settings screen, `config.json` or a direct `PATCH /api/admin/config` set it, and the desktop
+> app shows it read-only; leaving `hardened` for `custom` keeps `required`). **Bundled today:**
 > `access.joinPolicy`, `retention.messageTtlMs`, `killSwitch.enabled`, and now
 > **`security.transportEncryption`** (docs/08). **Not built yet** (so still *not* bundled): E2EE (07),
 > a configurable join-QR mode (the host's rotating invite code for approval-only nodes is built, docs/08),
