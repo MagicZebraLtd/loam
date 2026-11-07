@@ -26,17 +26,19 @@
 
 ### Before 0.7.0
 
-The release checklist. Steps 1 to 3 are done on the `release/0.7.0` branch (25 October 2026: the two
-external launch reviews' findings, the version bump and the changelog); the owner does the rest, in order.
+The release checklist. 0.7.0 is released: the signed tag `v0.7.0` was pushed on 27 October 2026 (the
+CHANGELOG dates the release 25 October, when the branch was cut). Steps 1 to 3 were done on the
+`release/0.7.0` branch; step 4 (npm) is still open, and the rest are the owner's, in order.
 
 1. ~~Merge `feat/llm-providers` and `fix/desktop-first-ci-run`~~ (merged 24 October as #175 and #174;
    `deps/preact-11` went in as #162).
 2. ~~Bump every version to 0.7.0 (`versionCode` 13) and date the changelog~~ (on the release branch). After
-   the merge: push the signed tag `v0.7.0`, wait for both tag workflows, then check the Release has the APK,
-   the five installers and every `.sha256`, and `spctl --assess` one of the DMGs.
+   the merge: ~~push the signed tag `v0.7.0`~~ (27 October), wait for both tag workflows, then check the
+   Release has the APK, the five installers and every `.sha256`, and `spctl --assess` one of the DMGs.
 3. ~~Make sure the privacy policy covers the online assistant~~ (both policies dated 25 October; members
    now see the destination in the assistant's chat too).
-4. `npm publish` loamnet from `cli/`. npm still has 0.6.0.
+4. `npm publish` loamnet from `cli/`. npm still has 0.6.0 (checked 7 November 2026), so `npx loamnet`
+   installs a release behind the desktop and Android apps.
 5. Upload the Play bundle (`loam-host-aab` from the tag build) to internal testing. Make the
    foreground-service declaration and record its video, which needs the phone run. Redo the Data safety
    answers with docs/30 "No telemetry" in hand: the online assistant and linking a network are optional
@@ -193,7 +195,9 @@ a doc claim: `notifyIfHidden` is genuinely inert (it only fires an OS notificati
 3. **docs/16 §5 deviation 5** "expired-sealed tombstones aren't horizon-GC'd." Likely stale after the `pruneTombstonesHorizon` landing — confirm sealed tombstones are covered, then strike.
 4. **docs/12 §6** "There's no peer authentication yet" for sync — **contradicts** the shipped `sync.token` bearer auth.
 5. **docs/12 §1** "on-device DB encryption isn't available on Android yet" — **contradicts** docs/01/04 (ships, pending device verification).
-6. **docs/15 #22** the `SERVER_URL_KEY` "read but never written" claim is now false (written in `transport.ts`); only the `notifyIfHidden` half stands.
+6. **docs/15 #22** the `SERVER_URL_KEY` "read but never written" claim. Re-checked 7 November 2026: it still
+   holds. `transport.ts` and `app.tsx` read and remove `loam.serverUrl`, and nothing in `apps/client/src`
+   writes it (an earlier note here said otherwise).
 
 ## 9. Codebase-sweep findings — 2026-07-31 (open items)
 
@@ -202,10 +206,13 @@ ship-quality.** The three safe, verifiable findings were fixed on `feat/test-deb
 shared-tag race, desktop Enter-to-send, shadow-ban attachment defense-in-depth). The rest are recorded here.
 
 **Server — need a policy decision (a budget/cap number), so deferred to the owner:**
-- **SW1 (LOW–MED)** Transport-tunnel requests bypass the tighter per-route rate limits (they hit the global
-  300/min via the internal `allowList`), so avatar/attachment/mesh/search caps don't apply under the tunnel.
-  Not attacker-forgeable (internal headers stripped first). Fix = a per-IP semantic limiter on the expensive
-  inner handlers, or a tighter budget on `/api/transport/tunnel` — pick the numbers. `app.ts:6119`.
+- ~~**SW1 (LOW–MED)** Transport-tunnel requests bypass the tighter per-route rate limits (they hit the global
+  300/min via the internal `allowList`), so avatar/attachment/mesh/search caps don't apply under the tunnel.~~
+  **DONE**: every per-route `config.rateLimit` (avatar and attachment uploads and reads, search, sync, mesh,
+  claim, panic) sets `allowList: () => false`, which overrides the global limiter's tunnel exemption for that
+  route (`rate-limit.ts` merges the route's options over the global ones), and `semanticRateLimit()` bakes it
+  in. The open question left is the reverse one: in `required` mode the outer tunnel request is charged to the
+  global 300/min, so a client's whole API budget is 300 requests a minute (review 2026-11-07).
 - ~~**SW2 (LOW)** Stored `MessageBodySchema` is uncapped, so a hostile *sync peer* can push ~8MB bodies.~~
   **DONE**: imported bodies over **256KB** (`maxSyncImportBodyBytes`) are skipped on the sync-import path;
   the stored schema stays uncapped so long local LLM replies round-trip. Tested (docs/11).

@@ -36,7 +36,8 @@
 ## Goal
 
 Replace the flat-JSON persistence with SQLite, behind a small data-access layer (DAL), without
-changing the wire API. Gains: transactional durability (removes the 1-second data-loss window),
+changing the wire API. Gains: crash-safe transactional writes (it removes the 1-second data-loss window
+of the old flush; under WAL with `synchronous = NORMAL` a power cut can still lose the last few seconds),
 scalable message queries, and a foundation for the kill switch (drop/rekey a DB file) and admin config.
 
 ## Current state (what you're replacing)
