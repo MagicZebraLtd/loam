@@ -246,6 +246,11 @@ marker and waits for the next app start, as the screen says. Running the pipelin
 the new mode's boot decisions under the open database: Ephemeral deleted `loam.db` and the media folders at
 once, and Passphrase dropped the host screen to Locked while the network kept serving.
 
+The recovery screens speak the host's language: the launcher and the server report boot errors and notices
+in English, with a code, and the host screen shows the catalog text for the code (`src/lib/boot-messages.ts`;
+a `db_encryption_locked` report also carries `reason`, `no_key` for the usual passphrase prompt) and keeps
+the English behind a Details disclosure (`components/boot-details.tsx`), as the desktop host does.
+
 A passphrase that will create the database is asked for twice, as the desktop host and `loamnet` do. The
 launcher's `db_encryption_locked` report carries `newDatabase` (no `loam.db` yet, or a start-fresh marker
 waiting), and the locked screen shows a second field when that is true or when no passphrase has ever opened

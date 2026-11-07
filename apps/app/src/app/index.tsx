@@ -22,6 +22,7 @@ import { WebView } from 'react-native-webview';
 
 
 import { AboutOverlay } from '@/components/about-overlay';
+import { BootDetails } from '@/components/boot-details';
 import { DbEncryptionSettingsOverlay } from '@/components/db-encryption-settings';
 import { EmergencyResetOverlay } from '@/components/emergency-reset';
 import { HostMenu } from '@/components/host-menu';
@@ -56,6 +57,7 @@ import {
   type StartFreshIntent,
 } from '@/lib/db-encryption';
 import { confirmStartUnencrypted, retryKeyResolution, switchEncryptionOffAndRetry } from '@/lib/driver-missing-recovery';
+import { bootErrorKey, bootNoticeKey, parseLockedReason, type LockedReason } from '@/lib/boot-messages';
 import { closeAfterReset } from '@/lib/emergency-reset';
 import {
   passphraseEntryProblem,
@@ -198,6 +200,8 @@ type StatusPayload = {
   hostToken?: string;
   /** On a `db_encryption_locked` report: the key about to be typed creates a database (main.js `keyCreatesDatabase`). */
   newDatabase?: boolean;
+  /** On a `db_encryption_locked` report: which locked case it is (boot-config.js), for the translated text. */
+  reason?: string;
 };
 type HostInfoPayload = { port?: number; addresses?: string[]; interfaces?: unknown; clients?: unknown; invite?: unknown };
 
@@ -261,7 +265,12 @@ function HostScreen() {
   // Initialise from the module-level status so a remount after the node is already ready/errored
   // doesn't get stuck showing "starting" (the runtime won't re-emit).
   const [status, setStatus] = useState<HostStatus>(() => nodeStatus);
+  // `errorMessage` is text this screen wrote, already in the host's language. `errorDetail` is the launcher's
+  // or server's own (English) words, shown only behind Details; the screen shows catalog text for its code
+  // instead (src/lib/boot-messages.ts, F-054). `lockedReason` picks that text for `db_encryption_locked`.
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const [errorDetail, setErrorDetail] = useState<string | undefined>();
+  const [lockedReason, setLockedReason] = useState<LockedReason>();
   // The boot-status error `code` (if any) from the last `loam-status` payload. Selects the recovery block
   // the error screen shows (`DB_UNREADABLE_CODE`, `DB_LOCKED_CODE` and the two codes
   // `dbEncryptionRecoveryForCode` classifies), rather than making the operator guess.
@@ -511,6 +520,7 @@ function HostScreen() {
         nodeStatus = 'ready';
         setStatus('ready');
         setErrorMessage(undefined);
+        setErrorDetail(undefined);
         setErrorCode(undefined);
         if (typeof payload.hostToken === 'string' && payload.hostToken.length > 0) {
           nodeHostToken = payload.hostToken;
@@ -568,9 +578,11 @@ function HostScreen() {
         clearTimeout(startupTimeout);
         nodeStatus = 'error';
         setStatus('error');
-        setErrorMessage(payload.message);
+        setErrorMessage(undefined);
+        setErrorDetail(payload.message);
         if (payload.code === DB_LOCKED_CODE) {
           setLockedNewDatabase(payload.newDatabase === true);
+          setLockedReason(parseLockedReason(payload.reason));
         }
         setErrorCode((current) => {
           // A generic, codeless boot error, or main.js's ~5-min readiness-poll give-up (`retry`'s
@@ -899,9 +911,10 @@ function HostScreen() {
 
   // A WebView load failure after the node is ready is usually transient (page fetched mid-cold-start).
   // Surface the error UI; Retry remounts the WebView (a fresh load) as long as the node is still up.
-  const failWebView = (message: string) => {
+  const failWebView = (message: string, detail?: string) => {
     setStatus('error');
     setErrorMessage(message);
+    setErrorDetail(detail);
   };
 
   // Fresh-start recovery: ask the launcher to write the confirmation marker. Shared by BOTH the
@@ -1212,8 +1225,9 @@ function HostScreen() {
         {notice && !noticeDismissed ? (
           <ThemedView type="backgroundSelected" style={styles.noticeBanner}>
             <ThemedText type="small" style={styles.noticeBannerText}>
-              {notice.message ?? t('boot.noticeDowngraded')}
+              {t(bootNoticeKey(notice.code))}
             </ThemedText>
+            <BootDetails text={notice.message} />
             <ThemedView style={styles.noticeBannerActions}>
               <Pressable onPress={() => setDbEncryptionOpen(true)} accessibilityRole="button">
                 <ThemedText type="link">{t('boot.encryptionSettings')}</ThemedText>
@@ -1326,7 +1340,7 @@ function HostScreen() {
             }}
             onError={({ nativeEvent }) => {
               console.warn('LOAM WebView error', nativeEvent.description);
-              failWebView(nativeEvent.description || t('boot.pageFailed'));
+              failWebView(t('boot.pageFailed'), nativeEvent.description || undefined);
             }}
             onHttpError={({ nativeEvent }) => {
               // The status only: the URL names a conversation, and logcat outlives the network (docs/04).
@@ -1445,8 +1459,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.noticeDowngraded')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {notice.message ?? t('boot.seeEncryptionSettings')}
+                  {t(bootNoticeKey(notice.code))}
                 </ThemedText>
+                <BootDetails text={notice.message} />
                 <ThemedView style={styles.noticeBannerActions}>
                   <Pressable onPress={() => setNoticeDismissed(true)} accessibilityRole="button" hitSlop={Spacing.two}>
                     <ThemedText type="link">{t('common.dismiss')}</ThemedText>
@@ -1461,11 +1476,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.unreadableTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.seeEncryptionSettings')}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
                   {t('boot.unreadableBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 {lockedMode === 'passphrase' ? (
                   // A wrong passphrase is the common cause here, since it is asked for at EVERY start: offer a
                   // retry with the same candidate flow as the locked screen. The new entry is tried on the intact
@@ -1531,8 +1544,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.lockedTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.lockedBody')}
+                  {t(bootErrorKey(DB_LOCKED_CODE, lockedReason) ?? 'boot.lockedBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 {lockedMode === 'passphrase' ? (
                   <>
                     <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
@@ -1607,8 +1621,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.plaintextTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.plaintextBody')}
+                  {t('boot.plaintextBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
                   {t('boot.plaintextChoices')}
                 </ThemedText>
@@ -1645,8 +1660,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.driverMissingTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.driverMissingBody')}
+                  {t('boot.driverMissingBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
                   {t('boot.driverMissingChoices')}
                 </ThemedText>
@@ -1714,14 +1730,17 @@ function HostScreen() {
                       : t('boot.startFailedTitle')}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {portInUse ? t('boot.portInUseBody') : (errorMessage ?? t('boot.notReady'))}
+                  {portInUse ? t('boot.portInUseBody') : (errorMessage ?? t(bootErrorKey(errorCode) ?? 'boot.notReady'))}
                 </ThemedText>
+                {/* The recovery blocks above already show their own Details. */}
+                {dbUnreadable || dbLocked || dbPlaintextUnconverted || dbDriverMissing ? null : <BootDetails text={errorDetail} />}
                 {nodeStatus === 'ready' ? (
                   // The server is up; a Retry just remounts the WebView for a fresh load.
                   <Pressable
                     accessibilityRole="button"
                     onPress={() => {
                       setErrorMessage(undefined);
+                      setErrorDetail(undefined);
                       setStatus('ready');
                     }}>
                     <ThemedView type="backgroundElement" style={styles.retry}>

@@ -16,7 +16,9 @@ describe("the launcher's newDatabase signal", () => {
   });
 
   it('is sent with the locked report the key resolution makes, and forwarded to the host screen', () => {
-    expect(mainJs).toMatch(/cfg\.bootError\.code === 'db_encryption_locked' \? \{ newDatabase: keyCreatesDatabase\(\) \}/);
+    expect(mainJs).toMatch(
+      /cfg\.bootError\.code === 'db_encryption_locked'\s*\? \{ newDatabase: keyCreatesDatabase\(\), reason: cfg\.bootError\.reason \}/,
+    );
     expect(mainJs).toMatch(/payload\.newDatabase = details\.newDatabase;/);
   });
 });

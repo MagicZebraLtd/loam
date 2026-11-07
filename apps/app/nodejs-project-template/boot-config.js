@@ -83,6 +83,8 @@ function computeDbBootEnv(result, ctx) {
           'failed, the request timed out, or the response was malformed): refusing to start unencrypted. ' +
           'Retry once the app is responsive.',
         code: 'db_encryption_locked',
+        // Which locked case this is, for the host screen's translated text (src/lib/boot-messages.ts).
+        reason: 'mode_unknown',
       },
     };
   }
@@ -114,6 +116,7 @@ function computeDbBootEnv(result, ctx) {
           'failure): refusing to start unencrypted.' +
           (mode === 'passphrase' ? ' Enter the passphrase to unlock.' : ' Retry, or open Encryption settings.'),
         code: 'db_encryption_locked',
+        reason: 'no_key',
       },
     };
   }

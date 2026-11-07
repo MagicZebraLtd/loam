@@ -105,6 +105,10 @@ global.__loamReportBootError = function (message, code, details) {
   if (details && typeof details.newDatabase === 'boolean') {
     payload.newDatabase = details.newDatabase;
   }
+  // `reason` (boot-config.js): which locked case this is, so the host screen shows translated text for it.
+  if (details && typeof details.reason === 'string') {
+    payload.reason = details.reason;
+  }
   notify(isNotice ? 'notice' : 'error', payload);
 };
 
@@ -1561,7 +1565,9 @@ function resolveDbEncryptionAndBoot() {
         global.__loamReportBootError(
           cfg.bootError.message,
           cfg.bootError.code,
-          cfg.bootError.code === 'db_encryption_locked' ? { newDatabase: keyCreatesDatabase() } : undefined,
+          cfg.bootError.code === 'db_encryption_locked'
+            ? { newDatabase: keyCreatesDatabase(), reason: cfg.bootError.reason }
+            : undefined,
         );
       }
       return cfg.outcome;
