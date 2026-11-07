@@ -269,6 +269,8 @@ export const ERROR_CODES: Record<string, ServerErrorCode> = {
   "Malformed encrypted request": "invalid_request",
   "Encrypted session requires a sealed request body": "invalid_request",
   "Cross-origin websocket refused": "invalid_request",
+  "Cross-origin request refused": "invalid_request",
+  "This request must be sent as JSON": "invalid_request",
   "Report target does not exist": "target_not_found",
   "Report does not exist": "not_found",
   "No such join request": "not_found",

@@ -420,6 +420,11 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   port or the advertised `clientPort` (a left-out port is the scheme's default; `originMatchesHost`), since
   cookies are shared across the ports of one host; `pnpm dev` passes because Vite's `/ws` proxy keeps the
   browser's `Host` (no `changeOrigin`). A client that sends no Origin is judged by its credentials alone.
+  **CSRF** (`crossSiteRequestRefusal`, same `onRequest` hook, after the allowlist): any method but
+  GET/HEAD/OPTIONS is refused (403 `invalid_request`) when its `Origin` fails the same `originMatchesHost`
+  rule, or when it has no Origin but a `Sec-Fetch-Site` other than `same-origin`/`none`; a `text/plain`,
+  urlencoded or multipart body is refused (415) whatever its Origin, since every route takes JSON. A
+  request with neither header (curl, sync peers, the launcher) passes; tunnel re-dispatches never reach it.
   `@fastify/websocket` registers before these global hooks, so an upgrade they refuse (421/503) still has
   its socket closed.
 - **Transport encryption** (docs/08, `security.transportEncryption` — `optional` **default (secure by

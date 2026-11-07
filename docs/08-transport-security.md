@@ -224,6 +224,18 @@ unavailable, so ship one):
 - ❌ Does not restore the **service worker / offline PWA** (still an insecure context) — see below.
 - ⚠️ **Metadata** (who talks to whom, timing, sizes) is still visible to the host and partially to the
   network. Note it honestly.
+- ⚠️ **Cookie sessions and other web pages** (review 2026-11-07, F-012). A member who typed the address
+  holds a `SameSite=Lax` cookie, and browsers share cookies across the ports of one host, so a page on
+  another port of the same machine counts as the same site and its form POSTs carry the cookie. A
+  cross-site form POST carries no cookie but used to mint or clear one. The server now refuses any
+  state-changing request whose `Origin` isn't the node's own page (the `/ws` rule: the Host's name, on its
+  port or the advertised client port), or that has no Origin but a `Sec-Fetch-Site` from elsewhere, and
+  any `text/plain`, urlencoded or multipart body (every route takes JSON, and only those types skip a CORS
+  preflight). A client that sends neither header (curl, a sync peer) is judged by its credentials, as
+  before. Bound (QR-joined) members were never exposed: their identity is the session key, not a cookie.
+  Not covered: a same-host page can still *set* a `loam_session` cookie with a longer path, which the
+  browser sends first, so the member acts as that page's identity (cookie fixation); only typed-address
+  members are affected.
 
 ## Node-to-node sync over the transport channel (BUILT)
 

@@ -191,6 +191,60 @@ export function originMatchesHost(
   return originPort === hostPort || originPort === options.clientPort;
 }
 
+/** Media types an HTML form can send cross-site without a CORS preflight (Fastify parses `text/plain`). */
+const FORM_CONTENT_TYPES = new Set(["text/plain", "application/x-www-form-urlencoded", "multipart/form-data"]);
+
+/** Methods that never change state, so a forged one can do nothing a page couldn't do by linking. */
+const NON_MUTATING_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * The cross-site request forgery guard for the REST API (review 2026-11-07, F-012). A member who joined by
+ * typing the address holds a `SameSite=Lax` session cookie, and cookies are shared across the ports of one
+ * host, so a page on another port of the same machine is "same-site" and its form POSTs carry that cookie;
+ * a cross-site top-level form POST carries none, and minted or cleared the member's identity. So a request
+ * that can change state (any method but GET/HEAD/OPTIONS, on any path, so a percent-encoded `/api/` can't
+ * slip past) is refused when:
+ *
+ * - its `Origin` is not this node's own page: `originMatchesHost`, the rule `/ws` already applies (the
+ *   Host's name, on the Host's port or the advertised client port; `Origin: null` never matches);
+ * - it has no `Origin` but `Sec-Fetch-Site` says another site or origin sent it (a browser that sends
+ *   `Sec-Fetch-Site` always sends `Origin` on a POST, so this is a backstop);
+ * - its body is a type an HTML form can send (`text/plain`, urlencoded, multipart): every LOAM route takes
+ *   JSON, and only those types skip the CORS preflight a cross-origin page can't pass.
+ *
+ * A request with no `Origin` and no `Sec-Fetch-Site` is not a browser's (curl, a sync peer, the Android
+ * launcher's loopback calls) and is judged by its credentials alone, as on `/ws`. LOAM's own pages pass:
+ * the app shell on the listen port, the Android and desktop host windows on loopback, and `pnpm dev`, whose
+ * Vite `/api` proxy keeps the browser's `Host`. Internal tunnel re-dispatches never reach this check.
+ *
+ * @returns The refusal to send, or undefined to let the request through.
+ */
+export function crossSiteRequestRefusal(
+  request: Pick<FastifyRequest, "method" | "headers" | "protocol">,
+  clientPort: number | undefined,
+): { status: 403 | 415; message: string } | undefined {
+  if (NON_MUTATING_METHODS.has(request.method)) {
+    return undefined;
+  }
+  const origin = request.headers.origin;
+  if (origin !== undefined) {
+    if (!originMatchesHost(origin, request.headers.host, { clientPort, protocol: request.protocol })) {
+      return { status: 403, message: "Cross-origin request refused" };
+    }
+  } else {
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (typeof fetchSite === "string" && fetchSite !== "same-origin" && fetchSite !== "none") {
+      return { status: 403, message: "Cross-origin request refused" };
+    }
+  }
+  const contentType = request.headers["content-type"];
+  const mediaType = typeof contentType === "string" ? contentType.split(";", 1)[0]!.trim().toLowerCase() : "";
+  if (FORM_CONTENT_TYPES.has(mediaType)) {
+    return { status: 415, message: "This request must be sent as JSON" };
+  }
+  return undefined;
+}
+
 /**
  * Scrub request URLs from a free-text log message. A few of Fastify's own lines interpolate the raw URL into
  * the message, bypassing both the `req` serializer and the LogController: the
@@ -678,6 +732,13 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
     // internal token, but these must never reach a handler on an external request).
     delete request.headers["x-loam-internal"];
     delete request.headers["x-loam-user"];
+
+    // Cross-site request forgery: a state-changing API request from another site, or from another port
+    // of this host, is refused before any identity is resolved or minted (see `crossSiteRequestRefusal`).
+    const forgery = crossSiteRequestRefusal(request, ctx.clientPort);
+    if (forgery) {
+      return reply.code(forgery.status).send(errorBody(forgery.message));
+    }
 
     const mode = ctx.effectiveTransportEncryption();
     if (mode === "off") {
