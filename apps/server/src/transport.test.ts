@@ -1484,6 +1484,36 @@ describe("transport auth-binding", () => {
     expect(other.currentUser.id).toBe(resumed.currentUser.id);
   });
 
+  it("a resume that asks (r: 1) is answered under its sequence and status, a 401 included (review F-001)", async () => {
+    // The client discards its identity token only on a 401 that opens under `#<seq>#401`, so the server must
+    // seal the token refusal, and a success, that way.
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const aad = "POST /api/session/resume";
+    async function resumeBound(session: { sessionId: string; key: string }, seq: number, token?: string) {
+      const envelope = { s: seq, r: 1, b: token === undefined ? {} : { token } };
+      const response = await app.server.inject({
+        method: "POST",
+        url: "/api/session/resume",
+        headers: { "x-loam-enc": session.sessionId, "content-type": "application/json" },
+        payload: { enc: sealTransport(session.key, JSON.stringify(envelope), aad) },
+      });
+      const enc = (response.json() as { enc: string }).enc;
+      return { status: response.statusCode, enc };
+    }
+
+    const refused = await resumeBound(await openTransport08(app), 1, "not-a-real-token");
+    expect(refused.status).toBe(401);
+    expect(openTransport((await openTransport08(app)).key, refused.enc, `${aad}#1#401`)).toBeNull(); // wrong key
+    const session = await openTransport08(app);
+    const again = await resumeBound(session, 4, "not-a-real-token");
+    expect(openTransport(session.key, again.enc, `${aad}#4#401`)).not.toBeNull();
+    expect(openTransport(session.key, again.enc, aad)).toBeNull(); // not the bare aad a forger could reuse
+
+    const minted = await resumeBound(session, 5);
+    expect(minted.status).toBe(200);
+    expect(openTransport(session.key, minted.enc, `${aad}#5#200`)).not.toBeNull();
+  });
+
   it("a repeat resume on a bound session reports the user as they are now, not as they were bound", async () => {
     // The Android host's WebView binds as a pending newcomer on an approval-only network, claims admin with
     // the host token, and resumes again on its next boot pass. That resume used to replay the snapshot
