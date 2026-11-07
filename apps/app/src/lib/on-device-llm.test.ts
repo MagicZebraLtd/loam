@@ -37,6 +37,13 @@ const mocks = vi.hoisted(() => ({
   }) as CompletionImpl,
   stopCompletion: vi.fn(async () => {}),
   release: vi.fn(async () => {}),
+  // A stand-in chat template + tokenizer: the prompt is the turns' text joined, one token per 4 characters.
+  getFormattedChat: vi.fn(async (messages: { content: string }[]) => ({
+    type: "llama-chat" as const,
+    prompt: messages.map((message) => message.content).join("\n"),
+    has_media: false,
+  })),
+  tokenize: vi.fn(async (text: string) => ({ tokens: new Array<number>(Math.ceil(text.length / 4)).fill(1), has_media: false })),
   // How many native contexts `initLlama` has built this test — lets the OOM-guard tests assert that a
   // released context is REBUILT fresh (a different native context) only after the old release resolved, and
   // that NO fresh context is built while a release/abandoned-load disposal is still in flight or `poisoned`.
@@ -63,6 +70,8 @@ vi.mock("llama.rn", () => ({
       reasonNoGPU: "test",
       devices: [],
       completion: (params: unknown, onToken?: TokenCallback) => mocks.completionImpl(params, onToken),
+      getFormattedChat: mocks.getFormattedChat,
+      tokenize: mocks.tokenize,
       stopCompletion: mocks.stopCompletion,
       release: mocks.release,
     });
@@ -77,6 +86,8 @@ function makeNativeContext() {
     reasonNoGPU: "test",
     devices: [],
     completion: (params: unknown, onToken?: TokenCallback) => mocks.completionImpl(params, onToken),
+    getFormattedChat: mocks.getFormattedChat,
+    tokenize: mocks.tokenize,
     stopCompletion: mocks.stopCompletion,
     release: mocks.release,
   };
@@ -187,6 +198,47 @@ describe("on-device-llm inference", () => {
     expect(deltas).toEqual(["Hel", "lo"]);
     expect(endedFor(channel, "x")).toBe(true);
     expect(channel.posts.some((p) => p.name === "loam-llm-error")).toBe(false);
+  });
+
+  it("drops the oldest turns so the prompt plus the reply fits the context (no 'Context is full')", async () => {
+    // 40 turns of 8000 characters (2000 stand-in tokens each) is far past a 4096-token context.
+    const history = Array.from({ length: 40 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `${index}:`.padEnd(8000, "x"),
+    }));
+    const messages = [{ role: "system", content: "Be brief." }, ...history.slice(0, 39)];
+    let sent: { role: string; content: string }[] = [];
+    mocks.completionImpl = async (params, onToken) => {
+      sent = (params as { messages: { role: string; content: string }[]; n_predict: number }).messages;
+      expect((params as { n_predict: number }).n_predict).toBe(512);
+      onToken?.({ token: "ok" });
+      return { text: "ok" };
+    };
+    const channel = makeChannel();
+    registerOnDeviceLlm(channel);
+
+    channel.emit("loam-llm-request", { id: "long", messages });
+    await flush();
+
+    expect(endedFor(channel, "long")).toBe(true);
+    expect(sent[0]).toEqual({ role: "system", content: "Be brief." });
+    expect(sent.at(-1)).toEqual(messages.at(-1)); // the message being answered is always kept
+    expect(sent[1].role).toBe("user");
+    const tokens = Math.ceil(sent.map((message) => message.content).join("\n").length / 4);
+    expect(tokens + 512).toBeLessThanOrEqual(4096);
+  });
+
+  it("refuses, without generating, a newest message too long for the context on its own", async () => {
+    const completion = vi.fn(mocks.completionImpl);
+    mocks.completionImpl = completion;
+    const channel = makeChannel();
+    registerOnDeviceLlm(channel);
+
+    channel.emit("loam-llm-request", { id: "huge", messages: [{ role: "user", content: "y".repeat(20_000) }] });
+    await flush();
+
+    expect(completion).not.toHaveBeenCalled();
+    expect(String(errorFor(channel, "huge")?.payload.error)).toMatch(/too long/i);
   });
 
   it("exposes the load's acceleration info after a successful load (llama.rn-reported)", async () => {
@@ -1001,6 +1053,8 @@ describe("P3: fallible load diagnostics never affect context ownership", () => {
         return [];
       },
       completion: (params: unknown, onToken?: TokenCallback) => mocks.completionImpl(params, onToken),
+      getFormattedChat: mocks.getFormattedChat,
+      tokenize: mocks.tokenize,
       stopCompletion: mocks.stopCompletion,
       release: mocks.release,
     };
