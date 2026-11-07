@@ -280,6 +280,25 @@ describe("encryption at rest + key-discard kill switch", () => {
     expect(await avatarCacheControl(plain.app)).toBe("private, max-age=3600");
   });
 
+  it("tells a browser on the host machine to keep no local copy while the database is encrypted, and nobody else", async () => {
+    async function hint(app: LoamApp, remoteAddress: string): Promise<unknown> {
+      const response = await app.server.inject({ method: "GET", url: "/api/bootstrap", remoteAddress });
+      return (response.json() as { hostNoLocalCache?: unknown }).hostNoLocalCache;
+    }
+
+    const ephemeral = await makeEncryptedApp({ ephemeralDbKey: true, dbEncryptionMode: "ephemeral" });
+    expect(await hint(ephemeral.app, "127.0.0.1")).toBe(true);
+    expect(await hint(ephemeral.app, "::1")).toBe(true);
+    expect(await hint(ephemeral.app, "192.168.4.20")).toBeUndefined();
+
+    const passphrase = await makeEncryptedApp({ dbEncryptionKey: "a fixed host passphrase", dbEncryptionMode: "passphrase" });
+    expect(await hint(passphrase.app, "127.0.0.1")).toBe(true);
+
+    // Unencrypted, the host's database is in the clear anyway: the browser's cache adds nothing to hide.
+    const plain = await makeEncryptedApp({});
+    expect(await hint(plain.app, "127.0.0.1")).toBeUndefined();
+  });
+
   it("kill switch on a passphrase-key node also empties and recovers", async () => {
     const { app } = await makeEncryptedApp(
       { dbEncryptionKey: "a fixed host passphrase" },

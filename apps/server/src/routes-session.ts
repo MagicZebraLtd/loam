@@ -16,12 +16,20 @@ export function registerSessionRoutes(ctx: AppContext): void {
   // identity and sets NO cookie, so a `required`/bound client can learn how to connect before it has a
   // session, and no bearer credential is ever established over plaintext. The client fetches this FIRST,
   // with `credentials: "omit"`. Unlike `/api/config`, it never returns `currentUser`.
-  ctx.server.get("/api/bootstrap", async () => ({
+  //
+  // `hostNoLocalCache` (docs/02): a browser on the host machine itself (loopback: the `loamnet` operator's own
+  // browser, which no launcher injects into) is told to keep no IndexedDB copy while the database is encrypted,
+  // the hint the desktop and Android hosts give their own windows as `window.__loamHostNoLocalCache`. That
+  // copy would sit on the host's disk in the clear, outside the key, and outlive an Emergency Reset or an
+  // ephemeral key. Never sent to a LAN joiner (the tunnel forwards the real caller's address); behind a
+  // same-host reverse proxy every caller is loopback and simply caches nothing.
+  ctx.server.get("/api/bootstrap", async (request) => ({
     nodeName: ctx.appConfig.node.name,
     version: ctx.options.version ?? "dev",
     joinUrl: `http://${ctx.currentJoinHost()}:${ctx.clientPort}`,
     websocketPath: "/ws",
     networkConfig: ctx.currentNetworkConfig(),
+    ...(ctx.dbState.encryptionEnabled && ctx.requestFromLoopback(request) ? { hostNoLocalCache: true } : {}),
   }));
 
   ctx.server.get("/api/config", async (request, reply) => {

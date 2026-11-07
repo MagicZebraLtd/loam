@@ -55,6 +55,7 @@ import {
 } from "./lib/messages";
 import { dmConversationPeers, inboxUnreadPeers, reconcileInboxEntry, type DmInboxEntry } from "./lib/dm-inbox";
 import {
+  applyHostNoLocalCacheHint,
   clearAllRecords,
   deleteRecord,
   deleteRecords,
@@ -247,6 +248,8 @@ async function fetchBootstrapJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Boots
       throw new Error(t("app.configUnrecognised"));
     }
 
+    // The host machine's own browser on an encrypted node keeps no IndexedDB copy (docs/02).
+    applyHostNoLocalCacheHint(bootstrap.hostNoLocalCache === true);
     return bootstrap;
   } finally {
     window.clearTimeout(timeout);
