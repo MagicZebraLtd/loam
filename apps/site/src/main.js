@@ -34,6 +34,31 @@ if (toggle && links) {
   });
 }
 
+// A link to one FAQ answer (`#faq-apk`) opens that answer, whether followed on the page or loaded directly.
+function openTargetedAnswer() {
+  let id = "";
+  try {
+    id = decodeURIComponent(window.location.hash.slice(1));
+  } catch {
+    return; // A malformed fragment names nothing.
+  }
+  const target = id ? document.getElementById(id) : null;
+  const details = target?.closest("details");
+  if (details && !details.open) {
+    details.open = true;
+    target.scrollIntoView();
+  }
+}
+openTargetedAnswer();
+window.addEventListener("hashchange", openTargetedAnswer);
+// Following the same link again (after closing the answer) changes no hash, so clicks open it too.
+document.addEventListener("click", (event) => {
+  const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+  if (link && link.getAttribute("href") === window.location.hash) {
+    window.setTimeout(openTargetedAnswer, 0);
+  }
+});
+
 // Copy buttons (`data-copy`): the command goes on the clipboard and the label says so for a moment.
 for (const button of document.querySelectorAll("[data-copy]")) {
   const label = button.querySelector(".copy-label");
@@ -101,7 +126,7 @@ if (posthogKey) {
     advanced_disable_decide: true,
   });
 
-  // The interest signals beyond a pageview: a download or GitHub click, and copying the npx command.
+  // The interest signals beyond a pageview: a Google Play, download or GitHub click, and copying the npx command.
   // Resolve the real hostname (not a substring match) so a link such as `https://evil.example/github.com`
   // can't mis-fire an event (CodeQL: incomplete URL sanitization).
   document.addEventListener("click", (event) => {
@@ -121,6 +146,10 @@ if (posthogKey) {
       return;
     }
     const host = url.hostname.toLowerCase();
+    if (host === "play.google.com") {
+      posthog.capture("play_store_click");
+      return;
+    }
     if (host !== "github.com" && !host.endsWith(".github.com")) {
       return;
     }

@@ -13,6 +13,8 @@
 <p align="center">
   <a href="https://loamnet.com">loamnet.com</a>
   ·
+  <a href="https://play.google.com/store/apps/details?id=com.loamnet.app">Google Play</a>
+  ·
   <a href="#start-a-network">Start a network</a>
   ·
   <a href="docs/12-operators-guide.md">Operator's guide</a>
@@ -64,10 +66,12 @@ soil. We picked the word first and worked out the letters afterwards.)*
 
 ### On an Android phone, tablet or laptop
 
-1. **Download [`loam-host.apk`](https://github.com/MagicZebraLtd/loam/releases/latest/download/loam-host.apk)**
-   from the [latest release](https://github.com/MagicZebraLtd/loam/releases/latest) and open it to
-   install. Your phone may ask you to allow installs from your browser. (To check the file on a computer
-   first: `sha256sum -c loam-host.apk.sha256` with the checksum from the same release, or
+1. **Install LOAM [from Google Play](https://play.google.com/store/apps/details?id=com.loamnet.app).**
+   It's free. For a phone without Google Play, download
+   [`loam-host.apk`](https://github.com/MagicZebraLtd/loam/releases/latest/download/loam-host.apk) from the
+   [latest release](https://github.com/MagicZebraLtd/loam/releases/latest) instead and open it to install;
+   it's the same app, but it doesn't update itself. (To check the APK on a computer first:
+   `sha256sum -c loam-host.apk.sha256` with the checksum from the same release, or
    `gh attestation verify loam-host.apk --repo MagicZebraLtd/loam`.)
 2. **Answer four questions:** your language, the kind of network (see [below](#kinds-of-network)),
    its name, and how people connect: **Hotspot** (the phone makes its own Wi-Fi, no router needed) or
@@ -87,8 +91,9 @@ needs Android 8 or newer.
 [loamnet.com/desktop](https://loamnet.com/desktop), open it, answer a few questions, and it shows the code
 to scan. Closing its window keeps the network running; Quit stops it. It ships with LOAM 0.7.0. The Mac
 app is signed and notarized by Apple. The Windows installer isn't signed yet, so Windows asks you to
-confirm it once. The Windows, Linux and Intel Mac builds have so far only been checked automatically, not
-run on real machines, and the Windows and Linux builds are for 64-bit Intel or AMD computers only.
+confirm it once. The Windows and Linux builds are for 64-bit Intel or AMD computers only. With no Wi-Fi
+to join, a USB-powered travel router or an Android phone's hotspot gives the computer and the phones a
+network ([loamnet.com/desktop](https://loamnet.com/desktop#offgrid)).
 [docs/24](docs/24-electron-desktop.md) has the details.
 
 ### In a terminal, on a computer or a Raspberry Pi
@@ -195,9 +200,10 @@ computer, the same settings live in the admin area as **security profiles**
   handshake and XChaCha20-Poly1305), so someone listening on the Wi-Fi can't read the messages. The app
   itself still arrives over plain HTTP, so someone who can change traffic on the network while the page
   loads could give a phone a tampered copy that reads its messages (the host app's own window isn't
-  exposed to that). By default, pictures and files are downloaded unencrypted, so someone on the same
-  Wi-Fi could see them; a network that requires encryption (the Private one does) encrypts those too,
-  and refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
+  exposed to that). Pictures and files are encrypted too. Someone who types the address instead of
+  scanning gets less: their messages are encrypted under the key the host announces, which their phone
+  can't check, and their pictures and files travel unencrypted. A network that requires encryption (the
+  Private one does) refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
   can't get a certificate, so LOAM serves plain HTTP and encrypts inside the app instead, using the
   [noble](https://paulmillr.com/noble/) libraries and the host key carried in the code. It has had no
   outside security audit yet.
