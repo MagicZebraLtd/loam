@@ -43,9 +43,11 @@ const PASSPHRASE_SET_ITEM = 'loam-db-encryption-passphrase-set';
 /**
  * The boot-time passphrase ENTRY. Entered on the `db_encryption_locked`
  * / unreadable recovery screens (or pre-entered in Settings for the next start) and stored HERE only until
- * `resolveDbKey('passphrase')` reads it — which CONSUMES it. It is tried, never committed: a WRONG entry
- * fails to open the intact database (recoverable — the operator enters it again), and a RIGHT one needs
- * nothing further. So the passphrase is at rest on the device only between the operator typing it and the
+ * `resolveDbKey('passphrase')` reads it — which CONSUMES it. It is tried, never committed: on an EXISTING
+ * database a WRONG entry fails to open it (recoverable — the operator enters it again), and a RIGHT one needs
+ * nothing further. When no database exists yet (or a start-fresh marker is waiting) the entry CREATES the
+ * database, so a typo is not recoverable: those entries are asked for twice (src/lib/passphrase-confirm.ts,
+ * F-055). So the passphrase is at rest on the device only between the operator typing it and the
  * next key resolution, never across a boot: every start asks for it again, which is what makes this mode
  * actually stronger than `persistent` (a stolen unlocked phone holds the device secret but not the
  * passphrase). NOTE: an authenticated, in-place passphrase-REKEY transaction — atomically re-keying the

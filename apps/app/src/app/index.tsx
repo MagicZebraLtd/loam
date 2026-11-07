@@ -44,6 +44,7 @@ import {
   DB_ENCRYPTION_PLAINTEXT_UNCONVERTED_CODE,
   dbEncryptionRecoveryForCode,
   getDbEncryptionMode,
+  hasStoredPassphrase,
   registerDbEncryption,
   requestDbStartFresh,
   requestDbUnlock,
@@ -56,6 +57,11 @@ import {
 } from '@/lib/db-encryption';
 import { confirmStartUnencrypted, retryKeyResolution, switchEncryptionOffAndRetry } from '@/lib/driver-missing-recovery';
 import { closeAfterReset } from '@/lib/emergency-reset';
+import {
+  passphraseEntryProblem,
+  passphraseNeedsConfirmation,
+  type PassphrasePresenceForConfirm,
+} from '@/lib/passphrase-confirm';
 import { ensureHostService } from '@/lib/host-service';
 import { noteConnectedClients, noteLauncherInterfaces } from '@/hooks/use-hotspot';
 import { parseHostClients, parseHostInterfaces, type HostInterface } from '@/lib/join-display';
@@ -185,7 +191,14 @@ type HostStatus = 'starting' | 'ready' | 'error';
 // see the `BootNotice` comment above) that deliberately does NOT drive `HostStatus`/the screen switch:
 // it only ever updates the separate `notice` state below, so it can never regress a 'ready' host back
 // to a spinner/error screen, and it is never cleared by a later 'ready'.
-type StatusPayload = { status?: HostStatus | 'notice'; message?: string; code?: string; hostToken?: string };
+type StatusPayload = {
+  status?: HostStatus | 'notice';
+  message?: string;
+  code?: string;
+  hostToken?: string;
+  /** On a `db_encryption_locked` report: the key about to be typed creates a database (main.js `keyCreatesDatabase`). */
+  newDatabase?: boolean;
+};
 type HostInfoPayload = { port?: number; addresses?: string[]; interfaces?: unknown; clients?: unknown; invite?: unknown };
 
 // nodejs-mobile allows exactly one runtime per process; a screen remount must not start it twice,
@@ -265,6 +278,11 @@ function HostScreen() {
   // whether to show the passphrase input (only meaningful for 'passphrase' mode) or just a plain Retry.
   const [lockedMode, setLockedMode] = useState<DbEncryptionMode | undefined>();
   const [unlockPassphraseInput, setUnlockPassphraseInput] = useState('');
+  // A first passphrase is typed twice (F-055): `lockedNewDatabase` is the launcher's word that this key
+  // creates the database, `lockedPassphrasePresence` whether one has ever opened it. See passphrase-confirm.ts.
+  const [unlockConfirmInput, setUnlockConfirmInput] = useState('');
+  const [lockedNewDatabase, setLockedNewDatabase] = useState(false);
+  const [lockedPassphrasePresence, setLockedPassphrasePresence] = useState<PassphrasePresenceForConfirm | undefined>();
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockMessage, setUnlockMessage] = useState<string | undefined>();
   // `db_encryption_plaintext_unconverted` recovery in-flight state, see
@@ -410,10 +428,22 @@ function HostScreen() {
         setLockedMode(mode);
       }
     });
+    if (dbLocked) {
+      void hasStoredPassphrase().then((presence) => {
+        if (!cancelled) {
+          setLockedPassphrasePresence(presence);
+        }
+      });
+    }
     return () => {
       cancelled = true;
     };
   }, [dbLocked, dbUnreadableForMode, dbDriverMissing]);
+  // Only the locked screen can create a database from the typed passphrase; the unreadable screen retries
+  // an existing one, where a typo just fails to open it.
+  const unlockNeedsConfirmation =
+    dbLocked && passphraseNeedsConfirmation({ newDatabase: lockedNewDatabase, presence: lockedPassphrasePresence });
+  const unlockEntryProblem = passphraseEntryProblem(unlockPassphraseInput, unlockConfirmInput, unlockNeedsConfirmation);
 
   // Clear the device key material and, ONLY on a VERIFIED success, ack the
   // launcher (`loam-wipe-complete`) so it deletes its durable `.loam-wipe-phase` file. On ANY
@@ -539,6 +569,9 @@ function HostScreen() {
         nodeStatus = 'error';
         setStatus('error');
         setErrorMessage(payload.message);
+        if (payload.code === DB_LOCKED_CODE) {
+          setLockedNewDatabase(payload.newDatabase === true);
+        }
         setErrorCode((current) => {
           // A generic, codeless boot error, or main.js's ~5-min readiness-poll give-up (`retry`'s
           // `'boot_timeout'`), must not clobber an ACTIVE recovery state: `db_encryption_unreadable`
@@ -917,7 +950,11 @@ function HostScreen() {
   // server bundle), just a key to try resolving again now that a passphrase exists.
   const handleUnlockWithPassphrase = async () => {
     const trimmed = unlockPassphraseInput;
-    if (!trimmed) {
+    if (unlockEntryProblem === 'empty') {
+      return;
+    }
+    if (unlockEntryProblem === 'mismatch') {
+      setUnlockMessage(t('boot.passphraseMismatch'));
       return;
     }
     setUnlockBusy(true);
@@ -942,6 +979,7 @@ function HostScreen() {
     // SecureStore regardless.
     void setDbModeHint(nodejs.channel, lockedMode ?? 'passphrase');
     setUnlockPassphraseInput('');
+    setUnlockConfirmInput('');
     const result = await requestDbUnlock(nodejs.channel);
     if (!result.ok) {
       setUnlockBusy(false);
@@ -1498,7 +1536,7 @@ function HostScreen() {
                 {lockedMode === 'passphrase' ? (
                   <>
                     <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                      {t('boot.lockedPassphraseHint')}
+                      {unlockNeedsConfirmation ? t('boot.passphraseNewHint') : t('boot.lockedPassphraseHint')}
                     </ThemedText>
                     <TextInput
                       value={unlockPassphraseInput}
@@ -1508,18 +1546,36 @@ function HostScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       secureTextEntry
-                      returnKeyType="done"
+                      returnKeyType={unlockNeedsConfirmation ? 'next' : 'done'}
                       onSubmitEditing={() => {
-                        if (!unlockBusy && unlockPassphraseInput) {
+                        if (!unlockBusy && unlockPassphraseInput && !unlockNeedsConfirmation) {
                           void handleUnlockWithPassphrase();
                         }
                       }}
                       style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
                     />
+                    {unlockNeedsConfirmation ? (
+                      <TextInput
+                        value={unlockConfirmInput}
+                        onChangeText={setUnlockConfirmInput}
+                        placeholder={t('boot.passphraseConfirmPlaceholder')}
+                        placeholderTextColor={theme.textSecondary}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        secureTextEntry
+                        returnKeyType="done"
+                        onSubmitEditing={() => {
+                          if (!unlockBusy && unlockPassphraseInput) {
+                            void handleUnlockWithPassphrase();
+                          }
+                        }}
+                        style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
+                      />
+                    ) : null}
                     <ThemedView style={styles.noticeBannerActions}>
                       <Pressable
                         onPress={() => void handleUnlockWithPassphrase()}
-                        disabled={unlockBusy || !unlockPassphraseInput}
+                        disabled={unlockBusy || !unlockPassphraseInput || (unlockNeedsConfirmation && !unlockConfirmInput)}
                         accessibilityRole="button">
                         <ThemedView type="backgroundElement" style={styles.retry}>
                           <ThemedText type="link">{unlockBusy ? t('boot.unlocking') : t('boot.unlock')}</ThemedText>

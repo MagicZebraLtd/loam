@@ -246,6 +246,13 @@ marker and waits for the next app start, as the screen says. Running the pipelin
 the new mode's boot decisions under the open database: Ephemeral deleted `loam.db` and the media folders at
 once, and Passphrase dropped the host screen to Locked while the network kept serving.
 
+A passphrase that will create the database is asked for twice, as the desktop host and `loamnet` do. The
+launcher's `db_encryption_locked` report carries `newDatabase` (no `loam.db` yet, or a start-fresh marker
+waiting), and the locked screen shows a second field when that is true or when no passphrase has ever opened
+this database (`passphraseNeedsConfirmation` in `src/lib/passphrase-confirm.ts`). An entry typed in
+Encryption settings is always asked for twice. On an existing database one entry is enough: a typo just
+fails to open it.
+
 ### Message notifications
 
 The host phone's own person gets Android notifications for new messages while LOAM is in the background

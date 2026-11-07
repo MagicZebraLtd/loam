@@ -94,13 +94,18 @@ const DB_ENCRYPTION_NOTICE_CODES = ['db_encryption_recovered_fresh'];
 // instead of just the generic readiness-poll timeout. Also used directly, below, by this file's own
 // DB-encryption lock paths (db_encryption_locked / db_encryption_driver_missing) — same single
 // choke point decides notice-vs-fatal for both callers.
-global.__loamReportBootError = function (message, code) {
+global.__loamReportBootError = function (message, code, details) {
   const isNotice = DB_ENCRYPTION_NOTICE_CODES.indexOf(code) !== -1;
   if (!isNotice) {
     // This attempt is over: retire its watchdog, so a timeout can't replace the real reason later.
     readinessPollGeneration += 1;
   }
-  notify(isNotice ? 'notice' : 'error', { message: message, code: code });
+  var payload = { message: message, code: code };
+  // `newDatabase` (launcher-only, see `keyCreatesDatabase`): the locked screen asks for a first passphrase twice.
+  if (details && typeof details.newDatabase === 'boolean') {
+    payload.newDatabase = details.newDatabase;
+  }
+  notify(isNotice ? 'notice' : 'error', payload);
 };
 
 // The server's kill switch calls this (`globalThis.__loamRequestWipeRestart`, see
@@ -941,6 +946,19 @@ function dbFileExists() {
   }
 }
 
+// Whether the key the operator is about to type will CREATE a database rather than open one: no database
+// file yet, or a start-fresh marker waiting (the server moves the old one aside or deletes it and creates a
+// fresh one under this key). Sent beside a `db_encryption_locked` report so the locked screen asks for a
+// first passphrase twice (src/lib/passphrase-confirm.ts): a typo there keys the network under a passphrase
+// nobody knows. Errs towards true, since asking twice is harmless.
+function keyCreatesDatabase() {
+  try {
+    return !fs.existsSync(path.join(dataDir, 'loam.db')) || fs.existsSync(START_FRESH_MARKER_PATH);
+  } catch (err) {
+    return true;
+  }
+}
+
 // Write the mode-NAME hint TRANSACTIONALLY with a mode SELECTION, on request from the
 // RN picker (db-encryption.ts's `setDbModeHint`), rather than only when a mode is successfully RESOLVED
 // at boot. Otherwise an off→encrypted selection would leave the stale `off` hint (or, on a fresh encrypted
@@ -1540,7 +1558,11 @@ function resolveDbEncryptionAndBoot() {
         writeDbModeHint(cfg.writeHint);
       }
       if (cfg.bootError) {
-        global.__loamReportBootError(cfg.bootError.message, cfg.bootError.code);
+        global.__loamReportBootError(
+          cfg.bootError.message,
+          cfg.bootError.code,
+          cfg.bootError.code === 'db_encryption_locked' ? { newDatabase: keyCreatesDatabase() } : undefined,
+        );
       }
       return cfg.outcome;
     })
