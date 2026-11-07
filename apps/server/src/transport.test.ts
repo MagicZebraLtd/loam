@@ -1375,7 +1375,12 @@ describe("transport encryption WebSocket frames", () => {
   });
 
   it("caps unconfirmed sockets per address, with a larger cap per IPv6 /64, so a LAN shares no small bucket and cycling addresses still runs out", async () => {
-    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    // Every socket here rides one identity; lift the admitted-socket caps (realtime.ts) so only the
+    // unconfirmed caps are under test.
+    const app = await makeApp(
+      { security: { profile: "custom", transportEncryption: "required" } },
+      { webSocketLimits: { perIdentity: 1_000, perAddress: 1_000, perSubnet: 1_000 } },
+    );
     const session = await openTransport08(app);
     await resumeIdentity(app, session, 1);
 

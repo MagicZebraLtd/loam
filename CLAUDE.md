@@ -350,8 +350,13 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
 - **Network identity & presence**: `node.name` (default "LOAM local") is the operator-set network
   name in `NetworkConfig.nodeName` (client sidebar/join/tab title), editable via the admin Network
   panel. `enablePresence` (default on) makes the WS broadcast a `presence` event (online user ids,
-  visible users only) on every connect/disconnect — the client shows online dots; disable for
-  high-risk deployments (it reveals who is connected).
+  visible users only) whenever a connect/disconnect changes the online set (a socket that changes nothing
+  is told on its own) — the client shows online dots; disable for high-risk deployments (it reveals who
+  is connected). **Socket caps** (`realtime.ts`): admitted + mid-challenge sockets are capped at 16 per
+  identity, 64 per address, 256 per IPv6 /64 and 1024 in all (`AppOptions.webSocketLimits` for tests); a
+  connect past one is refused with a `too_many_attempts` error frame, never by closing an older socket. A
+  socket with over 1 MiB unsent (`WS_MAX_BUFFERED_BYTES`) is terminated. `commitAdminConfig` closes every
+  socket not on a bound session when the effective mode becomes `required` (`closeUnboundSockets`).
 - **Admin promotion**: `POST /api/admin/users/:userId/promote` (admin-only) makes a member admin.
   Deliberately **one-way** — no demote route; admin removal is via re-bootstrap / kill switch, so a
   contested node can't fall into a mutual-demotion fight (see docs/12).

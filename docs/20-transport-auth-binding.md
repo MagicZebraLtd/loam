@@ -152,6 +152,16 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   on a reconnected socket B under the same transport session: use AAD `loam.ws.frame.v1 ${connectionId}`
   with a **per-connection** sequence (the `connectionId` is the challenge's, fresh per socket). Acceptance
   test: a valid frame from connection A is rejected on connection B.
+- **Admitted sockets are capped too** (review 2026-11-07, F-003): at most 16 per identity (a browser's tabs
+  share one, so 8 would refuse a person's own tabs), 64 per address, 256 per IPv6 /64 and 1024 in all,
+  counting sockets still mid-challenge. A connect past a cap gets an error frame (`too_many_attempts`) and
+  is closed; no existing socket is closed to make room, since a tab closed that way would reconnect and
+  close the next. Presence goes out only when the online set changes (a newly admitted socket that changes
+  nothing is told on its own), and a socket with more than 1 MiB queued and unsent is terminated.
+- **Switching to `required` at runtime** (directly or through the hardened profile) closes every socket
+  that doesn't ride a bound session, plaintext and anonymous encrypted alike, with an
+  `encrypted_session_required` error frame first and before the `configUpdated` broadcast (F-010). The
+  `required` rule is otherwise checked only when a socket connects.
 
 ## 8. Token lifecycle (the revocations are real; migration is not)
 
