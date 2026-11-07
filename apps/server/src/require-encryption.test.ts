@@ -79,6 +79,8 @@ describe("unencryptedBackendRefused", () => {
     expect(unencryptedBackendRefused("http://localhost:11434", forced)).toBe(false);
     expect(unencryptedBackendRefused("http://127.0.0.1:11434", forced)).toBe(false);
     expect(unencryptedBackendRefused("http://[::1]:11434", forced)).toBe(false);
+    expect(unencryptedBackendRefused("http://[::ffff:127.0.0.1]:11434", forced)).toBe(false);
+    expect(unencryptedBackendRefused("http://[::ffff:192.168.1.5]:11434", forced)).toBe(true);
     expect(unencryptedBackendRefused("https://192.168.1.20:11434", forced)).toBe(false);
     expect(unencryptedBackendRefused("http://192.168.1.20:11434", {})).toBe(false);
   });

@@ -217,9 +217,10 @@ wired adapter's (`WifiJoinDisplay.wired`), the status pill reads "Hosting on a w
 names the connection as wired instead of showing a Wi-Fi name. "N devices connected" works in both modes
 and remains the proof that the path works.
 
-**Joining needs the code.** Every network the app hosts requires transport encryption (main.js sets
-`LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1`; docs/08), so a browser that opens the bare address gets the web
-client's "scan the join QR" screen. The share screen therefore never suggests typing the address: the
+**Joining needs an encrypted connection.** Every network the app hosts requires transport encryption
+(main.js sets `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1`; docs/08), so a browser that opens the bare address
+gets the web client's "scan the join QR" screen. This guarantees encryption, not admission: the host key is
+public, and who may join is the network's join setting. The share screen therefore never suggests typing the address: the
 printed address under each QR is for reading, and the "also at" line writes each other address as a full
 URL with the same `#k=…` fragment (`alternateJoinUrls`), as the manual Gateway route already did.
 

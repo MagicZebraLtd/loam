@@ -8,9 +8,9 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ### Security
 - **Every network the Android app hosts now requires encryption.** Whatever the network's security profile,
-  a phone-hosted network only accepts people who joined by its code, which carries the key, so everything it
-  sends to their phones goes over the encrypted connection, pictures and files included. Someone who types the
-  address without the code is asked to scan it. Copying to and from a linked network was already encrypted on
+  a phone-hosted network accepts only encrypted connections, so everything it sends to members' phones is
+  encrypted, pictures and files included. Someone who types the address without the code is asked to scan it.
+  The key in the code is public, not a password: who may join is still the network's join setting. Copying to and from a linked network was already encrypted on
   such a network. The desktop app and `npx loamnet` are unchanged. (docs/08)
 - **On a network the Android app hosts, an assistant on another computer must use HTTPS.** Saving an `http://`
   Ollama or chat-service address that isn't on the phone itself is refused (`llm_unencrypted_not_allowed`),

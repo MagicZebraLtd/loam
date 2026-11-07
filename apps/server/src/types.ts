@@ -276,7 +276,7 @@ export type AppOptions = {
    * Force the effective `security.transportEncryption` to `required`, whatever the profile or config says
    * (a read-time projection like Developer Mode's, so the stored config keeps the operator's choice). The
    * Android host sets it (`LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` from main.js) so that everything its network
-   * sends off the phone is encrypted: every joiner must come in by the code (the `#k=` key), sync pulls and
+   * sends off the phone is encrypted: every joiner needs a sealed session (the code's `#k=` key; the key is public, so this is not admission control, the join policy is), sync pulls and
    * serves only sealed, and a network-backed assistant must be on the phone itself or reached over HTTPS
    * (`llmProviderRefusal`). Developer Mode still wins, but the Android bundle refuses Developer Mode.
    */

@@ -88,8 +88,12 @@ device checks below, and size headroom before a production track.
     is a user-initiated transfer (the host links it with a single-use code). An online assistant needs each
     member's acknowledgement of where the messages go before the composer opens (docs/06), which is the
     disclosure-and-consent exemption.
-  - **Location: never declare it.** LOAM doesn't read or send location; Android 12 only makes the hotspot
-    ask for the permission.
+  - **Location: Precise location, optional, App functionality.** LOAM never reads the device's location
+    (the web client has no geolocation call; Android 12 only makes the hotspot ask for the permission), but
+    when an admin turns on location sharing (`enableLocationSharing`, off by default) a member can type
+    coordinates into a message, which the host stores and delivers like any message. Google defines the
+    type by what the data is, so declare it as optional rather than leave it out. If the listing must not
+    show Location, the alternative is to remove the coordinates field and keep the place label only.
   - **Encrypted in transit: Yes** once that release is live: it forces `required` transport encryption on every network
     the app hosts (docs/08): content goes only through sealed sessions (X25519 + XChaCha20-Poly1305, keyed
     from the code), sync is sealed both ways, and a network assistant is HTTPS or the phone itself (docs/06).

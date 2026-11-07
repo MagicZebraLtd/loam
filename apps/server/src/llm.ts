@@ -162,7 +162,14 @@ function backendEndpoint(baseUrl: string): string {
  */
 export function classifyBackendUrl(baseUrl: string): AssistantDestination {
   const host = backendHostname(baseUrl);
-  if (host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "::1") {
+  // URL parsing spells an IPv4-mapped loopback (`[::ffff:127.0.0.1]`) in hex (`::ffff:7f00:1`).
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
+  ) {
     return { kind: "host" };
   }
   return isLocalNetworkUrl(baseUrl) ? { kind: "lan" } : { kind: "online", host };

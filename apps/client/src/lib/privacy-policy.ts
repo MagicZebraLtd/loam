@@ -120,7 +120,8 @@ export const PRIVACY_POLICY: PolicySection[] = [
           "Normally nothing leaves the host device except the messages delivered to the people on that network, " +
           "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts everything " +
           "between your device and the host: messages, pictures and files, both ways. A network hosted on the " +
-          "Android app only lets in people who joined by the code. On a network hosted on a computer, someone " +
+          "Android app accepts only encrypted connections, so anyone who types the address is asked to scan the " +
+          "code. On a network hosted on a computer, someone " +
           "who types the address instead gets less protection unless the host requires encryption: their " +
           "messages are encrypted with a key their device can't check, so someone who can alter the network " +
           "traffic could read them, and their pictures and files are sent unencrypted. The encryption does not " +

@@ -30,8 +30,10 @@
 > `optional`, `hardened` forces `required`. **The Android host always requires it:** its launcher sets
 > `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` (`AppOptions.requireTransportEncryption`), which projects the
 > effective mode to `required` at read time whatever the profile says (the stored config keeps the
-> operator's choice, as with Developer Mode), so a phone-hosted network refuses every client that didn't
-> join by the code, syncs sealed only, and reaches a network assistant only over HTTPS (docs/06). The
+> operator's choice, as with Developer Mode), so a phone-hosted network refuses every unencrypted client,
+> syncs sealed only, and reaches a network assistant only over HTTPS (docs/06). It is not
+> admission control: the host key is public (`/api/bootstrap` advertises it), so a client that skips the
+> code can still build a session, unauthenticated; who may join is `access.joinPolicy`. The
 > desktop app and `loamnet` keep the profile's mode. `required` mode
 > is deployable today: a client with no QR-delivered host key simply cannot connect, so there is no
 > silent downgrade to plaintext. **Anti-replay is now built:** every sealed REST request carries a
