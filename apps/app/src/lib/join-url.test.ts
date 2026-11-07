@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { HOST_WEBVIEW_ORIGIN, hostJoinDisplay, isPrivate10or172, joinUrl, preferredLanAddress, typedAddress, withInviteCode } from './join-url';
+import { fragmentHasInvite, HOST_WEBVIEW_ORIGIN, hostJoinDisplay, isPrivate10or172, joinUrl, preferredLanAddress, typedAddress, withInviteCode } from './join-url';
 
 describe('joinUrl', () => {
   it('targets the discovered hotspot address when the hotspot is running, never a reported LAN address', () => {
@@ -108,6 +108,19 @@ describe('typedAddress', () => {
   it('drops the key and invite code that only work scanned', () => {
     expect(typedAddress('http://10.0.2.16:3000#k=abc&i=CODE')).toBe('http://10.0.2.16:3000');
     expect(typedAddress('http://10.0.2.16:3000')).toBe('http://10.0.2.16:3000');
+  });
+});
+
+describe('fragmentHasInvite', () => {
+  it('spots the invite code withInviteCode adds, with or without a key', () => {
+    expect(fragmentHasInvite(withInviteCode('#k=abc', 'CODE'))).toBe(true);
+    expect(fragmentHasInvite(withInviteCode('', 'CODE'))).toBe(true);
+  });
+
+  it('is false with no invite (an open node, or none fetched yet)', () => {
+    expect(fragmentHasInvite(withInviteCode('#k=abc', undefined))).toBe(false);
+    expect(fragmentHasInvite('')).toBe(false);
+    expect(fragmentHasInvite('#k=abci=x')).toBe(false);
   });
 });
 

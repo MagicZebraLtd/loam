@@ -95,6 +95,14 @@ export function withInviteCode(fragment: string, code: string | undefined): stri
 }
 
 /**
+ * Whether a join fragment carries an invite code (`withInviteCode`): then anyone who scans the host's QR is
+ * let in without waiting for approval, and the share screen says so (F-047).
+ */
+export function fragmentHasInvite(fragment: string): boolean {
+  return /^#(?:.*&)?i=[A-Za-z0-9_-]+(?:&|$)/.test(fragment);
+}
+
+/**
  * The address to print beside a join QR: the URL without its fragment. The key and invite code (`#k=…&i=…`)
  * only work scanned, and nobody can type them anyway.
  */
