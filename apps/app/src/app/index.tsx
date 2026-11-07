@@ -36,7 +36,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { colorSchemeForClientMessage } from '@/lib/client-theme';
 import { alertLevelForClientMessage, conversationPath, messageNotifier } from '@/lib/message-notifications';
 import { t } from '@/lib/i18n';
-import { SERVER_PORT, withInviteCode } from '@/lib/join-url';
+import { HOST_WEBVIEW_ORIGIN, withInviteCode } from '@/lib/join-url';
 import {
   clearStoredDbKeys,
   DB_ENCRYPTION_DRIVER_MISSING_CODE,
@@ -72,8 +72,9 @@ import {
 } from '../../modules/loam-hotspot';
 
 // The embedded server (main.js → loam-server.js) always listens on this port; the host phone's
-// WebView loads it over loopback. Remote joiners use the hotspot's own (discovered) address or the LAN one.
-const LOAM_URL = `http://localhost:${SERVER_PORT}`;
+// WebView loads it over IPv4 loopback by IP literal, never by name (see HOST_WEBVIEW_ORIGIN). Remote
+// joiners use the hotspot's own (discovered) address or the LAN one.
+const LOAM_URL = HOST_WEBVIEW_ORIGIN;
 // Cold start is ~80s (docs/04); give it comfortably more before declaring the runtime hung.
 const STARTUP_TIMEOUT_MS = 150_000;
 // How long to wait for GET /api/bootstrap to resolve before giving up and showing a retryable error
@@ -1244,7 +1245,7 @@ function HostScreen() {
             }
             // The LOAM client relies on the loam_session cookie, localStorage, IndexedDB (unless refused
             // above) and a WebSocket — enable them. localStorage holds the identity token and preferences,
-            // no messages, so it stays on for every network. The cleartext localhost origin is allowed by the
+            // no messages, so it stays on for every network. The cleartext 127.0.0.1 origin is allowed by the
             // app's network security config (plugins/with-loam-host.js), loopback only.
             javaScriptEnabled
             domStorageEnabled
@@ -1274,7 +1275,7 @@ function HostScreen() {
             // off: with it on (the default), Android hands a target=_blank link to a detached popup
             // WebView that never consults onShouldStartLoadWithRequest; off, the link navigates this
             // WebView, which the handler below refuses and opens in the system browser instead.
-            originWhitelist={['http://localhost:3000']}
+            originWhitelist={[LOAM_URL]}
             setSupportMultipleWindows={false}
             onShouldStartLoadWithRequest={(request) => {
               if (isLoamUrl(request.url)) {

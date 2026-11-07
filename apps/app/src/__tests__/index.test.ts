@@ -118,6 +118,18 @@ describe('the WebView message bridge never touches the device key', () => {
   });
 });
 
+describe('the host WebView addresses its server by IP literal (F-004)', () => {
+  it('never names localhost, which may resolve to an [::1] socket another app holds', () => {
+    // The embedded server binds the IPv4 wildcard only. A `localhost` origin would let a second app that
+    // binds [::1]:3000 sit at LOAM's pinned origin and receive the injected host token and transport key.
+    const source = readFileSync(join(__dirname, '../app/index.tsx'), 'utf8');
+    expect(source).not.toMatch(/localhost/i);
+    expect(source).toMatch(/const LOAM_URL = HOST_WEBVIEW_ORIGIN;/);
+    expect(source).toMatch(/originWhitelist=\{\[LOAM_URL\]\}/);
+    expect(source).toMatch(/fetch\(`\$\{LOAM_URL\}\/api\/bootstrap`/);
+  });
+});
+
 describe('startFreshIntentForCode (Sol P1: button copy ↔ marker intent must agree)', () => {
   it('requests DELETE for the plaintext-unconverted destructive recovery ("Delete existing data & start encrypted")', () => {
     // The `db_encryption_plaintext_unconverted` button is a DELIBERATE destructive action — the server

@@ -371,7 +371,7 @@ and its `.node` source version must stay in lockstep (change both together).
 - **Committed (source):** `apps/server/src/db.ts` (`driver` option), `embedded.ts`
   (`LOAM_DB_DRIVER`), `apps/app/scripts/{bundle-server.mjs,fetch-native-modules.mjs}`,
   `apps/app/nodejs-project-template/{main.js,package.json}` (the CJS launcher template),
-  `apps/app/plugins/with-loam-host.js` (config plugin: cleartext localhost + arm64-only ABIs +
+  `apps/app/plugins/with-loam-host.js` (config plugin: cleartext to 127.0.0.1 only + arm64-only ABIs +
   hotspot/WiFi/FGS permissions + `data_extraction_rules.xml` + optional `uses-feature` + the
   stale-prebuild fingerprint), `apps/app/plugins/with-release-signing.js`, `apps/app/nodejs-assets/BUILD_NATIVE_MODULES.txt` (`0`),
   `apps/app/app.json` (package `com.loamnet.app`, `loam://` scheme, plugin), `apps/app/src/app/index.tsx` (host WebView
@@ -654,13 +654,22 @@ support it); avoid Android-only Easy Connect for v1.
 
 - The embedded server serves the built client from `apps/client/dist` with an SPA fallback (already
   implemented in `registerStaticFiles()` / `setNotFoundHandler`). The host phone's WebView loads
-  `http://localhost:<clientPort>`; remote joiners load `http://<hotspot-ip>:<clientPort>`.
+  `http://127.0.0.1:<clientPort>` (`HOST_WEBVIEW_ORIGIN` in `src/lib/join-url.ts`); remote joiners load
+  `http://<hotspot-ip>:<clientPort>`. **Never `localhost`:** the embedded server binds the IPv4 wildcard
+  only, so nothing of LOAM's listens on `[::1]`, and any other app with the INTERNET permission can bind
+  `[::1]:3000` without a conflict. Chromium tries `::1` first for `localhost`, so that app's page would sit
+  at LOAM's pinned origin and receive the injected host token and transport key. The WebView `source`,
+  `originWhitelist`, the `isLoamUrl` pin and the bootstrap fetch all use the IP literal, and the network
+  security config permits cleartext to `127.0.0.1` only, so a stray `localhost` load fails instead of
+  reaching another app. (Builds before this change loaded `localhost`. WebView storage is per origin, so on
+  a network that keeps its data the host's own person starts as a new member after the update; the host
+  token makes them admin again.)
 - WebView needs: `credentials`/cookies enabled (the app relies on the `loam_session` cookie —
   `thirdPartyCookiesEnabled`, `sharedCookiesEnabled`), WebSocket allowed (works over `ws://` on the LAN;
   fine in a WebView), and cleartext HTTP permitted for the LAN origin (Android `usesCleartextTraffic` /
   network-security-config, since there's no TLS on a local hotspot).
 - The client already supports a configurable server origin (`loam.serverUrl` in localStorage) and uses
-  `credentials: "include"` — but same-origin (WebView → localhost) is simplest; prefer that.
+  `credentials: "include"` — but same-origin (WebView → 127.0.0.1) is simplest; prefer that.
 - **Emergency reset from the host app** (in the host menu on a private, `hardened` network; at the bottom
   of Encryption settings on every network) closes the app once everything is erased: the native
   `closeApp()` (loam-hotspot module) stops the host service, finishes the task and kills the process. A
