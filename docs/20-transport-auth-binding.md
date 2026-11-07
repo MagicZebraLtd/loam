@@ -170,7 +170,10 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   docs/15 #4 for this credential), **kill switch**, or **explicit rotation**.
 - **Ban / deny** is deliberately DIFFERENT: it tears down the identity's **bound sessions + sockets**
   (immediate cutoff) but **KEEPS the token pinned** — exactly mirroring how a banned identity's cookie
-  session mapping is retained. This is a considered choice: revoking the token would let the banned device
+  session is retained: its row stays in memory **and** in the store, so the cookie still names the banned
+  identity after a host restart. (Until review 2026-11-07, F-011, the ban deleted the stored rows while
+  keeping the in-memory mapping, so the next restart minted the banned person a clean identity on their
+  next request.) This is a considered choice: revoking the token would let the banned device
   **re-mint a fresh (unbanned) identity** on its next resume, whereas keeping it pinned means a reconnect
   re-binds to the *same* banned identity (participation + WS admission both refuse it), so the ban **stays
   pinned** rather than being shed by a re-handshake. (On a LAN a determined user can still clear local
