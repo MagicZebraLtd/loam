@@ -45,6 +45,37 @@ const MODELS_MAX = 500;
 export const CLOUD_ASSISTANT_REFUSED = "A cloud assistant is not allowed on a hardened network";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+/**
+ * Most characters of DM history (system prompt aside) sent to the Android phone's on-device model. Its
+ * context is 4096 tokens with no context shift, so 40 turns of up to 8000 characters can't fit; the phone
+ * trims to the exact token budget with the model's own tokenizer (apps/app `llm-context-budget.ts`), and
+ * this coarser bound keeps the request over the launcher bridge small. Roughly four times what fits.
+ */
+export const ON_DEVICE_CONTEXT_MAX_CHARS = 16_000;
+
+/**
+ * The newest turns of `history` whose bodies add up to at most `maxChars` characters, always keeping the
+ * newest turn (the message being answered), and never opening on an assistant turn (Gemma's chat template
+ * refuses a conversation that doesn't alternate from a user turn).
+ */
+export function capHistoryByChars(history: ChatMessage[], maxChars: number = ON_DEVICE_CONTEXT_MAX_CHARS): ChatMessage[] {
+  let start = history.length;
+  let total = 0;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const next = total + history[index].content.length;
+    if (next > maxChars && start < history.length) {
+      break;
+    }
+    total = next;
+    start = index;
+  }
+  let kept = history.slice(start);
+  while (kept.length > 1 && kept[0].role === "assistant") {
+    kept = kept.slice(1);
+  }
+  return kept;
+}
 /** `fetch`'s redirect option (`follow` | `error` | `manual`), without the DOM lib. */
 type RedirectPolicy = NonNullable<RequestInit["redirect"]>;
 
@@ -503,7 +534,10 @@ export function createLlmLayer(rt: Runtime) {
     // the system prompt. A message-count bound (not a token budget) is the same hardcoded-limit style as the
     // 5-minute Ollama timeout below; a token budget + summarisation is the documented fuller version
     // (docs/25 P2). A single pathological message can still be large; that is left to the fuller version.
-    const messages = history.slice(-MAX_LLM_CONTEXT_MESSAGES);
+    // The phone's on-device model has a small fixed context, so its history is also capped by characters
+    // (`capHistoryByChars`); the phone then trims to its exact token budget before generating.
+    const recent = history.slice(-MAX_LLM_CONTEXT_MESSAGES);
+    const messages = activeProvider() === "onDevice" ? capHistoryByChars(recent) : recent;
 
     return rt.appConfig.llm.ollama.systemPrompt
       ? [{ role: "system" as const, content: rt.appConfig.llm.ollama.systemPrompt }, ...messages]

@@ -22,6 +22,7 @@ import { WebView } from 'react-native-webview';
 
 
 import { AboutOverlay } from '@/components/about-overlay';
+import { BootDetails } from '@/components/boot-details';
 import { DbEncryptionSettingsOverlay } from '@/components/db-encryption-settings';
 import { EmergencyResetOverlay } from '@/components/emergency-reset';
 import { HostMenu } from '@/components/host-menu';
@@ -36,7 +37,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { colorSchemeForClientMessage } from '@/lib/client-theme';
 import { alertLevelForClientMessage, conversationPath, messageNotifier } from '@/lib/message-notifications';
 import { t } from '@/lib/i18n';
-import { SERVER_PORT, withInviteCode } from '@/lib/join-url';
+import { HOST_WEBVIEW_ORIGIN, withInviteCode } from '@/lib/join-url';
 import {
   clearStoredDbKeys,
   DB_ENCRYPTION_DRIVER_MISSING_CODE,
@@ -44,6 +45,7 @@ import {
   DB_ENCRYPTION_PLAINTEXT_UNCONVERTED_CODE,
   dbEncryptionRecoveryForCode,
   getDbEncryptionMode,
+  hasStoredPassphrase,
   registerDbEncryption,
   requestDbStartFresh,
   requestDbUnlock,
@@ -55,7 +57,13 @@ import {
   type StartFreshIntent,
 } from '@/lib/db-encryption';
 import { confirmStartUnencrypted, retryKeyResolution, switchEncryptionOffAndRetry } from '@/lib/driver-missing-recovery';
+import { bootErrorKey, bootNoticeKey, parseLockedReason, type LockedReason } from '@/lib/boot-messages';
 import { closeAfterReset } from '@/lib/emergency-reset';
+import {
+  passphraseEntryProblem,
+  passphraseNeedsConfirmation,
+  type PassphrasePresenceForConfirm,
+} from '@/lib/passphrase-confirm';
 import { ensureHostService } from '@/lib/host-service';
 import { noteConnectedClients, noteLauncherInterfaces } from '@/hooks/use-hotspot';
 import { parseHostClients, parseHostInterfaces, type HostInterface } from '@/lib/join-display';
@@ -72,8 +80,9 @@ import {
 } from '../../modules/loam-hotspot';
 
 // The embedded server (main.js → loam-server.js) always listens on this port; the host phone's
-// WebView loads it over loopback. Remote joiners use the hotspot's own (discovered) address or the LAN one.
-const LOAM_URL = `http://localhost:${SERVER_PORT}`;
+// WebView loads it over IPv4 loopback by IP literal, never by name (see HOST_WEBVIEW_ORIGIN). Remote
+// joiners use the hotspot's own (discovered) address or the LAN one.
+const LOAM_URL = HOST_WEBVIEW_ORIGIN;
 // Cold start is ~80s (docs/04); give it comfortably more before declaring the runtime hung.
 const STARTUP_TIMEOUT_MS = 150_000;
 // How long to wait for GET /api/bootstrap to resolve before giving up and showing a retryable error
@@ -184,7 +193,16 @@ type HostStatus = 'starting' | 'ready' | 'error';
 // see the `BootNotice` comment above) that deliberately does NOT drive `HostStatus`/the screen switch:
 // it only ever updates the separate `notice` state below, so it can never regress a 'ready' host back
 // to a spinner/error screen, and it is never cleared by a later 'ready'.
-type StatusPayload = { status?: HostStatus | 'notice'; message?: string; code?: string; hostToken?: string };
+type StatusPayload = {
+  status?: HostStatus | 'notice';
+  message?: string;
+  code?: string;
+  hostToken?: string;
+  /** On a `db_encryption_locked` report: the key about to be typed creates a database (main.js `keyCreatesDatabase`). */
+  newDatabase?: boolean;
+  /** On a `db_encryption_locked` report: which locked case it is (boot-config.js), for the translated text. */
+  reason?: string;
+};
 type HostInfoPayload = { port?: number; addresses?: string[]; interfaces?: unknown; clients?: unknown; invite?: unknown };
 
 // nodejs-mobile allows exactly one runtime per process; a screen remount must not start it twice,
@@ -247,7 +265,12 @@ function HostScreen() {
   // Initialise from the module-level status so a remount after the node is already ready/errored
   // doesn't get stuck showing "starting" (the runtime won't re-emit).
   const [status, setStatus] = useState<HostStatus>(() => nodeStatus);
+  // `errorMessage` is text this screen wrote, already in the host's language. `errorDetail` is the launcher's
+  // or server's own (English) words, shown only behind Details; the screen shows catalog text for its code
+  // instead (src/lib/boot-messages.ts, F-054). `lockedReason` picks that text for `db_encryption_locked`.
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const [errorDetail, setErrorDetail] = useState<string | undefined>();
+  const [lockedReason, setLockedReason] = useState<LockedReason>();
   // The boot-status error `code` (if any) from the last `loam-status` payload. Selects the recovery block
   // the error screen shows (`DB_UNREADABLE_CODE`, `DB_LOCKED_CODE` and the two codes
   // `dbEncryptionRecoveryForCode` classifies), rather than making the operator guess.
@@ -264,6 +287,11 @@ function HostScreen() {
   // whether to show the passphrase input (only meaningful for 'passphrase' mode) or just a plain Retry.
   const [lockedMode, setLockedMode] = useState<DbEncryptionMode | undefined>();
   const [unlockPassphraseInput, setUnlockPassphraseInput] = useState('');
+  // A first passphrase is typed twice (F-055): `lockedNewDatabase` is the launcher's word that this key
+  // creates the database, `lockedPassphrasePresence` whether one has ever opened it. See passphrase-confirm.ts.
+  const [unlockConfirmInput, setUnlockConfirmInput] = useState('');
+  const [lockedNewDatabase, setLockedNewDatabase] = useState(false);
+  const [lockedPassphrasePresence, setLockedPassphrasePresence] = useState<PassphrasePresenceForConfirm | undefined>();
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockMessage, setUnlockMessage] = useState<string | undefined>();
   // `db_encryption_plaintext_unconverted` recovery in-flight state, see
@@ -409,10 +437,22 @@ function HostScreen() {
         setLockedMode(mode);
       }
     });
+    if (dbLocked) {
+      void hasStoredPassphrase().then((presence) => {
+        if (!cancelled) {
+          setLockedPassphrasePresence(presence);
+        }
+      });
+    }
     return () => {
       cancelled = true;
     };
   }, [dbLocked, dbUnreadableForMode, dbDriverMissing]);
+  // Only the locked screen can create a database from the typed passphrase; the unreadable screen retries
+  // an existing one, where a typo just fails to open it.
+  const unlockNeedsConfirmation =
+    dbLocked && passphraseNeedsConfirmation({ newDatabase: lockedNewDatabase, presence: lockedPassphrasePresence });
+  const unlockEntryProblem = passphraseEntryProblem(unlockPassphraseInput, unlockConfirmInput, unlockNeedsConfirmation);
 
   // Clear the device key material and, ONLY on a VERIFIED success, ack the
   // launcher (`loam-wipe-complete`) so it deletes its durable `.loam-wipe-phase` file. On ANY
@@ -480,6 +520,7 @@ function HostScreen() {
         nodeStatus = 'ready';
         setStatus('ready');
         setErrorMessage(undefined);
+        setErrorDetail(undefined);
         setErrorCode(undefined);
         if (typeof payload.hostToken === 'string' && payload.hostToken.length > 0) {
           nodeHostToken = payload.hostToken;
@@ -537,7 +578,12 @@ function HostScreen() {
         clearTimeout(startupTimeout);
         nodeStatus = 'error';
         setStatus('error');
-        setErrorMessage(payload.message);
+        setErrorMessage(undefined);
+        setErrorDetail(payload.message);
+        if (payload.code === DB_LOCKED_CODE) {
+          setLockedNewDatabase(payload.newDatabase === true);
+          setLockedReason(parseLockedReason(payload.reason));
+        }
         setErrorCode((current) => {
           // A generic, codeless boot error, or main.js's ~5-min readiness-poll give-up (`retry`'s
           // `'boot_timeout'`), must not clobber an ACTIVE recovery state: `db_encryption_unreadable`
@@ -865,9 +911,10 @@ function HostScreen() {
 
   // A WebView load failure after the node is ready is usually transient (page fetched mid-cold-start).
   // Surface the error UI; Retry remounts the WebView (a fresh load) as long as the node is still up.
-  const failWebView = (message: string) => {
+  const failWebView = (message: string, detail?: string) => {
     setStatus('error');
     setErrorMessage(message);
+    setErrorDetail(detail);
   };
 
   // Fresh-start recovery: ask the launcher to write the confirmation marker. Shared by BOTH the
@@ -916,7 +963,11 @@ function HostScreen() {
   // server bundle), just a key to try resolving again now that a passphrase exists.
   const handleUnlockWithPassphrase = async () => {
     const trimmed = unlockPassphraseInput;
-    if (!trimmed) {
+    if (unlockEntryProblem === 'empty') {
+      return;
+    }
+    if (unlockEntryProblem === 'mismatch') {
+      setUnlockMessage(t('boot.passphraseMismatch'));
       return;
     }
     setUnlockBusy(true);
@@ -941,6 +992,7 @@ function HostScreen() {
     // SecureStore regardless.
     void setDbModeHint(nodejs.channel, lockedMode ?? 'passphrase');
     setUnlockPassphraseInput('');
+    setUnlockConfirmInput('');
     const result = await requestDbUnlock(nodejs.channel);
     if (!result.ok) {
       setUnlockBusy(false);
@@ -1173,8 +1225,9 @@ function HostScreen() {
         {notice && !noticeDismissed ? (
           <ThemedView type="backgroundSelected" style={styles.noticeBanner}>
             <ThemedText type="small" style={styles.noticeBannerText}>
-              {notice.message ?? t('boot.noticeDowngraded')}
+              {t(bootNoticeKey(notice.code))}
             </ThemedText>
+            <BootDetails text={notice.message} />
             <ThemedView style={styles.noticeBannerActions}>
               <Pressable onPress={() => setDbEncryptionOpen(true)} accessibilityRole="button">
                 <ThemedText type="link">{t('boot.encryptionSettings')}</ThemedText>
@@ -1244,7 +1297,7 @@ function HostScreen() {
             }
             // The LOAM client relies on the loam_session cookie, localStorage, IndexedDB (unless refused
             // above) and a WebSocket — enable them. localStorage holds the identity token and preferences,
-            // no messages, so it stays on for every network. The cleartext localhost origin is allowed by the
+            // no messages, so it stays on for every network. The cleartext 127.0.0.1 origin is allowed by the
             // app's network security config (plugins/with-loam-host.js), loopback only.
             javaScriptEnabled
             domStorageEnabled
@@ -1274,7 +1327,7 @@ function HostScreen() {
             // off: with it on (the default), Android hands a target=_blank link to a detached popup
             // WebView that never consults onShouldStartLoadWithRequest; off, the link navigates this
             // WebView, which the handler below refuses and opens in the system browser instead.
-            originWhitelist={['http://localhost:3000']}
+            originWhitelist={[LOAM_URL]}
             setSupportMultipleWindows={false}
             onShouldStartLoadWithRequest={(request) => {
               if (isLoamUrl(request.url)) {
@@ -1287,7 +1340,7 @@ function HostScreen() {
             }}
             onError={({ nativeEvent }) => {
               console.warn('LOAM WebView error', nativeEvent.description);
-              failWebView(nativeEvent.description || t('boot.pageFailed'));
+              failWebView(t('boot.pageFailed'), nativeEvent.description || undefined);
             }}
             onHttpError={({ nativeEvent }) => {
               // The status only: the URL names a conversation, and logcat outlives the network (docs/04).
@@ -1406,8 +1459,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.noticeDowngraded')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {notice.message ?? t('boot.seeEncryptionSettings')}
+                  {t(bootNoticeKey(notice.code))}
                 </ThemedText>
+                <BootDetails text={notice.message} />
                 <ThemedView style={styles.noticeBannerActions}>
                   <Pressable onPress={() => setNoticeDismissed(true)} accessibilityRole="button" hitSlop={Spacing.two}>
                     <ThemedText type="link">{t('common.dismiss')}</ThemedText>
@@ -1422,11 +1476,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.unreadableTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.seeEncryptionSettings')}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
                   {t('boot.unreadableBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 {lockedMode === 'passphrase' ? (
                   // A wrong passphrase is the common cause here, since it is asked for at EVERY start: offer a
                   // retry with the same candidate flow as the locked screen. The new entry is tried on the intact
@@ -1492,12 +1544,13 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.lockedTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.lockedBody')}
+                  {t(bootErrorKey(DB_LOCKED_CODE, lockedReason) ?? 'boot.lockedBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 {lockedMode === 'passphrase' ? (
                   <>
                     <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                      {t('boot.lockedPassphraseHint')}
+                      {unlockNeedsConfirmation ? t('boot.passphraseNewHint') : t('boot.lockedPassphraseHint')}
                     </ThemedText>
                     <TextInput
                       value={unlockPassphraseInput}
@@ -1507,18 +1560,36 @@ function HostScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       secureTextEntry
-                      returnKeyType="done"
+                      returnKeyType={unlockNeedsConfirmation ? 'next' : 'done'}
                       onSubmitEditing={() => {
-                        if (!unlockBusy && unlockPassphraseInput) {
+                        if (!unlockBusy && unlockPassphraseInput && !unlockNeedsConfirmation) {
                           void handleUnlockWithPassphrase();
                         }
                       }}
                       style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
                     />
+                    {unlockNeedsConfirmation ? (
+                      <TextInput
+                        value={unlockConfirmInput}
+                        onChangeText={setUnlockConfirmInput}
+                        placeholder={t('boot.passphraseConfirmPlaceholder')}
+                        placeholderTextColor={theme.textSecondary}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        secureTextEntry
+                        returnKeyType="done"
+                        onSubmitEditing={() => {
+                          if (!unlockBusy && unlockPassphraseInput) {
+                            void handleUnlockWithPassphrase();
+                          }
+                        }}
+                        style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
+                      />
+                    ) : null}
                     <ThemedView style={styles.noticeBannerActions}>
                       <Pressable
                         onPress={() => void handleUnlockWithPassphrase()}
-                        disabled={unlockBusy || !unlockPassphraseInput}
+                        disabled={unlockBusy || !unlockPassphraseInput || (unlockNeedsConfirmation && !unlockConfirmInput)}
                         accessibilityRole="button">
                         <ThemedView type="backgroundElement" style={styles.retry}>
                           <ThemedText type="link">{unlockBusy ? t('boot.unlocking') : t('boot.unlock')}</ThemedText>
@@ -1550,8 +1621,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.plaintextTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.plaintextBody')}
+                  {t('boot.plaintextBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
                   {t('boot.plaintextChoices')}
                 </ThemedText>
@@ -1588,8 +1660,9 @@ function HostScreen() {
               <ThemedView type="backgroundSelected" style={styles.dbEncryptionNotice}>
                 <ThemedText type="smallBold">{t('boot.driverMissingTitle')}</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {errorMessage ?? t('boot.driverMissingBody')}
+                  {t('boot.driverMissingBody')}
                 </ThemedText>
+                <BootDetails text={errorDetail} />
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
                   {t('boot.driverMissingChoices')}
                 </ThemedText>
@@ -1657,14 +1730,17 @@ function HostScreen() {
                       : t('boot.startFailedTitle')}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-                  {portInUse ? t('boot.portInUseBody') : (errorMessage ?? t('boot.notReady'))}
+                  {portInUse ? t('boot.portInUseBody') : (errorMessage ?? t(bootErrorKey(errorCode) ?? 'boot.notReady'))}
                 </ThemedText>
+                {/* The recovery blocks above already show their own Details. */}
+                {dbUnreadable || dbLocked || dbPlaintextUnconverted || dbDriverMissing ? null : <BootDetails text={errorDetail} />}
                 {nodeStatus === 'ready' ? (
                   // The server is up; a Retry just remounts the WebView for a fresh load.
                   <Pressable
                     accessibilityRole="button"
                     onPress={() => {
                       setErrorMessage(undefined);
+                      setErrorDetail(undefined);
                       setStatus('ready');
                     }}>
                     <ThemedView type="backgroundElement" style={styles.retry}>
