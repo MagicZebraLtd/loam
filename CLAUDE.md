@@ -166,7 +166,12 @@ request protocol, not `NODE_ENV`).
   persisted and broadcast once via `messageUpdated`, so non-streaming clients still converge.
 - **NetworkConfig**: feature flags sent to the client from `/api/config` and the public, cookie-free
   `/api/bootstrap` (everything `/api/config` returns except `currentUser`; mints no identity), and
-  re-broadcast live via the `configUpdated` WS event when an admin edits config.
+  re-broadcast live via the `configUpdated` WS event when an admin edits config. It carries the effective
+  node retention (`messageTtlMs`) so clients prune by age. `/api/bootstrap` alone also answers a **loopback**
+  caller on an **encrypted** node with `hostNoLocalCache: true` (never in `NetworkConfig`, which is broadcast):
+  the `loamnet` operator's own browser then keeps no IndexedDB, like the desktop/Android windows under
+  `window.__loamHostNoLocalCache` (`applyHostNoLocalCacheHint` in `lib/local-store.ts`, remembered in
+  localStorage `loam.hostNoLocalCache`).
 - **LoamConfig / LoamConfigUpdate**: the full node configuration (identity, features, llm, admin
   bootstrap, security profile) and its PATCH shape — shared by the server config loader, the
   `/api/admin/config` endpoints, and the client admin UI.
@@ -294,7 +299,10 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   complete. A channel's own `messageTtlMs` is **admin-only** on `PATCH /api/channels/:id` (an owner sending
   it gets 403 `admin_required`) and can only **shorten** retention: the reaper applies
   `min(channelTtl, nodeTtl)`, so no channel outlives the node-wide TTL; with the node TTL off a channel TTL
-  stands alone.
+  stands alone. Clients apply the same rule to what they hold (`lib/retention.ts`, `pruneExpiredMessages` in
+  `app.tsx`): the node TTL from `NetworkConfig.messageTtlMs` (remembered in the `sync` store as `retention`
+  for an offline start) and each channel's own, at hydration, on a TTL/channel change and every 60 s, with
+  "now" = max(device clock, newest held `createdAt`).
 - **Kill switch** (off by default; `killSwitch.enabled`): `executeKillSwitch()` deletes avatars,
   invalidates sessions, broadcasts `wipe` (clients purge IndexedDB/localStorage/SW caches and show a
   neutral disconnected screen), closes sockets, and re-seeds defaults. Config survives. The data
@@ -313,8 +321,12 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   config) before its first destructive step, the in-process branches clear it after `loadData()`, and the boot-time
   resume (`resumeWipePhaseThenOpenStore`) finishes an interrupted wipe (delete DB files + media, restore
   config.json, fresh store) before serving, in-process on any node without a fixed device key, so a restart
-  never serves pre-wipe data. A hooked fixed-key reset that had to strip `sync.token` from the restart config also sets
-  `sync.enabled: false` and leaves a `.loam-sync-off-after-reset` note the next boot logs and consumes. Both
+  never serves pre-wipe data. **Every branch pauses sync** (`pauseSyncForReset`: `sync.enabled: false`, peers
+  and, in-process, the token kept; the restart snapshot strips the token), since the wipe empties the tombstones
+  and provenance and a linked peer would hand every public post back next round; it leaves a
+  `.loam-sync-off-after-reset` note (JSON `{at, hadToken}`) that every boot logs and `GET /api/admin/sync`
+  reports as `pausedByReset`, until an admin turns sync on again or removes every peer (`commitAdminConfig`
+  clears it). Both
   entry points treat an undeclared real `LOAM_DB_KEY` as `passphrase` (`resolveDbEncryptionMode`), so
   `loamnet --encrypt` takes the journaled fixed-key branch; only a direct `buildApp` embedder with a key and no
   mode reaches the legacy branch.
@@ -399,7 +411,9 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   nothing else) starts with that peer pinned and `linkCode` set, and presents the code in a **sealed**
   `POST /api/sync/link {code, port, transportKey, name}`; a valid code adds the asker as a pinned peer
   (source address + port, loopback refused), turns sync on (shared `commitAdminConfig`), and returns the
-  node's name + `sync.token`; the asker then drops the spent code (an answer that comes back after an admin
+  node's name + `sync.token` (a responder with no token and no other peer **mints** a 32-byte one on that
+  fresh link, so a code-linked pair never runs open sync; the admin Sync panel warns when sync is on with no
+  token); the asker then drops the spent code (an answer that comes back after an admin
   turned sync off or removed/changed that peer is ignored, so it can't reinstall a token). Codes are in memory, ≤4, cleared by the
   kill switch; admin saves can't add or restore a `linkCode`.
 - **Security headers**: an `onSend` hook sets `X-Content-Type-Options: nosniff` on every response and
@@ -586,7 +600,10 @@ kill switch. See `docs/09-security-profiles.md`.
 - **Design system**: `apps/client/DESIGN.md` is the UI contract (tokens in `src/styles/`, the `Dialog`/`Menu`/`ScreenHeader`/`Avatar`/icon primitives, breakpoints, the fixed-shell keyboard fix in `src/lib/viewport.ts`); read it before adding UI.
 - Preact + `preact-iso` for routing (hash-free paths: `/channels`, `/channel/:id`,
   `/channel/:id/thread/:tid`, `/dm/:id`, `/settings`, `/admin`, `/people`, `/search`). `parseRoute`
-  maps path → `RouteState`. The admin area (`AdminView`) and the claim form in settings appear per
+  maps path → `RouteState`. The admin area (`AdminView`; it keeps the server's copy beside its draft, saves
+  only the changed fields via `lib/admin-config.ts` `configDelta` after re-reading and `rebaseConfig`-ing the
+  draft, and re-reads on every `configUpdated` via the `configVersion` prop, so a stale form never reverts
+  the TUI's, another admin's or a link code's changes) and the claim form in settings appear per
   `currentUser.isAdmin` / `networkConfig.allowAdminClaim` — cosmetic only; the server enforces.
 - State is plain `useState` in `LoamApp` (no store lib). Flow: hydrate from **IndexedDB**
   (`src/lib/local-store.ts`, db `loam-poc`) → `/api/bootstrap` (then a sealed resume for a bound client,

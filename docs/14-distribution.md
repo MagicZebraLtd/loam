@@ -30,6 +30,14 @@ settings, Emergency Reset, and a kiosk mode (`loam --kiosk`, a password-locked s
 the QR). Without a terminal on both ends (a service, a pipe, `--plain`) it prints the join address, the
 QR and a one-time admin link instead. The web app, messages and moderation stay in the browser.
 
+That browser is an ordinary tab no launcher injects into, so the node itself tells it to keep no local copy:
+on an encrypted network (`--encrypt`, any mode) `/api/bootstrap` answers a loopback caller with
+`hostNoLocalCache: true`, and the client then keeps no IndexedDB, as the desktop and Android hosts' own
+windows do under `window.__loamHostNoLocalCache` (review 2026-11-07 F-029). It remembers the hint in
+localStorage, so the next page load refuses before it hydrates, and deletes a copy it held from before. On
+an unencrypted network the browser caches as any joiner's does (the database beside it is in the clear
+anyway). The browser's own history and address-bar suggestions are outside LOAM's reach.
+
 ## How it's built
 
 `scripts/build-cli.mjs` (a fork of the Android bundler `apps/app/scripts/bundle-server.mjs`) runs
