@@ -1,6 +1,7 @@
 // Node-to-node sync endpoints (token-authed public data) and the opportunistic-mesh endpoints (identity
 // cards, contacts, sealed send/broadcast, the loopback transport bridge, admin sync), registered over the
 // shared AppContext.
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MeshBroadcastRequestSchema, type MeshContact, MeshIdentityCardSchema, MeshInboundRequestSchema, type MeshInboundResponse, MeshSendRequestSchema, type SealedMessage, SyncAttachmentRequestSchema, type SyncLinkCodeResponse, SyncLinkRequestSchema, type SyncLinkResponse, SyncMessagesRequestSchema, type SyncStatusReport } from "@loam/schema";
@@ -15,6 +16,11 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 /** Most sealed blobs one `GET /api/mesh/outbound` answer hands the radio courier. */
 const MESH_OUTBOUND_BATCH = 200;
+
+/** A new shared sync token (`sync.token`): 32 random bytes, base64url (43 characters). */
+function mintSyncToken(): string {
+  return randomBytes(32).toString("base64url");
+}
 
 /**
  * The admin Sync panel's report: the sync engine's status plus, while it still applies, the note an
@@ -489,12 +495,17 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
         if (peers.length >= 16) {
           return reply.code(409).send(errorBody("This node already syncs with the most peers it can"));
         }
+        // A first link on a node with no token gets one, so the two nodes' `/api/sync/*` aren't open to anyone
+        // who can reach them (banned and unapproved people included). Only when there is no other peer: one that
+        // already syncs without a token would start getting 404s, with nothing on this node saying why.
+        const token = !ctx.appConfig.sync.token && peers.length === 0 ? mintSyncToken() : undefined;
         peers.push({
           url,
           ...(body.data.name ? { label: body.data.name } : {}),
           ...(body.data.transportKey ? { transportKey: body.data.transportKey } : {}),
         });
-        if (commitAdminConfig(ctx, mergeConfig(ctx.appConfig, { sync: { enabled: true, peers } })) === "failed") {
+        const update = { sync: { enabled: true, peers, ...(token ? { token } : {}) } };
+        if (commitAdminConfig(ctx, mergeConfig(ctx.appConfig, update)) === "failed") {
           // Nothing was saved, so the code stays unspent for a retry.
           return reply.code(500).send(errorBody("Internal server error"));
         }
