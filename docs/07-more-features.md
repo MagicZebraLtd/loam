@@ -40,8 +40,13 @@ its own initiative and a top-level decision, not a quick add.
 > (+ boot-time sweep) that deletes expired messages from memory + SQLite and broadcasts
 > `messageDeleted` so connected clients purge their caches; in-flight LLM streaming messages are
 > spared until they finish; editable live from the admin UI (minutes field, blank = keep). Per-channel
-> TTLs have landed since (admin-only, and they can only shorten the node-wide TTL). Not yet: offline
-> clients only reconcile when they receive live delete events.
+> TTLs have landed since (admin-only, and they can only shorten the node-wide TTL). Clients apply it too
+> (review 2026-11-07 F-030): `NetworkConfig.messageTtlMs` carries the effective node TTL, the client
+> remembers it in its local store (`lib/retention.ts`), and drops held messages past min(channel TTL, node
+> TTL), with the replies and reactions the node deletes alongside them, at start (before anything renders,
+> even offline), whenever the TTL or a channel changes, and every 60 s. Its "now" is the later of the device
+> clock and the newest server stamp it holds, so a slow clock can't keep what the node dropped; a fast one
+> prunes early. A device that never opens LOAM again keeps its copy until it does.
 
 A per-channel/global `retentionMs` config + a periodic reaper (`DELETE FROM messages WHERE created_at <
 now - ttl`) gives disappearing messages almost for free once on SQLite. It's the *proactive* complement

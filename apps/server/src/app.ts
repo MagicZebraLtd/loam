@@ -843,6 +843,9 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
         (effectiveAdminBootstrap() === "passphrase" && !!appConfig.admin.passphrase),
       joinPolicy: appConfig.access.joinPolicy,
       securityProfile: appConfig.security.profile,
+      // The retention the reaper applies (a profile's preset is already merged in), so clients prune their
+      // own copies by age too (docs/07).
+      ...(appConfig.retention.messageTtlMs ? { messageTtlMs: appConfig.retention.messageTtlMs } : {}),
       // Report the EFFECTIVE posture (Developer Mode forces "off"), matching what's actually enforced.
       transportEncryption: effectiveTransportEncryption(),
       // Publish the host's static public key only when transport encryption is in play, so the client
@@ -2591,6 +2594,30 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   }
 
   /**
+   * At boot: say that an Emergency Reset paused sync, while it still applies (sync off, peers left), and drop
+   * the note once it doesn't (config.json turned sync on by hand, or there are no peers). A reset that
+   * restarted the node also dropped the sync token, which the admin has to set again.
+   */
+  function reportSyncPausedByReset(): void {
+    const paused = lifecycle.syncPausedByReset();
+    if (!paused) {
+      return;
+    }
+    if (appConfig.sync.enabled || !appConfig.sync.peers.length) {
+      lifecycle.clearSyncPausedByReset();
+      return;
+    }
+    const tokenNote =
+      paused.hadToken && appConfig.sync.token === undefined
+        ? " The reset also dropped the sync token (it is not carried across a restart): set a new one first."
+        : "";
+    server.log.warn(
+      "Sync was turned off by the Emergency Reset, so the linked networks can't hand the wiped public posts back. " +
+        `Turn it on again from the admin Sync panel when you choose.${tokenNote}`,
+    );
+  }
+
+  /**
    * Registers the client distribution directory as the server's static file root when it exists.
    */
   async function registerStaticFiles(): Promise<void> {
@@ -2614,11 +2641,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
   try {
     await loadAppConfig();
-    if (lifecycle.consumeSyncDisabledByResetNotice()) {
-      server.log.warn(
-        "Sync was turned off by the Emergency Reset because its token is not carried across a restart; set a token and turn sync on again.",
-      );
-    }
+    reportSyncPausedByReset();
     loadData();
     reapExpiredMessages();
   } catch (error) {

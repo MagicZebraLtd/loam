@@ -2,8 +2,9 @@
 // code: the join URL plus `#k=<transport key>&l=<link code>`. The new node scans it and presents the code
 // in a sealed `POST /api/sync/link` (sealed to the key it just scanned, so nobody on the network can read
 // or alter it). A valid code links both ways at once: this node adds the new one as a sync peer with its
-// key pinned and switches sync on, and answers with its name and its mesh token (if it has one), so the new
-// node can pull too. No request queue, nothing to judge from a self-chosen name: showing the code is the
+// key pinned and switches sync on, and answers with its name and its mesh token, so the new node can pull
+// too. A node with no token and no other peer mints one on its first link (routes-sync-mesh.ts), so a pair
+// linked by code never leaves `/api/sync/*` open to everyone who can reach it. No request queue, nothing to judge from a self-chosen name: showing the code is the
 // approval, and the ordinary join QR (on a poster, in a photo) can never link a node.
 //
 // Codes are random, single-use, short-lived and held in memory only; a restart or the kill switch forgets

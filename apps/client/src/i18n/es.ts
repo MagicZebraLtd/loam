@@ -271,6 +271,14 @@ export const es: Translation = {
   "admin.syncTokenPlaceholder": "Déjalo en blanco para sincronización abierta",
   "admin.syncTokenGenerate": "Generar",
   "admin.syncTokenNote": "Cuando se establece, solo los pares que presenten este token exacto pueden sincronizar. Da a cada nodo de tu malla el mismo token.",
+  "admin.killSwitchLinkedNote":
+    "Esta red está enlazada con otras redes. El restablecimiento desactiva la sincronización para que no devuelvan los canales públicos, pero conservan su propia copia, y volver a activar la sincronización la trae de vuelta.",
+  "admin.syncPausedByReset":
+    "El Restablecimiento de emergencia desactivó la sincronización para que las redes enlazadas no devolvieran los canales públicos borrados. Siguen teniendo su propia copia. Vuelve a activar la sincronización cuando quieras.",
+  "admin.syncPausedTokenDropped":
+    "El restablecimiento también eliminó el token compartido de la malla. Pon el mismo token nuevo en cada nodo enlazado antes de activar la sincronización.",
+  "admin.syncOpenWarning":
+    "La sincronización está activada sin token, así que cualquiera que llegue a esta red puede leer sus canales públicos mediante la sincronización, incluidas las personas que expulsaste o no aprobaste. Genera un token y ponlo en cada nodo enlazado.",
   "admin.noPeers": "Aún no hay pares.",
   "admin.peerChangesNote": "Los cambios de pares se aplican al guardar la configuración del nodo abajo.",
   "admin.meshHeading": "Malla oportunista",

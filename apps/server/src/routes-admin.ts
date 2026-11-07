@@ -365,6 +365,10 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   const switchedAwayFromSetupCode =
     ctx.appConfig.admin.bootstrap === "setupCode" && next.admin.bootstrap !== "setupCode";
   ctx.appConfig = next;
+  // An Emergency Reset's "sync paused" notice ends once sync is on again or there is no peer left to sync with.
+  if (next.sync.enabled || !next.sync.peers.length) {
+    ctx.lifecycle.clearSyncPausedByReset();
+  }
   // `appConfig` is always the operator's real intent (Developer Mode never mutates it — the plaintext
   // override is a read-time projection via `effectiveTransportEncryption()`), so the persisted config can
   // never carry a dev-forced `"off"` into a later non-dev run of this data dir.

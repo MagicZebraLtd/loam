@@ -116,7 +116,11 @@ it.
 records the id in a `tombstones` table, so a peer that still holds the message can never hand it
 back. Deletes do **not** propagate to peers in v1 — each node's operator moderates their own node
 (a kill-switch wipe also only wipes *this* node; peers keep what they already pulled — that is the
-point of a mesh, and worth knowing before you enable sync).
+point of a mesh, and worth knowing before you enable sync). The wipe also empties the tombstones and
+imported-record provenance, so nothing here would refuse those copies coming back: every reset branch
+therefore turns `sync.enabled` off (peers kept) and leaves a notice the admin Sync panel shows
+(`pausedByReset` in `GET /api/admin/sync`) until an admin turns sync on again, which brings the linked
+networks' copies back (docs/02 "Sync after a reset").
 
 ## Onboarding
 
@@ -137,7 +141,11 @@ or alter it; an unsealed request is refused before the code is checked) and carr
 new node's own (the code is the credential; the answer is what hands a token over). A valid code adds the new node
 as a peer of this one (its address is the request's source address plus the reported port, loopback
 refused; its key pinned) and switches sync on, applied like an admin save; the answer carries this node's
-name and its `sync.token`, which the new node adopts if it has none. The new node then drops the spent
+name and its `sync.token`, which the new node adopts if it has none. A node with no token and no other peer
+mints one (32 random bytes) on that first link, so a pair linked by code never runs open sync, where
+anyone who can reach either node, banned and unapproved people included, reads every public channel over
+`/api/sync/*`; a node that already syncs with a tokenless peer mints none (that peer would start getting
+404s), and the admin Sync panel warns whenever sync is on without a token. The new node then drops the spent
 code. A refused code (expired, used, or retired by a reset) is reported in its sync panel and not retried.
 Admin saves can neither add a link code nor put back a spent one. Why a code rather than a request
 queue: showing the code *is* the approval, so there is nothing to spam and nothing to judge from a

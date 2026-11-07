@@ -157,6 +157,109 @@ describe("AdminView", () => {
     });
   });
 
+  /** A stubbed node whose config the test can change "elsewhere"; records every PATCH body. */
+  function stubConfigNode(initial: LoamConfig) {
+    const node = { config: structuredClone(initial), patches: [] as unknown[] };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/admin/channels")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        if (url.includes("/api/admin/sync")) {
+          return new Response(JSON.stringify({ enabled: node.config.sync.enabled, intervalMs: 30_000, peers: [] }), { status: 200 });
+        }
+        if (url.includes("/api/admin/config") && init?.method === "PATCH") {
+          const update = JSON.parse(String(init.body)) as { node?: Partial<LoamConfig["node"]> };
+          node.patches.push(update);
+          node.config = { ...node.config, node: { ...node.config.node, ...update.node } };
+          return new Response(JSON.stringify(node.config), { status: 200 });
+        }
+        return new Response(JSON.stringify(node.config), { status: 200 });
+      }),
+    );
+    return node;
+  }
+
+  function typeName(host: HTMLElement, value: string): void {
+    const nameInput = host.querySelector("#admin-network form input") as HTMLInputElement;
+    nameInput.value = value;
+    nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  it("saves only what the admin changed, so a profile switched elsewhere meanwhile stays (review 2026-11-07 F-041)", async () => {
+    const node = stubConfigNode(config);
+    const host = mount(<AdminView currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />);
+    await flush();
+    typeName(host, "Renamed Node");
+    await flush();
+
+    // The host's terminal UI switches the network to Hardened while the page is open.
+    node.config = {
+      ...node.config,
+      security: { ...node.config.security, profile: "hardened", transportEncryption: "required" },
+      access: { joinPolicy: "approval" },
+      retention: { messageTtlMs: 3_600_000 },
+      killSwitch: { ...node.config.killSwitch, enabled: true },
+    };
+    (host.querySelector(".save-bar button") as HTMLButtonElement).click();
+    await flush();
+
+    expect(node.patches).toEqual([{ node: { name: "Renamed Node" } }]);
+    expect(node.config.security.profile).toBe("hardened");
+    expect((host.querySelector("#admin-security select") as HTMLSelectElement).value).toBe("hardened");
+  });
+
+  it("re-reads the config when the node says it changed, keeping the admin's unsaved edits", async () => {
+    const node = stubConfigNode(config);
+    const host = mount(<AdminView configVersion={0} currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />);
+    await flush();
+    typeName(host, "Unsaved Name");
+    await flush();
+
+    node.config = { ...node.config, features: { ...node.config.features, enablePresence: false } };
+    render(<AdminView configVersion={1} currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />, host);
+    await flush();
+
+    expect((host.querySelector("#admin-network form input") as HTMLInputElement).value).toBe("Unsaved Name");
+    const switches = Array.from(host.querySelectorAll<HTMLInputElement>("#admin-features input.toggle"));
+    // The feature switches follow `featureFlagLabels` order; presence is the ninth.
+    expect(switches[8]?.checked).toBe(false);
+    expect(switches[0]?.checked).toBe(true);
+  });
+
+  it("warns when sync is on without a token", async () => {
+    stubConfigNode({ ...config, sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }], intervalMs: 30_000 } });
+    const host = mount(<AdminView currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />);
+    await flush();
+    expect(host.querySelector("#admin-sync")?.textContent).toContain("Sync is on without a token");
+
+    stubConfigNode({
+      ...config,
+      sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }], intervalMs: 30_000, token: "a-shared-sync-token-0123" },
+    });
+    const guarded = mount(<AdminView currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />);
+    await flush();
+    expect(guarded.querySelector("#admin-sync")?.textContent).not.toContain("Sync is on without a token");
+  });
+
+  it("tells the admin, before the reset, that a linked network keeps its own copy (review 2026-11-07 F-043)", async () => {
+    stubConfigNode({
+      ...config,
+      killSwitch: { enabled: true, requireConfirmation: true },
+      sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }], intervalMs: 30_000, token: "a-shared-sync-token-0123" },
+    });
+    const host = mount(<AdminView currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />);
+    await flush();
+    Array.from(host.querySelectorAll<HTMLButtonElement>("#admin-danger button"))
+      .find((button) => button.textContent === "Wipe this node now")!
+      .click();
+    await flush();
+
+    expect(host.querySelector('[role="alertdialog"]')?.textContent).toContain("they keep their own copy");
+  });
+
   it("confirms the Emergency Reset in an alertdialog that needs the typed word", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

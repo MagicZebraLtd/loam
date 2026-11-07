@@ -14,6 +14,7 @@ import {
   type LlmModelsRequest,
   type LlmModelsResponse,
   type LoamConfig,
+  type LoamConfigUpdate,
   type SecurityProfile,
   type User,
 } from "@loam/schema";
@@ -22,6 +23,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 
 import { LOCALE_LABELS, errorText, t } from "../i18n";
 import type { CatalogKey } from "../i18n/en";
+import { configDelta, isEmptyConfigUpdate, rebaseConfig } from "../lib/admin-config";
 import { fetchJson, REQUEST_TIMEOUT_MS } from "../lib/api";
 import { encryptedFetch } from "../lib/transport";
 import { AddSyncPeerControl } from "./AddSyncPeerControl";
@@ -139,6 +141,15 @@ function sectionFromHash(hash: string): string | undefined {
   return adminSections().some(([candidate]) => candidate === key) ? key : undefined;
 }
 
+/** `GET /api/admin/config`, checked against the shared schema. */
+async function fetchAdminConfig(): Promise<LoamConfig> {
+  const parsed = LoamConfigSchema.safeParse(await fetchJson<unknown>("/api/admin/config"));
+  if (!parsed.success) {
+    throw new Error(t("admin.configInvalid"));
+  }
+  return parsed.data;
+}
+
 /**
  * One admin section: a small label heading and its cards. A section whose cards edit node config is a
  * `<form>` (pass `onSubmit`), so Enter in any of its fields saves the configuration, as it always has.
@@ -188,12 +199,16 @@ function AdminSection({
  * the server enforces admin on every request.
  */
 export function AdminView({
+  configVersion,
   currentUser,
   joinUrl,
   onChannelRemoved,
   onChannelUpsert,
   onWiped,
 }: {
+  /** Bumped on every live `configUpdated` event: the config changed somewhere (the host's terminal UI,
+   * another admin, a node linking itself), so the form re-reads it and keeps its own unsaved edits. */
+  configVersion?: number;
   currentUser: User;
   joinUrl?: string;
   /** Purge a permanently deleted channel from app state + IndexedDB (the WS `channelRemoved` does
@@ -203,7 +218,12 @@ export function AdminView({
   onChannelUpsert: (channels: Channel[]) => void;
   onWiped: () => Promise<void>;
 }) {
+  // The form's draft, and the server's copy it was last brought up to date with. A save sends only what the
+  // draft changed from that copy (`configDelta`), and a newer copy is taken in under the unsaved edits
+  // (`rebaseConfig`), so nothing changed elsewhere since the page loaded is put back.
   const [adminConfig, setAdminConfig] = useState<LoamConfig>();
+  const [savedConfig, setSavedConfig] = useState<LoamConfig>();
+  const savedConfigRef = useRef<LoamConfig | undefined>(undefined);
   const [loadError, setLoadError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -213,9 +233,6 @@ export function AdminView({
   const [confirmingWipe, setConfirmingWipe] = useState(false);
   const [firing, setFiring] = useState(false);
   const [fireError, setFireError] = useState<string>();
-  // Peer URLs the server had when this form last loaded or saved. A node can link itself while the form is
-  // open (a "Link a node" code), and the form must take that peer in, or its next save would drop it.
-  const knownPeerUrls = useRef(new Set<string>());
   // The sections exist only once the config has loaded, so a `#admin-<key>` in the address is honoured then,
   // once (a later hash change is the nav's own click).
   const jumpedToHash = useRef(false);
@@ -231,6 +248,15 @@ export function AdminView({
     }
   }, [adminConfig]);
 
+  /** Take in a newer server copy of the config: the draft keeps the admin's unsaved edits on top of it. */
+  function adoptServerConfig(fresh: LoamConfig): void {
+    const base = savedConfigRef.current;
+    savedConfigRef.current = fresh;
+    setSavedConfig(fresh);
+    setAdminConfig((draft) => (draft && base ? rebaseConfig(draft, base, fresh) : fresh));
+  }
+
+  // Load the config, and read it again whenever the node says it changed (`configVersion`).
   useEffect(() => {
     if (!currentUser.isAdmin) {
       return;
@@ -238,23 +264,16 @@ export function AdminView({
 
     let active = true;
 
-    fetchJson<unknown>("/api/admin/config")
-      .then((payload) => {
-        if (!active) {
-          return;
-        }
-
-        const parsed = LoamConfigSchema.safeParse(payload);
-
-        if (parsed.success) {
-          knownPeerUrls.current = new Set(parsed.data.sync.peers.map((peer) => peer.url));
-          setAdminConfig(parsed.data);
-        } else {
-          setLoadError(t("admin.configInvalid"));
+    fetchAdminConfig()
+      .then((fresh) => {
+        if (active) {
+          setLoadError(undefined);
+          adoptServerConfig(fresh);
         }
       })
       .catch((error: unknown) => {
-        if (active) {
+        // A failed re-read leaves the loaded form as it is; only the first load has nothing to show.
+        if (active && !savedConfigRef.current) {
           setLoadError(error instanceof Error ? error.message : t("admin.configLoadError"));
         }
       });
@@ -262,10 +281,11 @@ export function AdminView({
     return () => {
       active = false;
     };
-  }, [currentUser.isAdmin]);
+  }, [currentUser.isAdmin, configVersion]);
 
   async function save(): Promise<void> {
-    if (!adminConfig) {
+    const base = savedConfigRef.current;
+    if (!adminConfig || !base) {
       return;
     }
 
@@ -277,28 +297,27 @@ export function AdminView({
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-      const update = {
-        node: adminConfig.node,
-        identity: adminConfig.identity,
-        features: adminConfig.features,
-        // `llm.openai.apiKey` rides only when the admin typed one ("" clears it); `apiKeySet` is read-only
-        // and the server strips it.
-        llm: { ollama: adminConfig.llm.ollama, openai: adminConfig.llm.openai, onDevice: adminConfig.llm.onDevice },
-        admin: {
-          bootstrap: adminConfig.admin.bootstrap,
-          ...(passphrase.trim() ? { passphrase: passphrase.trim() } : {}),
-        },
-        killSwitch: {
-          enabled: adminConfig.killSwitch.enabled,
-          requireConfirmation: adminConfig.killSwitch.requireConfirmation,
-          ...(panicToken.trim() ? { panicToken: panicToken.trim() } : {}),
-        },
-        retention: { messageTtlMs: adminConfig.retention.messageTtlMs ?? null },
-        security: adminConfig.security,
-        access: adminConfig.access,
-        sync: adminConfig.sync,
-        mesh: adminConfig.mesh,
+      // Read the node's current config first and carry the draft onto it, so the update is measured against
+      // what the node holds now, not what it held when the page loaded (another writer's change may not have
+      // reached this page as a `configUpdated` yet). `llm.openai.apiKey` rides only when the admin typed one
+      // ("" clears it); the passphrase and panic token come from their own fields.
+      const fresh = await fetchAdminConfig();
+      const draft = rebaseConfig(adminConfig, base, fresh);
+      const changes = configDelta(draft, fresh);
+      const update: LoamConfigUpdate = {
+        ...changes,
+        ...(passphrase.trim() ? { admin: { ...changes.admin, passphrase: passphrase.trim() } } : {}),
+        ...(panicToken.trim() ? { killSwitch: { ...changes.killSwitch, panicToken: panicToken.trim() } } : {}),
       };
+
+      if (isEmptyConfigUpdate(update)) {
+        savedConfigRef.current = fresh;
+        setSavedConfig(fresh);
+        setAdminConfig(fresh);
+        setSaved(true);
+        return;
+      }
+
       const response = await encryptedFetch("PATCH", "/api/admin/config", update, {
         signal: controller.signal,
       });
@@ -315,7 +334,8 @@ export function AdminView({
         throw new Error(t("admin.configUnrecognised"));
       }
 
-      knownPeerUrls.current = new Set(parsed.data.sync.peers.map((peer) => peer.url));
+      savedConfigRef.current = parsed.data;
+      setSavedConfig(parsed.data);
       setAdminConfig(parsed.data);
       setPassphrase("");
       setPanicToken("");
@@ -757,6 +777,9 @@ export function AdminView({
                       <span className="field-hint">{t("admin.syncTokenNote")}</span>
                     </div>
                   ) : null}
+                  {savedConfig?.sync.enabled && !savedConfig.sync.token ? (
+                    <p className="notice notice-danger">{t("admin.syncOpenWarning")}</p>
+                  ) : null}
                   <NodeLinkControl joinUrl={joinUrl} />
                   {adminConfig.sync.peers.length ? (
                     <ul className="list">
@@ -808,36 +831,12 @@ export function AdminView({
                   <p className="form-note">{t("admin.peerChangesNote")}</p>
                   <SyncStatusPanel
                     onReport={(report) => {
-                      // Peers the server gained since this form loaded were linked with a code: take them in
-                      // (and the sync switch linking turned on), keeping every other unsaved edit.
-                      const linked = report.peers.filter((peer) => !knownPeerUrls.current.has(peer.url));
-                      if (!linked.length) {
-                        return;
+                      // A peer the saved copy doesn't know linked itself with a code (or another admin added
+                      // one) and no `configUpdated` reached this page: read the config again.
+                      const known = new Set(savedConfigRef.current?.sync.peers.map((peer) => peer.url));
+                      if (report.peers.some((peer) => !known.has(peer.url))) {
+                        void fetchAdminConfig().then(adoptServerConfig, () => undefined);
                       }
-                      for (const peer of linked) {
-                        knownPeerUrls.current.add(peer.url);
-                      }
-                      setAdminConfig((previous) =>
-                        previous
-                          ? {
-                              ...previous,
-                              sync: {
-                                ...previous.sync,
-                                enabled: previous.sync.enabled || report.enabled,
-                                peers: [
-                                  ...previous.sync.peers,
-                                  ...linked
-                                    .filter((peer) => !previous.sync.peers.some((entry) => entry.url === peer.url))
-                                    .map(({ url, label, transportKey }) => ({
-                                      url,
-                                      ...(label ? { label } : {}),
-                                      ...(transportKey ? { transportKey } : {}),
-                                    })),
-                                ],
-                              },
-                            }
-                          : previous,
-                      );
                     }}
                   />
                 </div>
@@ -890,6 +889,7 @@ export function AdminView({
                   {adminConfig.killSwitch.enabled ? (
                     <div className="danger-zone">
                       <p>{t("admin.killSwitchWarning")}</p>
+                      {savedConfig?.sync.peers.length ? <p>{t("admin.killSwitchLinkedNote")}</p> : null}
                       <div className="card-actions">
                         <button
                           className="btn btn-danger"
@@ -938,6 +938,7 @@ export function AdminView({
           title={t("admin.killSwitchHeading")}
         >
           <p>{t("admin.killSwitchWarning")}</p>
+          {savedConfig?.sync.peers.length ? <p>{t("admin.killSwitchLinkedNote")}</p> : null}
         </ConfirmDialog>
       ) : null}
     </section>

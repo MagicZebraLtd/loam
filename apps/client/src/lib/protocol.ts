@@ -337,6 +337,9 @@ export type BootstrapResponse = {
   joinUrl: string;
   websocketPath: string;
   networkConfig: NetworkConfig;
+  /** Sent only to a browser on the host machine while the database is encrypted: keep no IndexedDB copy
+   *  (`applyHostNoLocalCacheHint` in local-store.ts). */
+  hostNoLocalCache?: true;
 };
 
 /** The cookie-path `GET /api/config` reply: the bootstrap plus the caller's own user record. */
@@ -356,7 +359,13 @@ export function parseBootstrapResponse(payload: unknown): BootstrapResponse | un
     return undefined;
   }
 
-  const candidate = payload as { version?: unknown; joinUrl?: unknown; websocketPath?: unknown; networkConfig?: unknown };
+  const candidate = payload as {
+    version?: unknown;
+    joinUrl?: unknown;
+    websocketPath?: unknown;
+    networkConfig?: unknown;
+    hostNoLocalCache?: unknown;
+  };
   const networkConfig = NetworkConfigSchema.safeParse(candidate.networkConfig);
 
   if (
@@ -373,6 +382,7 @@ export function parseBootstrapResponse(payload: unknown): BootstrapResponse | un
     joinUrl: candidate.joinUrl,
     websocketPath: candidate.websocketPath,
     networkConfig: networkConfig.data,
+    ...(candidate.hostNoLocalCache === true ? { hostNoLocalCache: true as const } : {}),
   };
 }
 

@@ -262,6 +262,11 @@ describe("parseBootstrapResponse / parseConfigResponse", () => {
     expect(parseBootstrapResponse(unversioned)).toEqual(unversioned);
   });
 
+  it("keeps the host's no-local-copy hint only when it is exactly true", () => {
+    expect(parseBootstrapResponse({ ...bootstrap, hostNoLocalCache: true })?.hostNoLocalCache).toBe(true);
+    expect(parseBootstrapResponse({ ...bootstrap, hostNoLocalCache: "yes" })).not.toHaveProperty("hostNoLocalCache");
+  });
+
   it("refuses a malformed body instead of letting it into app state", () => {
     expect(parseBootstrapResponse(undefined)).toBeUndefined();
     expect(parseBootstrapResponse("<!doctype html>")).toBeUndefined();

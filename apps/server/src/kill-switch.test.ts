@@ -452,6 +452,85 @@ describe("kill switch", () => {
     expect(existsSync(join(dataDir, ".loam-wipe-phase"))).toBe(false);
   });
 
+  it("turns sync off (keeping the peers) so the next round can't hand the wiped posts back, and says so until sync is on again", async () => {
+    // A linked network that pulled this node's public post before the reset: it offers it straight back.
+    let peerRequests = 0;
+    let offered: { message: Record<string, unknown>; author: Record<string, unknown> } | undefined;
+    const peer = createServer((req, res) => {
+      peerRequests += 1;
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/api/sync/digest") {
+        res.end(JSON.stringify({ channels: [], messages: offered ? [{ id: offered.message.id }] : [] }));
+        return;
+      }
+      if (req.url === "/api/sync/messages") {
+        res.end(JSON.stringify(offered ? { messages: [offered.message], users: [offered.author] } : { messages: [], users: [] }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end("{}");
+    });
+    await new Promise<void>((resolve) => peer.listen(0, "127.0.0.1", () => resolve()));
+    cleanups.push(() => new Promise<void>((resolve) => peer.close(() => resolve())));
+    const peerUrl = `http://127.0.0.1:${(peer.address() as AddressInfo).port}`;
+
+    const { app, dataDir } = await makeApp({
+      killSwitch: { enabled: true },
+      sync: { enabled: true, peers: [{ url: peerUrl, label: "Other network" }], token: "a-shared-sync-token-0123456789" },
+    });
+    const admin = await newSession(app);
+    const posted = await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { cookie: admin.cookie },
+      payload: { type: "channelPost", channelId: "general", body: "said before the reset" },
+    });
+    expect(posted.statusCode).toBe(201);
+    const author = app.store.loadUsers().find((user) => user.id === admin.userId)!;
+    offered = { message: posted.json() as Record<string, unknown>, author };
+
+    expect((await postKillSwitch(app, admin.cookie)).statusCode).toBe(200);
+    const requestsAtReset = peerRequests;
+
+    const nextAdmin = await newSession(app);
+    const config = (
+      await app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie: nextAdmin.cookie } })
+    ).json() as { sync: { enabled: boolean; peers: { url: string }[]; token?: string } };
+    expect(config.sync.enabled).toBe(false);
+    expect(config.sync.peers.map((entry) => entry.url)).toEqual([peerUrl]);
+    expect(config.sync.token).toBe("a-shared-sync-token-0123456789");
+    const report = (await app.server.inject({ method: "GET", url: "/api/admin/sync", headers: { cookie: nextAdmin.cookie } })).json() as {
+      pausedByReset?: { at: number; tokenDropped: boolean };
+    };
+    expect(report.pausedByReset).toEqual({ at: expect.any(Number), tokenDropped: false });
+
+    // No round runs: the post and its author stay gone, and the peer is never asked.
+    const run = await app.server.inject({ method: "POST", url: "/api/admin/sync/run", headers: { cookie: nextAdmin.cookie } });
+    expect(run.statusCode).toBe(400);
+    expect(peerRequests).toBe(requestsAtReset);
+    expect(app.store.loadMessages().some((message) => message.id === offered!.message.id)).toBe(false);
+    expect(app.store.loadUsers().some((user) => user.id === admin.userId)).toBe(false);
+
+    // The pause survives a restart, and the boot says why sync is off.
+    const restarted = await reopenApp(app, dataDir);
+    const afterRestart = (await restarted.server.inject({ method: "GET", url: "/api/admin/sync", headers: { cookie: nextAdmin.cookie } })).json() as {
+      enabled: boolean;
+      pausedByReset?: unknown;
+    };
+    expect(afterRestart.enabled).toBe(false);
+    expect(afterRestart.pausedByReset).toBeDefined();
+
+    // Turning sync on again is the admin's call, and ends the notice.
+    const enabled = await restarted.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie: nextAdmin.cookie },
+      payload: { sync: { enabled: true } },
+    });
+    expect(enabled.statusCode).toBe(200);
+    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(false);
+  });
+
   it("keeps the kill switch enabled after a wipe so it can fire again", async () => {
     const app = await makeApp({ killSwitch: { enabled: true } });
     const admin = await newSession(app);

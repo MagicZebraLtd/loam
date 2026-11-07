@@ -2,6 +2,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyHostNoLocalCacheHint,
   clearAllRecords,
   deleteRecord,
   destroyDatabase,
@@ -55,6 +56,33 @@ describe("local-store", () => {
       });
     } finally {
       delete window.__loamHostNoLocalCache;
+    }
+  });
+
+  it("keeps no copy, and deletes the one it held, once the node says this is the host's own browser on an encrypted network", async () => {
+    // The loamnet operator's browser opened the network before the hint existed, or before it was encrypted.
+    await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+    try {
+      applyHostNoLocalCacheHint(true);
+      await vi.waitFor(async () => {
+        expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
+      });
+      await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+      expect(await getAllRecords<Channel>("channels")).toEqual([]);
+
+      // The next page load refuses from the start, before its bootstrap has answered.
+      resetLocalStoreForTests();
+      await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+      expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
+
+      // A node that stops asking (no longer encrypted) gets the cache back on the next page load.
+      applyHostNoLocalCacheHint(false);
+      resetLocalStoreForTests();
+      await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+      expect(await getAllRecords<Channel>("channels")).toEqual([{ id: "general", name: "General" }]);
+    } finally {
+      localStorage.removeItem("loam.hostNoLocalCache");
+      resetLocalStoreForTests();
     }
   });
 

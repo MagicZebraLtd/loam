@@ -153,6 +153,12 @@ export function SyncStatusPanel({ onReport }: { onReport?: (report: SyncStatusRe
           </button>
         </div>
       </div>
+      {report.pausedByReset ? (
+        <p className="notice">
+          {t("admin.syncPausedByReset")}
+          {report.pausedByReset.tokenDropped ? ` ${t("admin.syncPausedTokenDropped")}` : null}
+        </p>
+      ) : null}
       <ul className="list">
         {report.peers.map((peer) => (
           <li className="list-row sync-peer" key={peer.url}>

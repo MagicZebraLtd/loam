@@ -80,13 +80,19 @@
 > is a fixed key, so both entry points (`server.ts`, `embedded.ts`) treat it as `passphrase` and it gets the
 > journaled branch too; only the literal `LOAM_DB_KEY=ephemeral` is ephemeral.
 >
-> **Sync after a fixed-key reset.** The config a hooked fixed-key wipe carries across the launcher restart is
-> written to plain files (`.loam-wipe-phase`, `config.json`), so the plaintext bearer `sync.token` is
-> stripped from it. A node that synced *with* a token must not come back syncing *without* one (pulling
-> unauthenticated, its own `/api/sync/*` open), so the same snapshot turns `sync.enabled` off; the next
-> boot logs that sync was turned off by the reset and the operator sets a new token and turns it on again.
-> A no-hook fixed-key wipe re-persists the full config (token included) into the fresh encrypted database,
-> which wins over `config.json` on the next boot, so there sync stays as it was.
+> **Sync after a reset (review 2026-11-07 F-005).** Every branch turns `sync.enabled` off before it deletes
+> anything, and keeps the peer list. The wipe empties the tombstones, the imported-record provenance and the
+> users that would refuse a re-import, and a linked network still holds every public post, author and
+> picture this node had, so with sync left on the next round (30 s by default) handed them all back to the
+> emptied node. The in-process branches (plaintext, ephemeral, no-hook fixed key) persist the paused config
+> in the database and keep the token; the restarting ones (the hooked fixed-key wipe, and any wipe finished
+> by the boot-time resume) carry it in the sanitized snapshot in `.loam-wipe-phase` / `config.json`, which
+> also strips the plaintext bearer `sync.token` (and the chat service's API key). Each reset that found sync
+> on leaves `.loam-sync-off-after-reset` in the data folder (JSON: when, and whether a token was set); every
+> boot logs it, `GET /api/admin/sync` reports it as `pausedByReset { at, tokenDropped }` and the admin Sync
+> panel shows it, until an admin turns sync on again or removes every peer. **A linked network keeps its own
+> copy** of the public channels: the reset cannot reach it, and turning sync on again brings that copy back.
+> The admin reset dialog says so whenever peers are configured.
 
 ## Goal & threat model
 
@@ -149,7 +155,14 @@ phone.
   keep the paths it visited (`/channel/<id>`, `/dm/<user id>`), and a user id yields its generated display
   name (`@loam/display-name`). That is why a channel that isn't public gets an opaque `chan_<hex>` id rather
   than one made from its name, and why a reset is not a reason to promise a joiner that nothing is left on
-  their own device: clearing browser history is theirs to do.
+  their own device: clearing browser history is theirs to do. Nor does a reset reach a **linked network**,
+  which keeps its own copy of the public channels (see "Sync after a reset" above).
+- **The host machine's own browser** keeps no IndexedDB copy on an encrypted node: the desktop and Android
+  hosts' windows are told by their launcher (`window.__loamHostNoLocalCache`), and any other browser on the
+  host (the `loamnet` operator's) by the node, in `/api/bootstrap`'s `hostNoLocalCache` to loopback callers
+  (docs/14). So a reset, or an ephemeral key's end, finds no IndexedDB copy of the network in that browser's
+  profile (a copy an older version wrote is deleted on the next visit; deleted files on flash are not
+  securely erased, as above).
 
 ### Data-at-rest caveat (document honestly)
 SQLite leaves data in the main DB file, `-wal`, and `-journal`, and deleted rows/files may be

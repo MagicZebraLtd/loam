@@ -55,6 +55,7 @@ import {
 } from "./lib/messages";
 import { dmConversationPeers, inboxUnreadPeers, reconcileInboxEntry, type DmInboxEntry } from "./lib/dm-inbox";
 import {
+  applyHostNoLocalCacheHint,
   clearAllRecords,
   deleteRecord,
   deleteRecords,
@@ -66,6 +67,7 @@ import {
 } from "./lib/local-store";
 import { clearRecentReactions } from "./lib/reactions";
 import { clearAssistantAcks } from "./lib/assistant-ack";
+import { cachedRetentionTtl, expiredMessageIds, persistRetentionTtl } from "./lib/retention";
 import { reconcileRoster, sortUsers } from "./lib/roster";
 import { createLivenessWatchdog, type LivenessWatchdog } from "./lib/ws-liveness";
 import {
@@ -166,6 +168,9 @@ const TOAST_DISMISS_MS = 4_000;
 // Single `sync`-store record holding the per-conversation last-read timestamps (ms). One row keeps
 // the write cheap; the map is `conversationKey` → last-read time.
 const CONVERSATION_READS_KEY = "conversationReads";
+// How often the client drops held messages that have passed the node's retention (`pruneExpiredMessages`),
+// besides at start and whenever the TTL or a channel changes. The node's own reaper runs every 30 s.
+const RETENTION_PRUNE_INTERVAL_MS = 60_000;
 
 type ConversationReads = {
   id: string;
@@ -243,6 +248,8 @@ async function fetchBootstrapJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Boots
       throw new Error(t("app.configUnrecognised"));
     }
 
+    // The host machine's own browser on an encrypted node keeps no IndexedDB copy (docs/02).
+    applyHostNoLocalCacheHint(bootstrap.hostNoLocalCache === true);
     return bootstrap;
   } finally {
     window.clearTimeout(timeout);
@@ -464,6 +471,11 @@ function LoamApp() {
   const [users, setUsers] = useState<User[]>([currentUser]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [config, setConfig] = useState<Config>();
+  // The node's message retention as the local store last heard it, for pruning before the node answers
+  // (an offline start); the live `config` replaces it once loaded (`lib/retention.ts`).
+  const [cachedNodeTtlMs, setCachedNodeTtlMs] = useState<number>();
+  // Counts live `configUpdated` events, so the admin screen re-reads the full config it edits.
+  const [configVersion, setConfigVersion] = useState(0);
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   // The app-level error notice. `persistent` marks a connectivity failure (kept until the next boot pass
   // succeeds or the user dismisses it); everything else is a one-off action error that dismisses itself.
@@ -931,6 +943,42 @@ function LoamApp() {
     setMessages((previous) => previous.filter((message) => message.id !== messageId));
     void deleteRecord("messages", messageId);
   }, []);
+
+  /**
+   * Drop held messages past their retention (the node TTL and each channel's own, `lib/retention.ts`) from
+   * memory and the local store. The node deletes them on its own clock and tells only the sockets connected
+   * then, so a device that was asleep or away would otherwise keep them until it reopened each conversation.
+   */
+  const pruneExpiredMessages = useCallback((nodeTtlMs: number | undefined) => {
+    if (nodeTtlMs === undefined && !channelsRef.current.some((channel) => channel.messageTtlMs)) {
+      return;
+    }
+    setMessages((previous) => {
+      const expired = expiredMessageIds(previous, channelsRef.current, nodeTtlMs, Date.now());
+      if (!expired.size) {
+        return previous;
+      }
+      for (const id of expired) {
+        liveChangesRef.current.recordDeleted(id);
+      }
+      void deleteRecords("messages", [...expired]);
+      return previous.filter((message) => !expired.has(message.id));
+    });
+  }, []);
+
+  // The node's retention: the live config's once it has loaded, the remembered one before that.
+  const nodeTtlMs = config ? config.networkConfig.messageTtlMs : cachedNodeTtlMs;
+  const configLoaded = config !== undefined;
+  useEffect(() => {
+    if (configLoaded) {
+      void persistRetentionTtl(nodeTtlMs);
+    }
+  }, [configLoaded, nodeTtlMs]);
+  useEffect(() => {
+    pruneExpiredMessages(nodeTtlMs);
+    const timer = window.setInterval(() => pruneExpiredMessages(nodeTtlMs), RETENTION_PRUNE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [channels, nodeTtlMs, pruneExpiredMessages]);
 
   /** Delete a message on the node; the ConfirmDialog in `ConversationView` has already asked. */
   const deleteMessage = useCallback(
@@ -1656,10 +1704,21 @@ function LoamApp() {
           }
           setChannels(cachedChannels);
           upsertUsers([currentUser, ...cachedUsers]);
-          setMessages(cachedMessages.sort(compareCreatedAt));
+          // Messages past the retention the node last reported are dropped before anything renders: this
+          // device may have been away when the node's reaper deleted them (docs/07).
+          const rememberedTtl = cachedRetentionTtl(cachedSync);
+          setCachedNodeTtlMs(rememberedTtl);
+          const expiredAtStart = expiredMessageIds(cachedMessages, cachedChannels, rememberedTtl, Date.now());
+          const keptMessages = expiredAtStart.size
+            ? cachedMessages.filter((message) => !expiredAtStart.has(message.id))
+            : cachedMessages;
+          if (expiredAtStart.size) {
+            void deleteRecords("messages", [...expiredAtStart]);
+          }
+          setMessages(keptMessages.sort(compareCreatedAt));
           // A cache written before the per-conversation cap existed may hold far more than it allows: trim it
           // once here, so the next start reads less. What was read stays in memory for this session.
-          const legacyOverflow = messageCacheOverflow(cachedMessages, currentUserIdRef.current);
+          const legacyOverflow = messageCacheOverflow(keptMessages, currentUserIdRef.current);
           if (legacyOverflow.size) {
             for (const id of legacyOverflow) {
               cachePrunedRef.current.add(id);
@@ -2240,6 +2299,7 @@ function LoamApp() {
         }
 
         if (payload.type === "configUpdated") {
+          setConfigVersion((version) => version + 1);
           setConfig((previous) => {
             // A live transport-mode flip only takes effect through `ensureSession`, which runs on the
             // boot/resync path — so re-run it: an `optional`→`required` flip then
@@ -2596,6 +2656,7 @@ function LoamApp() {
       />
       {routeState.screen === "admin" ? (
         <AdminView
+          configVersion={configVersion}
           currentUser={currentUser}
           joinUrl={config?.joinUrl}
           onChannelRemoved={removeChannel}

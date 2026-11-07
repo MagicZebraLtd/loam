@@ -47,6 +47,10 @@ export type DeletionResult = { ok: boolean; survivors: string[]; errors: string[
 /** The two durable phases of an emergency wipe (see `writeWipeJournal`): every branch journals `delete-pending`
  *  before its first destructive step; only a fixed-key wipe handed to the launcher reaches `key-clear-ready`. */
 export type WipePhase = "delete-pending" | "key-clear-ready";
+
+/** The note an Emergency Reset leaves when it paused sync: when, and whether a sync token was set then (a
+ *  reset that restarts the node drops the token, so the admin has to set one again). */
+export type SyncPausedByReset = { at: number; hadToken: boolean };
 /** The on-disk wipe journal: the phase plus the effective config snapshot committed with it. */
 export type WipeJournal = { phase: WipePhase; config?: LoamConfig; configInvalid?: boolean; corrupt?: boolean };
 
@@ -613,8 +617,8 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
   // `.loam-wipe-phase=delete-pending`; both names are cleared together only once the whole wipe protocol
   // completes.
   const legacyWipePendingMarkerPath = join(dataDir, ".loam-wipe-pending");
-  // Left behind by a fixed-key Emergency Reset that had to strip a configured `sync.token` from the config it
-  // carries across the restart (and so turned sync off), read and removed by the next boot that serves.
+  // Left behind by an Emergency Reset that paused sync (every branch does, so a linked network can't hand the
+  // wiped posts back): read by every boot and the admin Sync panel, removed once an admin turns sync on again.
   const syncOffAfterResetMarkerPath = join(dataDir, ".loam-sync-off-after-reset");
 
   /** The permission bits of an existing file, or undefined when there is none (or they can't be read). */
@@ -714,50 +718,83 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
   // admin config it is never silently dropped and reverted to defaults.
 
   /**
-   * Strip the one plaintext bearer secret (`sync.token`) before it is written to `.loam-wipe-phase` or
-   * config.json: both are plain, unprotected files (scrypt-hashed secrets are safe to persist as-is). A node
-   * that was syncing WITH a token must not come back syncing WITHOUT one (pulling unauthenticated, and its
-   * own `/api/sync/*` open to anyone), so when a token is stripped sync is turned off in the same snapshot;
-   * the operator sets a new token and turns it on again. The chat service's API key (`llm.openai.apiKey`,
-   * the other plaintext bearer secret) is stripped the same way, and a service that relied on it is switched
-   * off rather than left answering every DM with an error; the admin pastes the key again. Idempotent: a
-   * config with neither secret is unchanged.
+   * The config a reset carries across a restart (into `.loam-wipe-phase` and config.json, both plain,
+   * unprotected files; scrypt-hashed secrets are safe to persist as-is). Sync is always turned off, its peer
+   * list kept: a linked network still holds every public post this node had, and the next round would hand
+   * them all back to the emptied node (see {@link withSyncPausedByReset}). The one plaintext bearer secret,
+   * `sync.token`, is stripped; the operator sets a new token and turns sync on again. The chat service's API
+   * key (`llm.openai.apiKey`, the other plaintext bearer secret) is stripped the same way, and a service that
+   * relied on it is switched off rather than left answering every DM with an error; the admin pastes the key
+   * again. Idempotent.
    */
   function sanitizeConfigForRestart(config: LoamConfig): LoamConfig {
     const { apiKey, apiKeySet: _never, ...openai } = config.llm.openai;
     void _never;
     return {
       ...config,
-      sync: { ...config.sync, token: undefined, enabled: restartDisablesSync(config) ? false : config.sync.enabled },
+      sync: { ...config.sync, token: undefined, enabled: false },
       llm: { ...config.llm, openai: { ...openai, enabled: apiKey === undefined ? openai.enabled : false } },
     };
   }
 
-  /** Whether carrying `config` across a restart turns sync off: it is on and relies on a token that can't ride along. */
-  function restartDisablesSync(config: LoamConfig): boolean {
-    return config.sync.enabled && config.sync.token !== undefined;
+  /**
+   * `config` with sync switched off and everything else (the peers, the token) kept: what every Emergency
+   * Reset branch applies to the live config before it deletes anything. The wipe empties the users,
+   * tombstones and provenance tables that would refuse a re-import, so a peer that pulled this node's public
+   * posts would hand them back, with their authors and pictures, within one round. The admin turns sync on
+   * again once the linked networks have dropped what they hold (or knowingly takes it back).
+   */
+  function withSyncPausedByReset(config: LoamConfig): LoamConfig {
+    return config.sync.enabled ? { ...config, sync: { ...config.sync, enabled: false } } : config;
   }
 
   /**
-   * Leave a note for the next boot that the reset turned sync off (see `sanitizeConfigForRestart`), so the
-   * operator learns why their peers went quiet instead of finding sync silently off. Best-effort and durable
-   * like the config write; the notice is a courtesy, never a gate on the wipe.
+   * Record, durably, that a reset paused sync, so every later boot and the admin Sync panel (`pausedByReset`
+   * in `GET /api/admin/sync`) can say why the peers went quiet. It stays until an admin turns sync on again
+   * or removes every peer ({@link clearSyncPausedByReset}). A courtesy, never a gate on the wipe. Lives in
+   * the data folder beside the wipe journal, outside the database every branch deletes; it holds a time and
+   * a flag, nothing of the network.
    */
-  function noteSyncDisabledByReset(): boolean {
-    return durableWriteFileSync(syncOffAfterResetMarkerPath, `${Date.now()}\n`);
+  function noteSyncPausedByReset(hadToken: boolean): boolean {
+    const note: SyncPausedByReset = { at: Date.now(), hadToken };
+    return durableWriteFileSync(syncOffAfterResetMarkerPath, `${JSON.stringify(note)}\n`);
   }
 
-  /** Read and remove the "sync turned off by the reset" note; true when one was there. */
-  function consumeSyncDisabledByResetNotice(): boolean {
+  /**
+   * The "a reset paused sync" note, if one is there. An older build wrote a bare timestamp, and only when it
+   * had stripped a token, so that reads as `hadToken: true`. An unreadable note still counts as a note.
+   */
+  function syncPausedByReset(): SyncPausedByReset | undefined {
+    let text: string;
+    try {
+      text = readFileSync(syncOffAfterResetMarkerPath, "utf8").trim();
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code === "ENOENT" ? undefined : { at: 0, hadToken: false };
+    }
+    if (/^\d+$/.test(text)) {
+      return { at: Number(text), hadToken: true };
+    }
+    try {
+      const parsed = JSON.parse(text) as Partial<SyncPausedByReset>;
+      return {
+        at: typeof parsed.at === "number" && Number.isFinite(parsed.at) ? parsed.at : 0,
+        hadToken: parsed.hadToken === true,
+      };
+    } catch {
+      return { at: 0, hadToken: false };
+    }
+  }
+
+  /** Remove the "a reset paused sync" note (sync is on again, or there is nothing left to sync with). */
+  function clearSyncPausedByReset(): void {
     if (!existsSync(syncOffAfterResetMarkerPath)) {
-      return false;
+      return;
     }
     try {
       rmSync(syncOffAfterResetMarkerPath, { force: true });
     } catch (error) {
-      log.warn(error, `Could not remove ${syncOffAfterResetMarkerPath}; the notice repeats on the next boot`);
+      log.warn(error, `Could not remove ${syncOffAfterResetMarkerPath}; the Sync panel keeps its reset notice`);
     }
-    return true;
   }
 
   /**
@@ -1581,7 +1618,7 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
    * unparseable file. Blanks `sync.token`, the one plaintext bearer secret in `LoamConfig`
    * (`admin.passphrase`/`killSwitch.panicToken` are already scrypt-hashed and safe to persist as-is) —
    * `config.json` is a plain, unprotected file, unlike the DB `config` table it would otherwise only
-   * ever have lived in — and turns sync off when that token was in use (`sanitizeConfigForRestart`).
+   * ever have lived in — and turns sync off, keeping the peers (`sanitizeConfigForRestart`).
    *
    * Retries once on failure (a transient fs error shouldn't cost the operator their config) and returns
    * whether it EVENTUALLY succeeded. Callers gate the irreversible next step on `true`: the launcher
@@ -1626,9 +1663,10 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
     deleteAndVerifyAllWipeArtifactsDurable,
     durableWriteFileSync,
     sanitizeConfigForRestart,
-    restartDisablesSync,
-    noteSyncDisabledByReset,
-    consumeSyncDisabledByResetNotice,
+    withSyncPausedByReset,
+    noteSyncPausedByReset,
+    syncPausedByReset,
+    clearSyncPausedByReset,
     writeWipeJournal,
     clearWipePhase,
     resumeWipePhaseThenOpenStore,
