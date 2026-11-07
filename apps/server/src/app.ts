@@ -1092,23 +1092,17 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   }
 
   /**
-   * Tear down a user's sessions when they are banned/denied: delete their session tokens from the
-   * store and close any live sockets they hold (mirrors how the kill switch tears sessions down,
-   * scoped to one user). The in-memory session→user mapping is deliberately kept so the ban stays
-   * enforced against that identity — dropping it would re-mint the banned user a fresh, clean id on
-   * their next request, silently undoing the ban. The store deletion still invalidates the session
-   * durably (it is gone after a restart).
+   * Cut a user off when they are banned/denied: drop their bound transport sessions and close any live
+   * sockets they hold (mirrors how the kill switch tears sessions down, scoped to one user). Their cookie
+   * session rows are deliberately KEPT, in memory and in the store, so the cookie keeps resolving to the
+   * banned identity and every request is refused. Deleting them (as this once did, from the store only)
+   * re-minted the banned person a fresh, clean identity after the next host restart, with no action on
+   * their part. Rows go only on logout / session end, the identity's removal, or the kill switch.
    */
   function invalidateUserSessions(userId: string): void {
-    for (const [token, sessionUserId] of sessions) {
-      if (sessionUserId === userId) {
-        store.deleteSession(token);
-      }
-    }
-
     // Tear down any BOUND transport sessions for this user (docs/20) so a banned user's live sealed
     // session stops working at once. The identity TOKEN is deliberately KEPT (like the cookie session
-    // mapping above): a reconnect re-binds to the SAME banned identity, so the ban stays pinned rather
+    // rows): a reconnect re-binds to the SAME banned identity, so the ban stays pinned rather
     // than being shed by a fresh handshake+resume.
     for (const [sid, session] of [...transportSessions]) {
       if (session.userId === userId) {

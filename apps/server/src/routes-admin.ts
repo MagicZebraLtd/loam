@@ -416,8 +416,15 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   ctx.llm.ensureBotUser();
   // Enabling mesh mints + publishes identity keys for existing local users so they're reachable.
   ctx.mesh.ensureAllMeshIdentities();
+  // `required` (set directly, or by the hardened profile) is checked when a socket connects; a socket that
+  // connected under `optional` without a bound session would otherwise keep receiving every event, in the
+  // clear if it had no session key. Close those before the broadcast below reaches them.
+  if (ctx.effectiveTransportEncryption() === "required") {
+    ctx.closeUnboundSockets();
+  }
   ctx.broadcast({ type: "configUpdated", networkConfig: ctx.currentNetworkConfig() });
-  // If presence was just enabled, connected clients need the current roster to light up.
-  ctx.broadcastPresence();
+  // If presence was just enabled, connected clients need the current roster to light up: sent even when
+  // the online set is unchanged since presence was last announced.
+  ctx.broadcastPresence(true);
   return "ok";
 }

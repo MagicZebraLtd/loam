@@ -350,8 +350,13 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
 - **Network identity & presence**: `node.name` (default "LOAM local") is the operator-set network
   name in `NetworkConfig.nodeName` (client sidebar/join/tab title), editable via the admin Network
   panel. `enablePresence` (default on) makes the WS broadcast a `presence` event (online user ids,
-  visible users only) on every connect/disconnect — the client shows online dots; disable for
-  high-risk deployments (it reveals who is connected).
+  visible users only) whenever a connect/disconnect changes the online set (a socket that changes nothing
+  is told on its own) — the client shows online dots; disable for high-risk deployments (it reveals who
+  is connected). **Socket caps** (`realtime.ts`): admitted + mid-challenge sockets are capped at 16 per
+  identity, 64 per address, 256 per IPv6 /64 and 1024 in all (`AppOptions.webSocketLimits` for tests); a
+  connect past one is refused with a `too_many_attempts` error frame, never by closing an older socket. A
+  socket with over 1 MiB unsent (`WS_MAX_BUFFERED_BYTES`) is terminated. `commitAdminConfig` closes every
+  socket not on a bound session when the effective mode becomes `required` (`closeUnboundSockets`).
 - **Admin promotion**: `POST /api/admin/users/:userId/promote` (admin-only) makes a member admin.
   Deliberately **one-way** — no demote route; admin removal is via re-bootstrap / kill switch, so a
   contested node can't fall into a mutual-demotion fight (see docs/12).
@@ -404,7 +409,9 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   kill switch; admin saves can't add or restore a `linkCode`.
 - **Security headers**: an `onSend` hook sets `X-Content-Type-Options: nosniff` on every response and
   a strict CSP (`default-src 'self'`, `frame-ancestors 'none'`, no external origins) on the app shell
-  (non-`/api/` navigations). No HSTS — LOAM serves plain HTTP on the LAN by design. The session
+  (non-`/api/` navigations). Every `/api/` response (pictures included, on every node) is
+  `Cache-Control: no-store`: a page can't clear the browser's HTTP cache, so an Emergency Reset couldn't
+  reach what a typed-address joiner's browser cached. No HSTS — LOAM serves plain HTTP on the LAN by design. The session
   cookie's `Secure` flag tracks the real request protocol (`x-forwarded-proto`/TLS), not `NODE_ENV`.
   **Host allowlist** (DNS rebinding): the global `onRequest` hook serves a request only when its `Host`
   (port stripped, IPv6 brackets handled) is an IP literal, `localhost`/`*.localhost`, an mDNS `*.local`
@@ -415,6 +422,11 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   port or the advertised `clientPort` (a left-out port is the scheme's default; `originMatchesHost`), since
   cookies are shared across the ports of one host; `pnpm dev` passes because Vite's `/ws` proxy keeps the
   browser's `Host` (no `changeOrigin`). A client that sends no Origin is judged by its credentials alone.
+  **CSRF** (`crossSiteRequestRefusal`, same `onRequest` hook, after the allowlist): any method but
+  GET/HEAD/OPTIONS is refused (403 `invalid_request`) when its `Origin` fails the same `originMatchesHost`
+  rule, or when it has no Origin but a `Sec-Fetch-Site` other than `same-origin`/`none`; a `text/plain`,
+  urlencoded or multipart body is refused (415) whatever its Origin, since every route takes JSON. A
+  request with neither header (curl, sync peers, the launcher) passes; tunnel re-dispatches never reach it.
   `@fastify/websocket` registers before these global hooks, so an upgrade they refuse (421/503) still has
   its socket closed.
 - **Transport encryption** (docs/08, `security.transportEncryption` — `optional` **default (secure by

@@ -183,3 +183,211 @@ describe("WebSocket heartbeat", () => {
     await waitFor(() => vi.getTimerCount() === intervalsBefore); // cleared on close — no leaked interval
   });
 });
+
+/** A fresh cookie identity: `/api/config` with no cookie mints one. */
+async function mintCookie(app: LoamApp): Promise<string> {
+  const config = await app.server.inject({ method: "GET", url: "/api/config" });
+  return String(config.headers["set-cookie"]).split(";")[0]!;
+}
+
+type Frame = { type?: string; code?: string; onlineUserIds?: string[] };
+
+/** A plaintext cookie socket that records every frame it receives and whether it has closed. */
+async function recordingSocket(baseUrl: string, cookie: string) {
+  const frames: Frame[] = [];
+  let closed = false;
+  const socket = openWs(`${baseUrl.replace("http", "ws")}/ws`, cookie);
+  socket.addEventListener("message", (event) => frames.push(JSON.parse(String((event as MessageEvent).data)) as Frame));
+  socket.addEventListener("close", () => {
+    closed = true;
+  });
+  await opened(socket);
+  return { socket, frames, isClosed: () => closed };
+}
+
+/** Handshake, bind an identity and open a key-confirmed socket; records the decrypted application frames. */
+async function boundSocket(app: LoamApp, baseUrl: string) {
+  const hello = transportClientHello();
+  const handshake = TransportHandshakeResponseSchema.parse(
+    (await app.server.inject({ method: "POST", url: "/api/transport/handshake", payload: { clientEphemeralPublic: hello.ephemeralPublic } })).json(),
+  );
+  const key = transportClientDerive({
+    clientEphemeralSecret: hello.ephemeralSecret,
+    hostPublic: handshake.hostPublicKey,
+    hostEphemeralPublic: handshake.hostEphemeralPublic,
+  });
+  const resume = await app.server.inject({
+    method: "POST",
+    url: "/api/session/resume",
+    headers: { "x-loam-enc": handshake.sessionId, "content-type": "application/json" },
+    payload: { enc: sealTransport(key, JSON.stringify({ s: 1, b: {} }), "POST /api/session/resume") },
+  });
+  expect(resume.statusCode).toBe(200);
+  const frames: Frame[] = [];
+  let connectionId = "";
+  let closed = false;
+  const socket = openWs(`${baseUrl.replace("http", "ws")}/ws?enc=${handshake.sessionId}`);
+  socket.addEventListener("message", (event) => {
+    const text = String((event as MessageEvent).data);
+    if (!connectionId) {
+      const challenge = openTransport(key, text, "loam.ws.challenge.v1");
+      if (challenge) {
+        const parsed = JSON.parse(challenge) as { connectionId: string; nonce: string };
+        connectionId = parsed.connectionId;
+        socket.send(sealTransport(key, JSON.stringify({ type: "proof", connectionId, nonce: parsed.nonce }), "loam.ws.proof.v1"));
+      }
+      return;
+    }
+    const frame = openTransport(key, text, `loam.ws.frame.v1 ${connectionId}`);
+    if (frame) {
+      frames.push(JSON.parse((JSON.parse(frame) as { f: string }).f) as Frame);
+    }
+  });
+  socket.addEventListener("close", () => {
+    closed = true;
+  });
+  await opened(socket);
+  await waitFor(() => frames.some((frame) => frame.type === "ping"));
+  return { frames, isClosed: () => closed };
+}
+
+const presenceOf = (frames: Frame[]): Frame[] => frames.filter((frame) => frame.type === "presence");
+
+describe("WebSocket admission caps (review F-003)", () => {
+  async function makeCappedApp(webSocketLimits: NonNullable<Parameters<typeof buildApp>[0]>["webSocketLimits"]) {
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-realtime-test-"));
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({ security: { profile: "custom", transportEncryption: "optional" } }));
+    const app = await buildApp({
+      requireRulesAcceptance: false,
+      dataDir,
+      logger: false,
+      maxNewIdentitiesPerWindow: 1_000_000,
+      webSocketLimits,
+    });
+    cleanups.push(async () => {
+      await app.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+    return { app, baseUrl: await app.server.listen({ port: 0, host: "127.0.0.1" }) };
+  }
+
+  it("refuses a socket past the per-identity cap, and other identities still connect", async () => {
+    const { app, baseUrl } = await makeCappedApp({ perIdentity: 2 });
+    const cookie = await mintCookie(app);
+    await recordingSocket(baseUrl, cookie);
+    await recordingSocket(baseUrl, cookie);
+    const third = await recordingSocket(baseUrl, cookie);
+    await waitFor(third.isClosed);
+    expect(third.frames).toContainEqual(expect.objectContaining({ type: "error", code: "too_many_attempts" }));
+    expect(app.sockets.size).toBe(2);
+
+    const other = await recordingSocket(baseUrl, await mintCookie(app));
+    await waitFor(() => other.frames.some((frame) => frame.type === "ping"));
+    expect(other.isClosed()).toBe(false);
+    expect(app.sockets.size).toBe(3);
+  });
+
+  it("refuses a socket past the per-address and total caps", async () => {
+    const perAddress = await makeCappedApp({ perAddress: 2 });
+    await recordingSocket(perAddress.baseUrl, await mintCookie(perAddress.app));
+    await recordingSocket(perAddress.baseUrl, await mintCookie(perAddress.app));
+    const refused = await recordingSocket(perAddress.baseUrl, await mintCookie(perAddress.app));
+    await waitFor(refused.isClosed);
+    expect(refused.frames).toContainEqual(expect.objectContaining({ code: "too_many_attempts" }));
+
+    const total = await makeCappedApp({ total: 1 });
+    await recordingSocket(total.baseUrl, await mintCookie(total.app));
+    const overTotal = await recordingSocket(total.baseUrl, await mintCookie(total.app));
+    await waitFor(overTotal.isClosed);
+    expect(total.app.sockets.size).toBe(1);
+  });
+
+  it("a closed socket frees its place under the cap", async () => {
+    const { app, baseUrl } = await makeCappedApp({ perIdentity: 1 });
+    const cookie = await mintCookie(app);
+    const first = await recordingSocket(baseUrl, cookie);
+    await waitFor(() => first.frames.some((frame) => frame.type === "ping"));
+    first.socket.close();
+    await waitFor(() => app.sockets.size === 0);
+    const second = await recordingSocket(baseUrl, cookie);
+    await waitFor(() => second.frames.some((frame) => frame.type === "ping"));
+    expect(second.isClosed()).toBe(false);
+  });
+});
+
+describe("presence fan-out (review F-003)", () => {
+  it("broadcasts presence only when the online set changes; a second tab is told on its own", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+    const alice = await mintCookie(app);
+
+    const tab1 = await recordingSocket(baseUrl, alice);
+    await waitFor(() => presenceOf(tab1.frames).length === 1);
+
+    // Alice's second tab: the online set is unchanged, so only the new tab hears presence.
+    const tab2 = await recordingSocket(baseUrl, alice);
+    await waitFor(() => presenceOf(tab2.frames).length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(presenceOf(tab1.frames)).toHaveLength(1);
+
+    // Closing one of her tabs changes nothing either.
+    tab2.socket.close();
+    await waitFor(() => app.sockets.size === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(presenceOf(tab1.frames)).toHaveLength(1);
+
+    // Bob coming online does change it: everyone hears.
+    const bob = await recordingSocket(baseUrl, await mintCookie(app));
+    await waitFor(() => presenceOf(tab1.frames).length === 2);
+    expect(presenceOf(tab1.frames).at(-1)?.onlineUserIds).toHaveLength(2);
+    expect(presenceOf(bob.frames)).toHaveLength(1);
+  });
+});
+
+describe("stalled sockets (review F-003)", () => {
+  it("terminates a socket whose unsent frames pile up instead of sending it more", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const send = vi.fn();
+    const terminate = vi.fn();
+    const stalled = {
+      socket: { OPEN: 1, readyState: 1, send, close: vi.fn(), terminate, bufferedAmount: 8 * 1024 * 1024, on: vi.fn() },
+      userId: "user.stalled",
+    };
+    app.sockets.add(stalled);
+    expect(app.host.updateConfig({ node: { name: "Renamed" } }).ok).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(app.sockets.has(stalled)).toBe(false);
+  });
+});
+
+describe("switching to required at runtime (review F-010)", () => {
+  it("closes plaintext sockets before the config broadcast and keeps bound ones", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+    const plaintext = await recordingSocket(baseUrl, await mintCookie(app));
+    await waitFor(() => plaintext.frames.some((frame) => frame.type === "ping"));
+    const bound = await boundSocket(app, baseUrl);
+
+    expect(app.host.updateConfig({ security: { transportEncryption: "required" } }).ok).toBe(true);
+
+    await waitFor(plaintext.isClosed);
+    expect(plaintext.frames).toContainEqual(expect.objectContaining({ type: "error", code: "encrypted_session_required" }));
+    // The config change never reached the plaintext socket in the clear.
+    expect(plaintext.frames.some((frame) => frame.type === "configUpdated")).toBe(false);
+
+    await waitFor(() => bound.frames.some((frame) => frame.type === "configUpdated"));
+    expect(bound.isClosed()).toBe(false);
+    expect(app.sockets.size).toBe(1);
+  });
+
+  it("the hardened profile closes them too", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+    const plaintext = await recordingSocket(baseUrl, await mintCookie(app));
+    await waitFor(() => plaintext.frames.some((frame) => frame.type === "ping"));
+
+    expect(app.host.updateConfig({ security: { profile: "hardened" } }).ok).toBe(true);
+    await waitFor(plaintext.isClosed);
+  });
+});
