@@ -409,7 +409,9 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   kill switch; admin saves can't add or restore a `linkCode`.
 - **Security headers**: an `onSend` hook sets `X-Content-Type-Options: nosniff` on every response and
   a strict CSP (`default-src 'self'`, `frame-ancestors 'none'`, no external origins) on the app shell
-  (non-`/api/` navigations). No HSTS — LOAM serves plain HTTP on the LAN by design. The session
+  (non-`/api/` navigations). Every `/api/` response (pictures included, on every node) is
+  `Cache-Control: no-store`: a page can't clear the browser's HTTP cache, so an Emergency Reset couldn't
+  reach what a typed-address joiner's browser cached. No HSTS — LOAM serves plain HTTP on the LAN by design. The session
   cookie's `Secure` flag tracks the real request protocol (`x-forwarded-proto`/TLS), not `NODE_ENV`.
   **Host allowlist** (DNS rebinding): the global `onRequest` hook serves a request only when its `Host`
   (port stripped, IPv6 brackets handled) is an IP literal, `localhost`/`*.localhost`, an mDNS `*.local`

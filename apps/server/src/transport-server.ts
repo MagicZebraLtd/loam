@@ -911,6 +911,14 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
   ctx.server.addHook("onSend", async (request, reply) => {
     reply.header("x-content-type-options", "nosniff");
 
+    // No API response may be kept by a browser's HTTP cache (review 2026-11-07, F-027). A typed-address
+    // joiner's requests go to their real paths, so the cache would key entries on `/api/search?q=<term>` or
+    // `/api/dms/<user id>` and hold pictures, and an Emergency Reset can't reach that cache: no page can
+    // clear it. JSON answers are cheap to fetch again on a LAN, and the tunnel's POSTs were never cached.
+    if (request.url.startsWith("/api/") || request.routeOptions?.url?.startsWith("/api/")) {
+      reply.header("cache-control", "no-store");
+    }
+
     // Only decorate the app shell / navigations, not API JSON or image bytes (those set their own).
     if (!request.url.startsWith("/api/") && request.url !== "/ws") {
       reply.header(

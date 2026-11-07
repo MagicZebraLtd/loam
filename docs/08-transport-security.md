@@ -46,7 +46,10 @@
 > can't carry the session header) is refused (401), forcing the client to fetch images through the tunnel
 > (`encryptedImageUrl` / the `useEncryptedImage` hook) and render them from a cached `blob:` object URL,
 > so image bytes are sealed on the wire like everything else. `optional` nodes (and Developer Mode) still
-> serve images directly in clear (lighter). So in `required` mode a **post-handshake REST request** reveals only that
+> serve images directly in clear (lighter), but never cacheable: every `/api/` response, pictures included,
+> is `Cache-Control: no-store` (review 2026-11-07, F-027), because a typed-address joiner's browser would
+> otherwise keep pictures and URL keys such as `/api/search?q=<term>` in an HTTP cache that an Emergency
+> Reset can't clear. So in `required` mode a **post-handshake REST request** reveals only that
 > a `POST /api/transport/tunnel` happened, plus coarse ciphertext size/timing — its method, path/query,
 > and body are all sealed. Still observable (unavoidably): the **bootstrap** — `GET /api/bootstrap` and
 > `POST /api/transport/handshake` run before a session exists — and the **WebSocket upgrade**
