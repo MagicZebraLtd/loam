@@ -223,10 +223,15 @@ async function boundSocket(app: LoamApp, baseUrl: string) {
     payload: { enc: sealTransport(key, JSON.stringify({ s: 1, b: {} }), "POST /api/session/resume") },
   });
   expect(resume.statusCode).toBe(200);
+  return { ...(await provenSocket(baseUrl, key, handshake.sessionId)), key, sessionId: handshake.sessionId };
+}
+
+/** Open a socket on an existing transport session and answer its key-confirmation challenge. */
+async function provenSocket(baseUrl: string, key: string, sessionId: string, options: { waitForPing?: boolean } = {}) {
   const frames: Frame[] = [];
   let connectionId = "";
   let closed = false;
-  const socket = openWs(`${baseUrl.replace("http", "ws")}/ws?enc=${handshake.sessionId}`);
+  const socket = openWs(`${baseUrl.replace("http", "ws")}/ws?enc=${sessionId}`);
   socket.addEventListener("message", (event) => {
     const text = String((event as MessageEvent).data);
     if (!connectionId) {
@@ -247,8 +252,10 @@ async function boundSocket(app: LoamApp, baseUrl: string) {
     closed = true;
   });
   await opened(socket);
-  await waitFor(() => frames.some((frame) => frame.type === "ping"));
-  return { frames, isClosed: () => closed };
+  if (options.waitForPing !== false) {
+    await waitFor(() => frames.some((frame) => frame.type === "ping"));
+  }
+  return { socket, frames, isClosed: () => closed };
 }
 
 const presenceOf = (frames: Frame[]): Frame[] => frames.filter((frame) => frame.type === "presence");
@@ -300,6 +307,31 @@ describe("WebSocket admission caps (review F-003)", () => {
     const overTotal = await recordingSocket(total.baseUrl, await mintCookie(total.app));
     await waitFor(overTotal.isClosed);
     expect(total.app.sockets.size).toBe(1);
+  });
+
+  it("a socket still mid-challenge doesn't count against an identity's cap, which is checked again at proof", async () => {
+    const { app, baseUrl } = await makeCappedApp({ perIdentity: 2 });
+    const victim = await boundSocket(app, baseUrl);
+    // Someone who saw the session id opens sockets on it that can never prove the key.
+    let challenges = 0;
+    const unproven = [0, 1].map(() => {
+      const socket = openWs(`${baseUrl.replace("http", "ws")}/ws?enc=${victim.sessionId}`);
+      socket.addEventListener("message", () => {
+        challenges += 1;
+      });
+      return socket;
+    });
+    await waitFor(() => challenges === 2); // both admitted to the challenge, so both are mid-challenge now
+
+    // The member's next tabs still get past connect. Two opened together both pass it (one admitted socket,
+    // and the unproven ones don't count), so the cap of two has to hold when they prove: one gets in.
+    const tabs = await Promise.all([0, 1].map(() => provenSocket(baseUrl, victim.key, victim.sessionId, { waitForPing: false })));
+    await waitFor(() => tabs.some((tab) => tab.isClosed()) && app.sockets.size === 2);
+    const refused = tabs.find((tab) => tab.isClosed())!;
+    const admitted = tabs.find((tab) => !tab.isClosed())!;
+    expect(refused.frames).toContainEqual(expect.objectContaining({ type: "error", code: "too_many_attempts" }));
+    await waitFor(() => admitted.frames.some((frame) => frame.type === "ping"));
+    unproven.forEach((socket) => socket.close());
   });
 
   it("a closed socket frees its place under the cap", async () => {

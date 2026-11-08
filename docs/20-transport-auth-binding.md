@@ -153,8 +153,11 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   with a **per-connection** sequence (the `connectionId` is the challenge's, fresh per socket). Acceptance
   test: a valid frame from connection A is rejected on connection B.
 - **Admitted sockets are capped too** (review 2026-11-07, F-003): at most 16 per identity (a browser's tabs
-  share one, so 8 would refuse a person's own tabs), 64 per address, 256 per IPv6 /64 and 1024 in all,
-  counting sockets still mid-challenge. A connect past a cap gets an error frame (`too_many_attempts`) and
+  share one, so 8 would refuse a person's own tabs), 64 per address, 256 per IPv6 /64 and 1024 in all.
+  A socket still mid-challenge counts against the address, /64 and total caps but not the identity's: its
+  session id is visible on the wire and proves nothing, so counting it would let someone who saw a
+  member's id fill that member's cap. The identity cap is checked again when a socket proves its key.
+  A connect past a cap gets an error frame (`too_many_attempts`) and
   is closed; no existing socket is closed to make room, since a tab closed that way would reconnect and
   close the next. Presence goes out only when the online set changes (a newly admitted socket that changes
   nothing is told on its own), and a socket with more than 1 MiB queued and unsent is terminated.

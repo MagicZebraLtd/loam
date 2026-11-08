@@ -135,6 +135,13 @@ export function registerAdminRoutes(ctx: AppContext): void {
       return promote();
     }
 
+    // A banned person can't become admin with a setup code or passphrase either: a ban keeps their cookie
+    // resolving to the banned identity (F-011), and an admin can't then be banned. Refused before the
+    // limiter, so it spends no attempt. (The host token above is the host phone itself and still counts.)
+    if (currentUser.banned) {
+      return reply.code(403).send(errorBody("You have been removed from this node"));
+    }
+
     // Or a one-time code the host's own screen handed out (admin-links.ts): the terminal UI's "open as
     // admin" link. Spent on first use, so honoured before the limiter like the token. A banned person can't
     // use one (the host's People screen refuses them too), and doesn't spend it trying.

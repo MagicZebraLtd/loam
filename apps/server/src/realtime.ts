@@ -102,9 +102,9 @@ export function createRealtime(ctx: AppContext) {
     let forIdentity = 0;
     let forAddress = 0;
     let forSubnet = 0;
-    const count = (entryUserId: string, entryAddress: string | undefined): void => {
+    const count = (entryUserId: string | undefined, entryAddress: string | undefined): void => {
       all += 1;
-      if (entryUserId === userId) {
+      if (entryUserId !== undefined && entryUserId === userId) {
         forIdentity += 1;
       }
       if (entryAddress !== undefined && addressKey(entryAddress) === address) {
@@ -117,10 +117,27 @@ export function createRealtime(ctx: AppContext) {
     for (const session of sockets) {
       count(session.userId, session.remoteAddress);
     }
+    // A socket still mid-challenge hasn't proved its session key, and a session id is visible on the wire
+    // (docs/20 §7), so it counts against the address, subnet and total caps only. Counting it against the
+    // identity would let someone who saw a member's session id fill that member's cap with sockets they
+    // can never confirm. The identity cap is checked again when a socket proves its key
+    // (`identityHasSocketRoom`).
     for (const pending of pendingSockets) {
-      count(pending.userId, pending.remoteAddress);
+      count(undefined, pending.remoteAddress);
     }
     return all < total && forIdentity < perIdentity && forAddress < perAddress && (subnet === undefined || forSubnet < perSubnet);
+  }
+
+  /** Whether `userId` holds fewer admitted sockets than the per-identity cap. Checked when a socket proves its key. */
+  function identityHasSocketRoom(userId: string): boolean {
+    const perIdentity = ctx.options.webSocketLimits?.perIdentity ?? WS_MAX_SOCKETS_PER_IDENTITY;
+    let held = 0;
+    for (const session of sockets) {
+      if (session.userId === userId) {
+        held += 1;
+      }
+    }
+    return held < perIdentity;
   }
 
   /**
@@ -688,6 +705,13 @@ export function createRealtime(ctx: AppContext) {
           // The node may have switched to `required` mid-challenge (`closeUnboundSockets`).
           (boundUserId !== undefined || ctx.effectiveTransportEncryption() !== "required");
         if (!stillValid) {
+          connection.close();
+          return;
+        }
+        // The identity cap, which a socket still mid-challenge doesn't count against (see
+        // `socketAdmissionAllowed`), so the sockets of one identity confirming together can't pass it.
+        if (!identityHasSocketRoom(userId)) {
+          wsSend(socketSession, JSON.stringify({ type: "error", ...errorBody("Too many open connections; close a tab and try again") }));
           connection.close();
           return;
         }
