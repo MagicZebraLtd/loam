@@ -744,6 +744,19 @@ const RESUME_PATH = "/api/session/resume";
 const RESUME_AAD = "POST /api/session/resume";
 
 /**
+ * Open a sealed resume reply only under the binding the request asked for (`r: 1`):
+ * `POST /api/session/resume#<seq>#<status>`. Unlike `openBoundResponse` this never falls back to the
+ * `!status` refusal seal, because the client acts on what a resume reply says (a 401 discards the stored
+ * identity token), so only an answer to THIS request with THIS status may count.
+ *
+ * @returns The plaintext, or null when the payload is missing or does not open under that binding.
+ */
+function openBoundResumeReply(key: string, payload: unknown, seq: number, status: number): string | null {
+  const enc = payload && typeof payload === "object" ? (payload as { enc?: unknown }).enc : undefined;
+  return typeof enc === "string" ? openTransport(key, enc, `${RESUME_AAD}#${seq}#${status}`) : null;
+}
+
+/**
  * Bind this transport session to a persistent secure identity (docs/20). Seals `{ token? }` to the
  * DIRECT `/api/session/resume` endpoint (credentials omitted — the cookie is never a bound credential),
  * verifies the sealed reply is bound to the exact request it answers (`s/m/p`, §9), stores the returned
@@ -780,7 +793,9 @@ async function resumeAttempt(
     throw new Error("Identity minting is suppressed (wipe in progress)");
   }
   const seq = ++active.seq;
-  const envelope = JSON.stringify(token === undefined ? { s: seq, b: {} } : { s: seq, b: { token } });
+  // `r: 1` asks the server to seal its answer under `POST /api/session/resume#<seq>#<status>` (docs/08
+  // "Response binding"), so the outer status, which travels in the clear, can't be relabelled.
+  const envelope = JSON.stringify(token === undefined ? { s: seq, r: 1, b: {} } : { s: seq, r: 1, b: { token } });
   const response = await fetch(apiUrl(RESUME_PATH), {
     method: "POST",
     credentials: "omit",
@@ -789,13 +804,21 @@ async function resumeAttempt(
     body: JSON.stringify({ enc: sealTransport(active.key, envelope, RESUME_AAD) }),
   });
 
-  const sealedReply = response.headers.get("x-loam-enc") === "1";
+  const payload: unknown =
+    response.headers.get("x-loam-enc") === "1" ? await response.json().catch(() => undefined) : undefined;
+  const opened = openBoundResumeReply(active.key, payload, seq, response.status);
 
-  // A SEALED 401 came from the resume handler AFTER decrypting our body → the token itself was rejected
-  // (unknown/revoked). Clear it and mint a brand-new identity exactly once, rather than stranding the
-  // client on a dead token. An UNSEALED 401 is `onRequest` refusing an expired transport session — let
-  // that propagate so the caller re-handshakes.
-  if (response.status === 401 && sealedReply) {
+  // A 401 that OPENS under this request's sequence and status came from the resume handler after it
+  // decrypted our body: the token itself was rejected (unknown or revoked). Clear it and mint a brand-new
+  // identity exactly once, rather than stranding the client on a dead token. Any other 401 (unsealed, or
+  // sealed but not openable under that binding) is `onRequest` refusing an expired transport session, or
+  // a forgery: the outer status and the `x-loam-enc` header are outside the AEAD, so an on-path attacker
+  // can fake both. Never discard the identity on one; let it propagate so the caller re-handshakes with
+  // the token still stored.
+  if (response.status === 401) {
+    if (opened === null) {
+      throw new Error("Identity resume failed: 401");
+    }
     if (token !== undefined && !retriedFreshMint) {
       clearStoredIdentityToken();
       return resumeAttempt(active, undefined, init, true);
@@ -803,13 +826,9 @@ async function resumeAttempt(
     throw new Error("Identity resume rejected");
   }
 
-  if (!sealedReply) {
+  if (response.status !== 200) {
     throw new Error(`Identity resume failed: ${response.status}`);
   }
-
-  const payload: unknown = await response.json().catch(() => undefined);
-  const enc = payload && typeof payload === "object" ? (payload as { enc?: unknown }).enc : undefined;
-  const opened = typeof enc === "string" ? openTransport(active.key, enc, RESUME_AAD) : null;
   if (opened === null) {
     throw new Error("Identity resume response could not be decrypted");
   }

@@ -7,7 +7,7 @@ import type { AppContext } from "./app-context.js";
 import { errorBody } from "./errors.js";
 import { addressKey, ipv6SubnetKey } from "./rate-limit.js";
 import { originMatchesHost } from "./transport-server.js";
-import type { ClientEvent, HostMessageNotice, SocketClient, SocketSession } from "./types.js";
+import type { ClientEvent, HostMessageNotice, PendingSocket, SocketClient, SocketSession } from "./types.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 /** Direction-separated AADs for the reflection-safe WS key-confirmation (docs/20 §7): the challenge
@@ -25,6 +25,24 @@ const WS_UNCONFIRMED_CAP = 128;
 const WS_UNCONFIRMED_PER_IP_CAP = 8;
 /** The cap on unconfirmed sockets from one IPv6 /64 (a whole SLAAC LAN), half the global pool. */
 const WS_UNCONFIRMED_PER_SUBNET_CAP = 64;
+/**
+ * Caps on ADMITTED sockets (plus those mid-challenge), checked on every connect; past one the new socket is
+ * refused. Without them one joiner with a loop could hold thousands of sockets, and every connect fanned a
+ * presence frame out to all of them. Per identity is 16, not 8, because a browser's tabs share an identity:
+ * a tighter cap would refuse a person's own tabs, which would then reconnect forever. New sockets are
+ * refused rather than old ones closed, for the same reason (a closed tab reconnects and closes the next).
+ * Overridable through `AppOptions.webSocketLimits` for tests.
+ */
+const WS_MAX_SOCKETS_PER_IDENTITY = 16;
+const WS_MAX_SOCKETS_PER_ADDRESS = 64;
+const WS_MAX_SOCKETS_PER_SUBNET = 256;
+const WS_MAX_SOCKETS = 1024;
+/**
+ * A socket with more than this queued and unsent has stopped reading (or its link is gone). Frames are small
+ * JSON events, so a healthy client never gets near it; past it the socket is terminated rather than let host
+ * memory grow with every broadcast and heartbeat.
+ */
+export const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
 /**
  * Largest client→server WebSocket frame the server will assemble. The only frame a
  * client ever legitimately sends is the ~200-byte sealed key-confirmation proof (confirmed sockets are
@@ -62,7 +80,97 @@ export function createRealtime(ctx: AppContext) {
 
   const unconfirmedByIp = new Map<string, number>();
 
-  const pendingSockets = new Set<{ userId: string; close: () => void }>();
+  const pendingSockets = new Set<PendingSocket>();
+
+  // The online set last announced (sorted ids, joined), so presence goes out only when it changed.
+  let lastPresenceKey: string | undefined;
+
+  /**
+   * Whether a new socket for `userId` from `ip` would pass the admitted-socket caps (see
+   * `WS_MAX_SOCKETS_PER_IDENTITY`). Counts admitted sockets and those mid-challenge, so a burst of
+   * connects can't all pass before any of them is confirmed. O(sockets), which the global cap bounds.
+   */
+  function socketAdmissionAllowed(userId: string, ip: string): boolean {
+    const limits = ctx.options.webSocketLimits;
+    const perIdentity = limits?.perIdentity ?? WS_MAX_SOCKETS_PER_IDENTITY;
+    const perAddress = limits?.perAddress ?? WS_MAX_SOCKETS_PER_ADDRESS;
+    const perSubnet = limits?.perSubnet ?? WS_MAX_SOCKETS_PER_SUBNET;
+    const total = limits?.total ?? WS_MAX_SOCKETS;
+    const address = addressKey(ip);
+    const subnet = ipv6SubnetKey(ip);
+    let all = 0;
+    let forIdentity = 0;
+    let forAddress = 0;
+    let forSubnet = 0;
+    const count = (entryUserId: string | undefined, entryAddress: string | undefined): void => {
+      all += 1;
+      if (entryUserId !== undefined && entryUserId === userId) {
+        forIdentity += 1;
+      }
+      if (entryAddress !== undefined && addressKey(entryAddress) === address) {
+        forAddress += 1;
+      }
+      if (subnet !== undefined && entryAddress !== undefined && ipv6SubnetKey(entryAddress) === subnet) {
+        forSubnet += 1;
+      }
+    };
+    for (const session of sockets) {
+      count(session.userId, session.remoteAddress);
+    }
+    // A socket still mid-challenge hasn't proved its session key, and a session id is visible on the wire
+    // (docs/20 §7), so it counts against the address, subnet and total caps only. Counting it against the
+    // identity would let someone who saw a member's session id fill that member's cap with sockets they
+    // can never confirm. The identity cap is checked again when a socket proves its key
+    // (`identityHasSocketRoom`).
+    for (const pending of pendingSockets) {
+      count(undefined, pending.remoteAddress);
+    }
+    return all < total && forIdentity < perIdentity && forAddress < perAddress && (subnet === undefined || forSubnet < perSubnet);
+  }
+
+  /** Whether `userId` holds fewer admitted sockets than the per-identity cap. Checked when a socket proves its key. */
+  function identityHasSocketRoom(userId: string): boolean {
+    const perIdentity = ctx.options.webSocketLimits?.perIdentity ?? WS_MAX_SOCKETS_PER_IDENTITY;
+    let held = 0;
+    for (const session of sockets) {
+      if (session.userId === userId) {
+        held += 1;
+      }
+    }
+    return held < perIdentity;
+  }
+
+  /**
+   * Close every socket, admitted or mid-challenge, that doesn't ride a `bound` transport session: plaintext
+   * cookie sockets and anonymous encrypted ones. Called when the effective transport mode becomes
+   * `required` (an admin switching to Required or Hardened at runtime), since that rule is otherwise checked
+   * only when a socket connects and a socket admitted under `optional` would keep receiving every event.
+   * Each gets an error frame first, so its client knows why; a reconnect is then refused at connect.
+   */
+  function closeUnboundSockets(): void {
+    const notice = JSON.stringify({ type: "error", ...errorBody("This node requires an encrypted session") });
+    for (const session of [...sockets]) {
+      if (session.bound) {
+        continue;
+      }
+      sockets.delete(session);
+      try {
+        if (session.socket.readyState === session.socket.OPEN) {
+          wsSend(session, notice);
+        }
+      } catch {
+        // Closing anyway.
+      }
+      session.socket.close();
+    }
+    for (const pending of [...pendingSockets]) {
+      if (!pending.bound) {
+        pendingSockets.delete(pending);
+        pending.close();
+      }
+    }
+    broadcastPresence();
+  }
 
   /** Close CONFIRMED sockets (those in the live `sockets` set) riding a transport session that is being
    * pruned/evicted (docs/20 §7), so a socket can't keep receiving frames after its session key is gone. The
@@ -177,8 +285,13 @@ export function createRealtime(ctx: AppContext) {
    * sealed under a CONNECTION-BOUND aad (`loam.ws.frame.v1 <connectionId>`, docs/20 §7) and wrapped in a
    * `{ q, f }` envelope carrying a monotonic per-connection sequence `q`, so the client rejects a frame
    * replayed from another connection or re-sent on this one. A plaintext socket (transport off) sends the
-   * raw payload. Callers keep their own readyState + audience checks. */
+   * raw payload. Callers keep their own readyState + audience checks. A socket whose peer has stopped
+   * reading (more than `WS_MAX_BUFFERED_BYTES` queued) is terminated instead of being sent more. */
   function wsSend(session: SocketSession, payload: string): void {
+    if ((session.socket.bufferedAmount ?? 0) > WS_MAX_BUFFERED_BYTES) {
+      dropStalledSocket(session);
+      return;
+    }
     if (session.transportKey && session.connectionId) {
       session.frameSeq = (session.frameSeq ?? 0) + 1;
       const aad = `${WS_FRAME_AAD_PREFIX} ${session.connectionId}`;
@@ -186,6 +299,18 @@ export function createRealtime(ctx: AppContext) {
       return;
     }
     session.socket.send(payload);
+  }
+
+  /** Remove a socket that has stopped reading from the live set and destroy its connection (no close
+   * handshake: a peer that reads nothing would never answer one). Its close handler then runs as usual. */
+  function dropStalledSocket(session: SocketSession): void {
+    sockets.delete(session);
+    ctx.server.log.warn("Closed a WebSocket that stopped reading its frames");
+    if (session.socket.terminate) {
+      session.socket.terminate();
+    } else {
+      session.socket.close();
+    }
   }
 
   /** Start the heartbeat for an ADMITTED socket (plaintext on connect, encrypted only once key-confirmed):
@@ -305,14 +430,39 @@ export function createRealtime(ctx: AppContext) {
   /**
    * Tell everyone who is connected right now (online dots). No-op when `enablePresence` is off —
    * high-risk deployments disable it, since presence reveals exactly who is reachable at this
-   * moment. Sent on every connect/disconnect; at LAN scale that needs no debouncing.
+   * moment. Called on every connect/disconnect, but sent only when the online set differs from the one
+   * last announced: a person's second tab, or a reconnect, changes nothing, and announcing every socket to
+   * every socket grew with the square of the socket count. `force` sends it anyway (a config change).
+   *
+   * @returns Whether a presence frame was broadcast.
    */
-  function broadcastPresence(): void {
+  function broadcastPresence(force = false): boolean {
     if (!ctx.appConfig.features.enablePresence) {
+      lastPresenceKey = undefined;
+      return false;
+    }
+    const online = onlineUserIds();
+    const key = [...online].sort().join("\n");
+    if (!force && key === lastPresenceKey) {
+      return false;
+    }
+    lastPresenceKey = key;
+    broadcast({ type: "presence", onlineUserIds: online });
+    return true;
+  }
+
+  /**
+   * Announce a newly admitted socket: to everyone when it changed the online set, otherwise to it alone,
+   * so it still learns who is online without the frame going to every other socket.
+   */
+  function announceAdmission(session: SocketSession): void {
+    if (broadcastPresence() || !ctx.appConfig.features.enablePresence) {
       return;
     }
-
-    broadcast({ type: "presence", onlineUserIds: onlineUserIds() });
+    const event: ClientEvent = { type: "presence", onlineUserIds: onlineUserIds() };
+    if (session.socket.readyState === session.socket.OPEN && socketCanReceiveEvent(session.userId, event)) {
+      wsSend(session, JSON.stringify(event));
+    }
   }
 
   /**
@@ -421,12 +571,19 @@ export function createRealtime(ctx: AppContext) {
         return;
       }
 
+      // Admitted-socket caps (per identity, per address and /64, in all), checked before any challenge work.
+      if (!socketAdmissionAllowed(userId, request.ip)) {
+        connection.send(JSON.stringify({ type: "error", ...errorBody("Too many open connections; close a tab and try again") }));
+        connection.close();
+        return;
+      }
+
       // A plaintext socket (transport off, or an anonymous optional session with no key) is admitted
       // directly — there is no session key to confirm. Its frames go out in the clear (documented).
       if (!transportKey) {
-        const socketSession: SocketSession = { socket: connection, userId, remoteAddress: request.ip };
+        const socketSession: SocketSession = { socket: connection, userId, remoteAddress: request.ip, bound: false };
         sockets.add(socketSession);
-        broadcastPresence();
+        announceAdmission(socketSession);
         const stopHeartbeat = startHeartbeat(socketSession);
         connection.on("close", () => {
           stopHeartbeat();
@@ -490,6 +647,7 @@ export function createRealtime(ctx: AppContext) {
         connectionId,
         frameSeq: 0,
         transportSessionId: sid,
+        bound: boundUserId !== undefined,
       };
       // Closes the socket when its transport session reaches `expiresAt`, so a confirmed socket can't keep
       // receiving frames past the session key's lifetime (docs/20 §7). Set on confirm, cleared on close.
@@ -498,7 +656,7 @@ export function createRealtime(ctx: AppContext) {
       let stopHeartbeat: (() => void) | undefined;
       // Register the mid-challenge socket so ban/logout/kill-switch can reach and close it — otherwise it
       // exists only as closures and could complete its proof AFTER being revoked and slip into the feed.
-      const pending = { userId, close: () => connection.close() };
+      const pending: PendingSocket = { userId, remoteAddress: ip, bound: boundUserId !== undefined, close: () => connection.close() };
       pendingSockets.add(pending);
 
       const timer = setTimeout(() => {
@@ -543,8 +701,17 @@ export function createRealtime(ctx: AppContext) {
         const stillValid =
           ctx.transportSessions.get(sid) === transportSession &&
           transportSession.expiresAt > Date.now() &&
-          !ctx.data.users.find((candidate) => candidate.id === userId)?.banned;
+          !ctx.data.users.find((candidate) => candidate.id === userId)?.banned &&
+          // The node may have switched to `required` mid-challenge (`closeUnboundSockets`).
+          (boundUserId !== undefined || ctx.effectiveTransportEncryption() !== "required");
         if (!stillValid) {
+          connection.close();
+          return;
+        }
+        // The identity cap, which a socket still mid-challenge doesn't count against (see
+        // `socketAdmissionAllowed`), so the sockets of one identity confirming together can't pass it.
+        if (!identityHasSocketRoom(userId)) {
+          wsSend(socketSession, JSON.stringify({ type: "error", ...errorBody("Too many open connections; close a tab and try again") }));
           connection.close();
           return;
         }
@@ -557,7 +724,7 @@ export function createRealtime(ctx: AppContext) {
         // Bound the socket's life to its session key's expiry (docs/20 §7).
         expiryTimer = setTimeout(() => connection.close(), Math.max(0, transportSession.expiresAt - Date.now()));
         (expiryTimer as { unref?: () => void }).unref?.();
-        broadcastPresence();
+        announceAdmission(socketSession);
         stopHeartbeat = startHeartbeat(socketSession);
       });
 
@@ -590,6 +757,7 @@ export function createRealtime(ctx: AppContext) {
     onlineUserIds,
     pendingSockets,
     closeSocketsForTransportSession,
+    closeUnboundSockets,
     unconfirmedByIp,
     broadcast,
     registerWebSocketRoute,

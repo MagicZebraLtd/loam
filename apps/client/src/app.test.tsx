@@ -416,7 +416,8 @@ describe("a wiped device rejoining by its join QR", () => {
         const { enc } = JSON.parse(String(init?.body)) as { enc: string };
         const envelope = JSON.parse(openTransport(sessionKey, enc, RESUME_AAD) ?? "{}") as { s?: number };
         const reply = { s: envelope.s, m: "POST", p: "/api/session/resume", currentUser: me, token: "token-1" };
-        return new Response(JSON.stringify({ enc: sealTransport(sessionKey, JSON.stringify(reply), RESUME_AAD) }), {
+        const replyAad = `${RESUME_AAD}#${envelope.s}#200`;
+        return new Response(JSON.stringify({ enc: sealTransport(sessionKey, JSON.stringify(reply), replyAad) }), {
           status: 200,
           headers: { "content-type": "application/json", "x-loam-enc": "1" },
         });

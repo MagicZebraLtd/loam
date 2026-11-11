@@ -33,6 +33,29 @@ describe("security hardening", () => {
     expect(String(shell.headers["content-security-policy"])).toContain("frame-ancestors 'none'");
   });
 
+  it("every API answer is no-store, so no browser HTTP cache outlives an Emergency Reset (review F-027)", async () => {
+    const app = await makeApp({ identity: { allowUserAvatarEdit: true, allowUserAvatarUpload: true } });
+    const { cookie } = await newSession(app);
+    for (const url of ["/api/health", "/api/config", "/api/search?q=secret", "/api/no-such-route"]) {
+      const response = await app.server.inject({ method: "GET", url, headers: { cookie } });
+      expect(response.headers["cache-control"], url).toBe("no-store");
+    }
+    // Pictures too, on a node with no encryption at rest (they were cacheable for an hour there).
+    const uploaded = await app.server.inject({
+      method: "PUT",
+      url: "/api/users/me/avatar-image",
+      headers: { cookie },
+      payload: { mimeType: "image/webp", data: Buffer.from("RIFF\0\0\0\0WEBP").toString("base64") },
+    });
+    const { imageId } = (uploaded.json() as { avatar: { imageId: string } }).avatar;
+    const avatar = await app.server.inject({ method: "GET", url: `/api/avatars/${imageId}.webp`, headers: { cookie } });
+    expect(avatar.statusCode).toBe(200);
+    expect(avatar.headers["cache-control"]).toBe("no-store");
+    // The app shell keeps its own revalidating policy.
+    const shell = await app.server.inject({ method: "GET", url: "/" });
+    expect(shell.headers["cache-control"]).not.toBe("no-store");
+  });
+
   it("blocks a banned user from editing their profile", async () => {
     const app = await makeApp({ identity: { allowUserDisplayNameEdit: true } });
     const admin = await newSession(app);

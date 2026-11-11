@@ -97,6 +97,24 @@ describe("admin bootstrap", () => {
     expect((right.json() as { isAdmin: boolean }).isAdmin).toBe(true);
   });
 
+  it("a banned member can't claim admin with the right passphrase", async () => {
+    const app = await makeApp({ admin: { bootstrap: "passphrase", passphrase: "correct horse battery" } });
+    const admin = await newSession(app);
+    expect((await claim(app, admin.cookie, "correct horse battery")).statusCode).toBe(200);
+    const member = await newSession(app);
+    const ban = await app.server.inject({
+      method: "PATCH",
+      url: `/api/moderation/users/${member.userId}`,
+      headers: { cookie: admin.cookie },
+      payload: { banned: true },
+    });
+    expect(ban.statusCode).toBe(200);
+
+    const refused = await claim(app, member.cookie, "correct horse battery");
+    expect(refused.statusCode).toBe(403);
+    expect((refused.json() as { code?: string }).code).toBe("removed_from_node");
+  });
+
   it("none: claiming is rejected and nobody becomes admin", async () => {
     const app = await makeApp({ admin: { bootstrap: "none" } });
 
