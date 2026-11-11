@@ -5,7 +5,8 @@
  *   - `persistent` → LOAM_DB_KEY is the device secret itself (the keychain is the only thing protecting it);
  *   - `passphrase` → SHA256(passphrase + ":" + deviceSecret), so the passphrase alone opens nothing and
  *     deleting the secret makes the old database on this disk unreadable even to someone who knows the
- *     passphrase (not an OS backup of userData taken while the secret existed: see docs/24). The
+ *     passphrase (not an OS backup of userData taken while the secret existed, nor, with no keychain, where
+ *     the secret is a plain file, the copy flash storage can keep after the delete: see docs/24). The
  *     digest only mixes the secret in; it is not the password stretching: the server hands this text to
  *     SQLCipher (apps/server/src/db.ts, `PRAGMA key`), which derives the real key with its own PBKDF2, so
  *     guessing a passphrase costs that KDF per guess, not one SHA-256;
