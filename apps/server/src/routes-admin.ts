@@ -135,6 +135,13 @@ export function registerAdminRoutes(ctx: AppContext): void {
       return promote();
     }
 
+    // A banned person can't become admin with a setup code or passphrase either: a ban keeps their cookie
+    // resolving to the banned identity (F-011), and an admin can't then be banned. Refused before the
+    // limiter, so it spends no attempt. (The host token above is the host phone itself and still counts.)
+    if (currentUser.banned) {
+      return reply.code(403).send(errorBody("You have been removed from this node"));
+    }
+
     // Or a one-time code the host's own screen handed out (admin-links.ts): the terminal UI's "open as
     // admin" link. Spent on first use, so honoured before the limiter like the token. A banned person can't
     // use one (the host's People screen refuses them too), and doesn't spend it trying.
@@ -365,6 +372,13 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   const switchedAwayFromSetupCode =
     ctx.appConfig.admin.bootstrap === "setupCode" && next.admin.bootstrap !== "setupCode";
   ctx.appConfig = next;
+  // `required` (set directly, or by the hardened profile) is checked when a socket connects; a socket that
+  // connected under `optional` without a bound session would otherwise keep receiving every event, in the
+  // clear if it had no session key. Close those the moment the mode changes, before anything below can
+  // broadcast to them (mesh identities, the bot, `configUpdated`) or throw and skip the close.
+  if (ctx.effectiveTransportEncryption() === "required") {
+    ctx.closeUnboundSockets();
+  }
   // `appConfig` is always the operator's real intent (Developer Mode never mutates it — the plaintext
   // override is a read-time projection via `effectiveTransportEncryption()`), so the persisted config can
   // never carry a dev-forced `"off"` into a later non-dev run of this data dir.
@@ -417,7 +431,8 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   // Enabling mesh mints + publishes identity keys for existing local users so they're reachable.
   ctx.mesh.ensureAllMeshIdentities();
   ctx.broadcast({ type: "configUpdated", networkConfig: ctx.currentNetworkConfig() });
-  // If presence was just enabled, connected clients need the current roster to light up.
-  ctx.broadcastPresence();
+  // If presence was just enabled, connected clients need the current roster to light up: sent even when
+  // the online set is unchanged since presence was last announced.
+  ctx.broadcastPresence(true);
   return "ok";
 }

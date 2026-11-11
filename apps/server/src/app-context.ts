@@ -16,7 +16,7 @@ import type { LinkCodes } from "./sync-links.js";
 import { type DbKeyState, createStoreLifecycle } from "./store-lifecycle.js";
 import { createSyncEngine } from "./sync.js";
 import type { TransportSession } from "./transport-server.js";
-import type { AppData, AppOptions, ClientEvent, PendingUpload, SocketSession } from "./types.js";
+import type { AppData, AppOptions, ClientEvent, PendingSocket, PendingUpload, SocketSession } from "./types.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 export type AppContext = {
@@ -34,7 +34,7 @@ export type AppContext = {
   LARGE_BODY_LIMIT: number;
   sockets: Set<SocketSession>;
   unconfirmedByIp: Map<string, number>;
-  pendingSockets: Set<{ userId: string; close: () => void }>;
+  pendingSockets: Set<PendingSocket>;
   sessions: Map<string, string>;
   claimAttempts: Map<string, { count: number; resetAt: number }>;
   /** Rotating invite codes for the host's screen (invites.ts); rotated by the kill switch. */
@@ -157,7 +157,8 @@ export type AppContext = {
   wsSend(session: SocketSession, payload: string): void;
   broadcast(event: ClientEvent): void;
   onlineUserIds(): string[];
-  broadcastPresence(): void;
+  broadcastPresence(force?: boolean): boolean;
+  closeUnboundSockets(): void;
   sendEventToUsers(audience: Set<string>, event: ClientEvent): void;
   broadcastStreamEvent(audience: Set<string>, event: StreamEvent): void;
   createMessage(

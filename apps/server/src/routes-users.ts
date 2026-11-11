@@ -16,15 +16,13 @@ export const OPEN_REPORTS_MAX = 2_000;
 /** Register user, profile/avatar, roles, moderation/report, join-approval, typing, and attachment routes. */
 export function registerUserRoutes(ctx: AppContext): void {
   /**
-   * How a browser may cache an avatar or attachment it fetched in the clear. On a node whose database is
-   * encrypted at rest, `no-store`: the host's own window (the Android WebView, the desktop client window) must
-   * not keep a plaintext copy of a picture on disk beside the SQLCipher database (docs/04, docs/24), and the
-   * `private` cache a joiner's browser would keep is theirs to keep. Elsewhere an hour of private caching, as
-   * before.
+   * How a browser may cache an avatar or attachment it fetched in the clear: never (review 2026-11-07,
+   * F-027). An Emergency Reset tells connected clients to purge, but no page can clear the browser's HTTP
+   * cache, so a picture a typed-address joiner's browser cached (an hour, before) outlived the reset on its
+   * disk. The host's own windows needed it already beside an encrypted database (docs/04, docs/24). The
+   * global `onSend` hook (transport-server.ts) sets the same on every `/api/` response.
    */
-  function imageCacheControl(): string {
-    return ctx.dbState.encryptionEnabled ? "no-store" : "private, max-age=3600";
-  }
+  const IMAGE_CACHE_CONTROL = "no-store";
 
   ctx.server.get("/api/users", async (request, reply) => {
     const currentUser = ctx.ensureSessionUser(ctx.getSessionUserId(request, reply));
@@ -837,7 +835,7 @@ export function registerUserRoutes(ctx: AppContext): void {
 
     try {
       const image = await readFile(ctx.avatarImagePath(avatar.imageId, avatar.mimeType));
-      return reply.type(avatar.mimeType).header("cache-control", imageCacheControl()).header("x-content-type-options", "nosniff").send(image);
+      return reply.type(avatar.mimeType).header("cache-control", IMAGE_CACHE_CONTROL).header("x-content-type-options", "nosniff").send(image);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return reply.code(404).send(errorBody("Avatar image does not exist"));
@@ -995,7 +993,7 @@ export function registerUserRoutes(ctx: AppContext): void {
         // from user input.
         const fileBytes = await readFile(join(ctx.attachmentsDir, attachmentFileName(attachment)));
         reply
-          .header("cache-control", reviewingReport ? "no-store" : imageCacheControl())
+          .header("cache-control", IMAGE_CACHE_CONTROL)
           .header("x-content-type-options", "nosniff");
 
         // Images render inline with their real type (safe — images aren't executable). A NON-image file is
