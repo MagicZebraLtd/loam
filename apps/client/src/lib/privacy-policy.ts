@@ -106,7 +106,9 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "if linking stays on.",
           "The host can store the network encrypted. With encryption on, a reset also replaces the key in the " +
             "Android and desktop host apps, and in the `loamnet` terminal app when it uses a temporary key, so " +
-            "the deleted data can't be recovered from the database files left on the device. A reset does not " +
+            "the deleted data can't be recovered from the database files left on the device. The exception is the " +
+            "desktop app on Linux with no keychain, where a passphrase network keeps its key in an unprotected " +
+            "file: flash storage may keep that file after it is deleted. A reset does not " +
             "reach backups of the host device. `loamnet` with a fixed passphrase deletes the database files but " +
             "keeps the same passphrase. With `loamnet`, the browser you use as admin is an ordinary browser: " +
             "like anyone else's, it keeps its own unencrypted copy until the reset reaches it. Pictures and " +
