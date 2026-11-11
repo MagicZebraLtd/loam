@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "7 November 2026";
+export const PRIVACY_POLICY_UPDATED = "11 November 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -101,7 +101,8 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "the host and tells devices connected at the time to delete their copies. A device that was offline " +
             "deletes its copy the next time it connects at the same address. The address can change when the " +
             "host restarts, and a copy saved under an earlier address stays in that browser until its site data " +
-            "is cleared. A network the host linked keeps its own copy of the public channels, and hands it back " +
+            "is cleared. A browser that used an unencrypted network on LOAM 0.7 or earlier can also keep pictures in " +
+            "its own cache, which a reset can't reach; clearing its site data removes them. A network the host linked keeps its own copy of the public channels, and hands it back " +
             "if linking stays on.",
           "The host can store the network encrypted. With encryption on, a reset also replaces the key in the " +
             "Android and desktop host apps, and in the `loamnet` terminal app when it uses a temporary key, so " +

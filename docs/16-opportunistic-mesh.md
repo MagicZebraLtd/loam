@@ -479,9 +479,9 @@ signature — structurally what Signal sealed-sender does):**
   This sets the **`sealed` size cap**: the largest bucket is 64 KiB =
   65 536 B of padded plaintext; XChaCha20-Poly1305 adds no length expansion beyond its 16 B tag, and the
   envelope prepends the 32 B ephemeral `e_pk` and 24 B nonce → **raw blob ≤ 65 536 + 32 + 24 + 16 =
-  65 608 bytes**. base64url-encoded that is `ceil(65 608 / 3) × 4 = 87 480` characters, so the schema
-  uses `.max(87_480)` — **not** `64_000`, which would truncate a full-size message — while `.min(1)`
-  keeps the non-empty guard.
+  65 608 bytes**. base64url-encoded that is `ceil(65 608 / 3) × 4 = 87 480` characters. The schema allows
+  `.max(90_000)` (`SealedMessageSchema`), a little headroom over that and **not** `64_000`, which would truncate a
+  full-size message, while `.min(1)` keeps the non-empty guard. Enforce the schema's bound, not 87 480.
 - **Authenticate the immutable relay metadata.** `toTag`, `ttlExpiresAt`, and the **original** hop
   budget `hopLimit0` travel in cleartext (carriers route on them) but must be **bound to the envelope**
   so a carrier can't extend the TTL, retarget the tag, or reset hops undetected. Include them in the

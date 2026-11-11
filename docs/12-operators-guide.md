@@ -166,8 +166,9 @@ the QR, and the address it gives when linking networks), and that address doesn'
 
 **The code is the whole invitation.** People connect to the same Wi-Fi or hotspot, scan the code, and
 LOAM opens in their browser. Nothing to install, no account, and the code carries the network's
-encryption key, so everything between their phone and the host is encrypted from the first request,
-pictures and files included. Someone who types the address instead gets much less: see **Connections** in
+encryption key, so once the page has loaded, everything between their phone and the host is encrypted,
+pictures and files included. (The page itself and a public bootstrap request come over plain HTTP before
+the encrypted session starts: see [docs/08](08-transport-security.md).) Someone who types the address instead gets much less: see **Connections** in
 [§4](#4-shaping-the-network).
 
 - **From the host phone:** **Invite people** in the host menu shows the codes. On Hotspot there are two, the hotspot's

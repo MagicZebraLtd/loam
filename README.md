@@ -216,7 +216,9 @@ computer, the same settings live in the admin area as **security profiles**
 - **Emergency reset.** Erases every message, person, picture and file on the host, and tells connected
   phones to clear their copy. On an encrypted network in the Android or desktop app, and in `loamnet` with
   a key that lives only in memory, the key is replaced too, so what's left in the database files can't be
-  read. A network you linked keeps its own copy of the public channels, and hands it back if linking stays
+  read. (On Linux without a keychain, a passphrase network keeps its key file unprotected on disk. A reset
+  deletes it, but flash storage can keep deleted blocks, so someone who recovers it and knows the passphrase
+  could still read the old database: [docs/24](docs/24-electron-desktop.md).) A network you linked keeps its own copy of the public channels, and hands it back if linking stays
   on. A phone that joined under an earlier address of the host keeps that copy until its browser data is
   cleared ([docs/02](docs/02-kill-switch.md)).
 

@@ -157,7 +157,8 @@ on Stop. The hash includes the device secret, so the passphrase alone opens noth
 makes the database on this disk unreadable even to someone who knows the passphrase. It does not reach an OS
 backup (Time Machine, File History, Déjà Dup) of the user-data folder taken while the secret existed: that
 backup holds both the database and the sealed secret, so the keychain is all that stands between it and the
-data. Exclude the LOAM folder from backups, or use an ephemeral key, if that matters. The SHA-256 only mixes the secret in:
+data. On a Linux desktop with no keychain (below), a passphrase network's secret sits in `device-secret.key`
+unprotected, so such a backup holds the secret in the clear and only the passphrase protects it. Exclude the LOAM folder from backups, or use an ephemeral key, if that matters. The SHA-256 only mixes the secret in:
 the server hands that value to SQLCipher as a text key, and SQLCipher derives the real key from it with its own
 PBKDF2, so guessing a passphrase costs the driver's key derivation per guess, not one hash. A wrong passphrase maps to the Unlock
 screen saying so; a lost device secret under a device-held mode maps to `db_encryption_locked`.
@@ -179,7 +180,9 @@ Honest caveats:
 - **No keychain, no persistent mode.** On a Linux desktop with no secret service (GNOME Keyring, KWallet),
   `persistent` is not offered, Community defaults to `passphrase`, and the Setup screen says why. A
   passphrase network there stores the device secret in `device-secret.key` unprotected: the passphrase is the
-  protection, and the secret still gives Emergency Reset its "destroy the key" property. That file is left
+  protection, and the secret still gives Emergency Reset its "destroy the key" property, but only as far as
+  deleting a file erases it. Flash storage can keep a deleted file's blocks, so someone who recovers the old
+  secret and knows the passphrase could still read recovered database pages. That file is left
   as it is even when a later session does have a keychain (a graphical login after an SSH start, or the other
   way round): sealing it then would make the network unreadable in the next session without one, which an
   earlier build did (`keys.ts` sealed a plain secret "once this computer has a keychain").
