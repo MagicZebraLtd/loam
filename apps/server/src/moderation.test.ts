@@ -4,7 +4,7 @@ import { REPORTED_MESSAGE_BODY_MAX_LENGTH, ReportedMessageSchema } from "@loam/s
 
 import type { LoamApp } from "./app.js";
 import { OPEN_REPORTS_PER_REPORTER_MAX, reportedMessageBody } from "./routes-users.js";
-import { type InjectResponse, makeApp, newSession, sessionCookie, teardownApps } from "./test-support/app-harness.js";
+import { type InjectResponse, makeApp, newSession, reopenApp, sessionCookie, teardownApps } from "./test-support/app-harness.js";
 
 afterEach(teardownApps);
 
@@ -234,16 +234,35 @@ describe("roles, moderation, and join policy", () => {
       expect(ban.statusCode).toBe(200);
       expect((ban.json() as { banned: boolean }).banned).toBe(true);
 
-      // Their next post is forbidden, and their session is gone from the store.
+      // Their next post is forbidden. The session row stays, so the cookie keeps naming the banned
+      // identity after a restart (see the next test) rather than minting a clean one.
       const after = await postChannel(app, member.cookie, "after the ban");
       expect(after.statusCode).toBe(403);
-      expect(app.store.loadSessions().some((session) => session.userId === member.userId)).toBe(false);
+      expect(app.store.loadSessions().some((session) => session.userId === member.userId)).toBe(true);
 
       // A banned user is no longer a visible participant.
       const roster = (
         await app.server.inject({ method: "GET", url: "/api/users", headers: { cookie: admin.cookie } })
       ).json() as { id: string }[];
       expect(roster.some((user) => user.id === member.userId)).toBe(false);
+    });
+
+    it("a ban on a cookie session survives a host restart (review F-011)", async () => {
+      const { app, dataDir } = await makeApp();
+      const admin = await newSession(app);
+      const member = await newSession(app);
+      expect((await moderate(app, admin.cookie, member.userId, { banned: true })).statusCode).toBe(200);
+
+      // Same data dir, same cookie: still the banned identity, still refused, and no fresh identity minted.
+      const restarted = await reopenApp(app, dataDir);
+      const post = await postChannel(restarted, member.cookie, "back after the restart?");
+      expect(post.statusCode).toBe(403);
+      expect(post.headers["set-cookie"]).toBeUndefined();
+      const config = await restarted.server.inject({ method: "GET", url: "/api/config", headers: { cookie: member.cookie } });
+      expect(config.headers["set-cookie"]).toBeUndefined();
+      const { currentUser } = config.json() as { currentUser: { id: string; banned?: boolean } };
+      expect(currentUser.id).toBe(member.userId);
+      expect(currentUser.banned).toBe(true);
     });
 
     it("refuses to ban an admin or oneself", async () => {
@@ -471,7 +490,8 @@ describe("roles, moderation, and join policy", () => {
       const record = denied.json() as { banned: boolean; pending?: boolean };
       expect(record.banned).toBe(true);
       expect(record.pending).toBe(false);
-      expect(app.store.loadSessions().some((session) => session.userId === newcomer.user.id)).toBe(false);
+      // The session row stays pinned to the denied identity (review F-011), so a restart doesn't undo it.
+      expect(app.store.loadSessions().some((session) => session.userId === newcomer.user.id)).toBe(true);
 
       // Denying an admin/self is refused, and a plain member cannot deny at all.
       expect((await deny(app, admin.cookie, admin.userId)).statusCode).toBe(403);

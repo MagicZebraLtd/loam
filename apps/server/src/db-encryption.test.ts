@@ -275,9 +275,9 @@ describe("encryption at rest + key-discard kill switch", () => {
     const encrypted = await makeEncryptedApp({ dbEncryptionKey: "a fixed host passphrase" }, avatarConfig);
     expect(await avatarCacheControl(encrypted.app)).toBe("no-store");
 
-    // Without encryption at rest there is nothing on disk the cache would undercut: an hour of private caching.
+    // Without encryption at rest too (review F-027): an Emergency Reset can't reach a joiner's HTTP cache.
     const plain = await makeEncryptedApp({}, avatarConfig);
-    expect(await avatarCacheControl(plain.app)).toBe("private, max-age=3600");
+    expect(await avatarCacheControl(plain.app)).toBe("no-store");
   });
 
   it("tells a browser on the host machine to keep no local copy while the database is encrypted, and nobody else", async () => {

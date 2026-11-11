@@ -46,7 +46,10 @@
 > can't carry the session header) is refused (401), forcing the client to fetch images through the tunnel
 > (`encryptedImageUrl` / the `useEncryptedImage` hook) and render them from a cached `blob:` object URL,
 > so image bytes are sealed on the wire like everything else. `optional` nodes (and Developer Mode) still
-> serve images directly in clear (lighter). So in `required` mode a **post-handshake REST request** reveals only that
+> serve images directly in clear (lighter), but never cacheable: every `/api/` response, pictures included,
+> is `Cache-Control: no-store` (review 2026-11-07, F-027), because a typed-address joiner's browser would
+> otherwise keep pictures and URL keys such as `/api/search?q=<term>` in an HTTP cache that an Emergency
+> Reset can't clear. So in `required` mode a **post-handshake REST request** reveals only that
 > a `POST /api/transport/tunnel` happened, plus coarse ciphertext size/timing — its method, path/query,
 > and body are all sealed. Still observable (unavoidably): the **bootstrap** — `GET /api/bootstrap` and
 > `POST /api/transport/handshake` run before a session exists — and the **WebSocket upgrade**
@@ -77,7 +80,10 @@
 > bare aad as before, so the server stays compatible; the client and server ship together because the
 > node serves the client. Sync pullers don't send `r`, and their responses stay under `#${s}` so 0.6.0
 > peers keep working; a relabelled status there can only fail a pull, since a non-2xx answer carries no
-> data the puller imports.
+> data the puller imports. The sealed identity resume (docs/20 §9) sends `r: 1` too, and the client
+> forgets its identity token only on a `401` that opens under `POST /api/session/resume#${s}#401`; a fake
+> `401` with `x-loam-enc: 1` (both outside the AEAD) is treated as an expired session and the token is
+> kept.
 > Binding only helps if the client also refuses a reply with the seal stripped off. Under a live session
 > it accepts an unsealed reply only for the three refusals the node makes before it has looked the session
 > up: a `401` for a session it doesn't know, a `421` for a Host name it doesn't serve, and a `503` while an
@@ -221,6 +227,18 @@ unavailable, so ship one):
 - ❌ Does not restore the **service worker / offline PWA** (still an insecure context) — see below.
 - ⚠️ **Metadata** (who talks to whom, timing, sizes) is still visible to the host and partially to the
   network. Note it honestly.
+- ⚠️ **Cookie sessions and other web pages** (review 2026-11-07, F-012). A member who typed the address
+  holds a `SameSite=Lax` cookie, and browsers share cookies across the ports of one host, so a page on
+  another port of the same machine counts as the same site and its form POSTs carry the cookie. A
+  cross-site form POST carries no cookie but used to mint or clear one. The server now refuses any
+  state-changing request whose `Origin` isn't the node's own page (the `/ws` rule: the Host's name, on its
+  port or the advertised client port), or that has no Origin but a `Sec-Fetch-Site` from elsewhere, and
+  any `text/plain`, urlencoded or multipart body (every route takes JSON, and only those types skip a CORS
+  preflight). A client that sends neither header (curl, a sync peer) is judged by its credentials, as
+  before. Bound (QR-joined) members were never exposed: their identity is the session key, not a cookie.
+  Not covered: a same-host page can still *set* a `loam_session` cookie with a longer path, which the
+  browser sends first, so the member acts as that page's identity (cookie fixation); only typed-address
+  members are affected.
 
 ## Node-to-node sync over the transport channel (BUILT)
 
