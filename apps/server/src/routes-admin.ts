@@ -372,6 +372,13 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   const switchedAwayFromSetupCode =
     ctx.appConfig.admin.bootstrap === "setupCode" && next.admin.bootstrap !== "setupCode";
   ctx.appConfig = next;
+  // `required` (set directly, or by the hardened profile) is checked when a socket connects; a socket that
+  // connected under `optional` without a bound session would otherwise keep receiving every event, in the
+  // clear if it had no session key. Close those the moment the mode changes, before anything below can
+  // broadcast to them (mesh identities, the bot, `configUpdated`) or throw and skip the close.
+  if (ctx.effectiveTransportEncryption() === "required") {
+    ctx.closeUnboundSockets();
+  }
   // `appConfig` is always the operator's real intent (Developer Mode never mutates it — the plaintext
   // override is a read-time projection via `effectiveTransportEncryption()`), so the persisted config can
   // never carry a dev-forced `"off"` into a later non-dev run of this data dir.
@@ -423,12 +430,6 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   ctx.llm.ensureBotUser();
   // Enabling mesh mints + publishes identity keys for existing local users so they're reachable.
   ctx.mesh.ensureAllMeshIdentities();
-  // `required` (set directly, or by the hardened profile) is checked when a socket connects; a socket that
-  // connected under `optional` without a bound session would otherwise keep receiving every event, in the
-  // clear if it had no session key. Close those before the broadcast below reaches them.
-  if (ctx.effectiveTransportEncryption() === "required") {
-    ctx.closeUnboundSockets();
-  }
   ctx.broadcast({ type: "configUpdated", networkConfig: ctx.currentNetworkConfig() });
   // If presence was just enabled, connected clients need the current roster to light up: sent even when
   // the online set is unchanged since presence was last announced.
