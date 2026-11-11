@@ -65,8 +65,15 @@ describe("expiredMessageIds", () => {
   });
 
   it("spares a reply still streaming", () => {
-    const streaming = { ...dm("bot", 2 * HOUR), meta: { streaming: true } } as Message;
-    expect(expiredMessageIds([streaming], [], HOUR, NOW).size).toBe(0);
+    const streaming = { ...dm("bot", 10 * 60_000), meta: { streaming: true } } as Message;
+    expect(expiredMessageIds([streaming], [], 5 * 60_000, NOW).size).toBe(0);
+  });
+
+  it("lets a stream snapshot older than the spare window expire, with a TTL shorter than the window", () => {
+    // Cached mid-stream, then this device lost touch: the node finished it long ago.
+    const stale = { ...dm("stale", 2 * HOUR), meta: { streaming: true } } as Message;
+    const fresh = { ...dm("fresh", 5 * 60_000), meta: { streaming: true } } as Message;
+    expect(expiredMessageIds([stale, fresh], [], 60_000, NOW)).toEqual(new Set(["stale"]));
   });
 
   it("goes by the newest server stamp it holds when this device's clock is behind", () => {

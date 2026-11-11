@@ -285,9 +285,11 @@ next time it reaches the network.
 - **From the admin area:** **Emergency Reset**, once enabled there (the Hardened profile enables it).
   The settings survive, so the network starts again empty. If this network is linked, the reset turns sync
   off and keeps the list of linked networks, and the Sync panel says so: the linked networks keep their own
-  copy of the public channels, and turning sync on again pulls that copy back in. On a computer using a fixed
-  passphrase, the shared mesh token isn't kept (it's never written to disk unencrypted): set it again before
-  syncing with networks that need it.
+  copy of the public channels, and turning sync on again pulls that copy back in. When the reset has to
+  restart LOAM to replace a fixed key (the Android and desktop apps), or finishes at the next start after an
+  interruption, the shared sync token isn't kept, because it's never written to disk unencrypted. The Sync
+  panel says when that happened: set the token again before syncing with networks that need it. A reset that
+  finishes without a restart keeps the token.
 - **Without logging in:** set a **panic token** (16 characters or more) in the same panel, and a request
   to `POST /api/panic` with it erases the network, from a bookmark or another device. The token is stored
   hashed, and the address answers "not found" unless a token is set.

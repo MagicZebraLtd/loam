@@ -93,7 +93,9 @@ export function resetLocalStoreForTests(): void {
  * untouched: it holds no messages.
  */
 function localCacheRefused(): boolean {
-  return (typeof window !== "undefined" && window.__loamHostNoLocalCache === true) || nodeRefusesLocalCache;
+  // The stored flag is read every time, not just at load: another tab may have heard the hint since, and this
+  // tab must not reopen (and refill) the database that tab deleted.
+  return (typeof window !== "undefined" && window.__loamHostNoLocalCache === true) || nodeRefusesLocalCache || readNodeRefusal();
 }
 
 /** Whether an earlier page load was told by the node to keep no copy here (see {@link applyHostNoLocalCacheHint}). */

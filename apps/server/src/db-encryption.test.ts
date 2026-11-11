@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2487,6 +2488,39 @@ describe("encryption at rest + key-discard kill switch", () => {
         (await app.server.inject({ method: "GET", url: "/api/channels", headers: { cookie: admin.cookie } })).statusCode,
       ).toBe(503);
     });
+  });
+});
+
+describe("sync stays paused after a reset when the database holding that is gone (ephemeral restart)", () => {
+  it("a config.json from before the reset can't turn sync back on; one edited after it can", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-sync-pause-test-"));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const configPath = join(dataDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }] } }));
+    const resetAt = Date.now();
+    utimesSync(configPath, new Date(resetAt - 60_000), new Date(resetAt - 60_000));
+    writeFileSync(join(dataDir, ".loam-sync-off-after-reset"), JSON.stringify({ at: resetAt, hadToken: false }));
+
+    const syncEnabled = async (app: LoamApp) => {
+      const admin = await newSession(app);
+      const config = await app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie: admin.cookie } });
+      return (config.json() as { sync: { enabled: boolean } }).sync.enabled;
+    };
+
+    const first = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false });
+    expect(await syncEnabled(first)).toBe(false);
+    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(true);
+    await first.close();
+
+    // The operator turns it on by hand after the reset: that choice stands, and the note goes.
+    rmSync(join(dataDir, "loam.db"), { force: true });
+    rmSync(join(dataDir, "loam.db-wal"), { force: true });
+    rmSync(join(dataDir, "loam.db-shm"), { force: true });
+    utimesSync(configPath, new Date(resetAt + 60_000), new Date(resetAt + 60_000));
+    const second = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false });
+    cleanups.push(() => second.close());
+    expect(await syncEnabled(second)).toBe(true);
+    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(false);
   });
 });
 

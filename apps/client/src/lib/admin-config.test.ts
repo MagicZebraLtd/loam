@@ -113,6 +113,19 @@ describe("rebaseConfig", () => {
     ]);
   });
 
+  it("saves a peer the admin removed and added again at the same address, as the admin left it", () => {
+    const draft = edit(base, (config) => {
+      config.sync.peers = [{ url: "http://192.168.4.30:3000", transportKey: "pinned-key" }];
+    });
+    const fresh = edit(base, (config) => {
+      config.sync.peers = [...config.sync.peers, { url: "http://192.168.4.50:3000", label: "Linked by code" }];
+    });
+    expect(rebaseConfig(draft, base, fresh).sync.peers).toEqual([
+      { url: "http://192.168.4.50:3000", label: "Linked by code" },
+      { url: "http://192.168.4.30:3000", transportKey: "pinned-key" },
+    ]);
+  });
+
   it("is the newer copy itself when the admin changed nothing", () => {
     const fresh = edit(base, (config) => (config.sync.enabled = false));
     expect(rebaseConfig(structuredClone(base), base, fresh)).toEqual(fresh);

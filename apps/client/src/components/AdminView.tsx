@@ -249,7 +249,18 @@ export function AdminView({
   }, [adminConfig]);
 
   /** Take in a newer server copy of the config: the draft keeps the admin's unsaved edits on top of it. */
-  function adoptServerConfig(fresh: LoamConfig): void {
+  // Every background read of the config takes a number; only the newest one started may be adopted, so a slow
+  // read that began before a change can't land after a newer one and undo it.
+  const configReadRef = useRef(0);
+  function readServerConfig(): Promise<LoamConfig | undefined> {
+    const read = ++configReadRef.current;
+    return fetchAdminConfig().then((fresh) => (read === configReadRef.current ? fresh : undefined));
+  }
+
+  function adoptServerConfig(fresh: LoamConfig | undefined): void {
+    if (!fresh) {
+      return;
+    }
     const base = savedConfigRef.current;
     savedConfigRef.current = fresh;
     setSavedConfig(fresh);
@@ -264,9 +275,9 @@ export function AdminView({
 
     let active = true;
 
-    fetchAdminConfig()
+    readServerConfig()
       .then((fresh) => {
-        if (active) {
+        if (active && fresh) {
           setLoadError(undefined);
           adoptServerConfig(fresh);
         }
@@ -301,6 +312,8 @@ export function AdminView({
       // what the node holds now, not what it held when the page loaded (another writer's change may not have
       // reached this page as a `configUpdated` yet). `llm.openai.apiKey` rides only when the admin typed one
       // ("" clears it); the passphrase and panic token come from their own fields.
+      // A background read already in flight is older than this one: it must not be adopted after the save.
+      configReadRef.current += 1;
       const fresh = await fetchAdminConfig();
       const draft = rebaseConfig(adminConfig, base, fresh);
       const changes = configDelta(draft, fresh);
@@ -835,7 +848,7 @@ export function AdminView({
                       // one) and no `configUpdated` reached this page: read the config again.
                       const known = new Set(savedConfigRef.current?.sync.peers.map((peer) => peer.url));
                       if (report.peers.some((peer) => !known.has(peer.url))) {
-                        void fetchAdminConfig().then(adoptServerConfig, () => undefined);
+                        void readServerConfig().then(adoptServerConfig, () => undefined);
                       }
                     }}
                   />

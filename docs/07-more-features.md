@@ -45,8 +45,10 @@ its own initiative and a top-level decision, not a quick add.
 > remembers it in its local store (`lib/retention.ts`), and drops held messages past min(channel TTL, node
 > TTL), with the replies and reactions the node deletes alongside them, at start (before anything renders,
 > even offline), whenever the TTL or a channel changes, and every 60 s. Its "now" is the later of the device
-> clock and the newest server stamp it holds, so a slow clock can't keep what the node dropped; a fast one
-> prunes early. A device that never opens LOAM again keeps its copy until it does.
+> clock and the newest server stamp it holds, which catches a slow clock up to the last message the device
+> saw; a device offline with a slow clock can still keep a message past the TTL by up to how slow it runs. A
+> fast clock prunes early. A message still marked as streaming is spared for 15 minutes at most, so a
+> snapshot from before the device lost touch still expires. A device that never opens LOAM again keeps its copy until it does.
 
 A per-channel/global `retentionMs` config + a periodic reaper (`DELETE FROM messages WHERE created_at <
 now - ttl`) gives disappearing messages almost for free once on SQLite. It's the *proactive* complement

@@ -75,19 +75,24 @@ function rebaseSection<T extends object>(draft: T, base: T, fresh: T): T {
 }
 
 /**
- * The peer list with the draft's own additions and removals applied to the fresh list, so a peer that linked
- * itself (or that another admin added) while the form was open is kept, and one the admin removed stays gone.
+ * The peer list with the draft's own additions, edits and removals applied to the fresh list, so a peer that
+ * linked itself (or that another admin added) while the form was open is kept, one the admin removed stays
+ * gone, and one the admin removed and added again at the same address (say, now pinned to a key) is saved as
+ * the admin left it.
  */
 function rebasePeers(draft: SyncPeer[], base: SyncPeer[], fresh: SyncPeer[]): SyncPeer[] {
   if (same(draft, base)) {
     return fresh;
   }
   const draftUrls = new Set(draft.map((peer) => peer.url));
-  const baseUrls = new Set(base.map((peer) => peer.url));
-  const freshUrls = new Set(fresh.map((peer) => peer.url));
+  const baseByUrl = new Map(base.map((peer) => [peer.url, peer]));
   const removed = new Set(base.filter((peer) => !draftUrls.has(peer.url)).map((peer) => peer.url));
-  const added = draft.filter((peer) => !baseUrls.has(peer.url) && !freshUrls.has(peer.url));
-  return [...fresh.filter((peer) => !removed.has(peer.url)), ...added];
+  const changed = draft.filter((peer) => {
+    const before = baseByUrl.get(peer.url);
+    return before === undefined || !same(peer, before);
+  });
+  const changedUrls = new Set(changed.map((peer) => peer.url));
+  return [...fresh.filter((peer) => !removed.has(peer.url) && !changedUrls.has(peer.url)), ...changed];
 }
 
 /**

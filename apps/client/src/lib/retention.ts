@@ -15,6 +15,13 @@ export const RETENTION_RECORD_ID = "retention";
 /** What {@link RETENTION_RECORD_ID} holds: the node TTL last reported, or none (messages are kept). */
 export type RetentionRecord = { id: typeof RETENTION_RECORD_ID; messageTtlMs?: number };
 
+/**
+ * How long a message still marked as streaming is spared. The node finishes or finalizes a stream well within
+ * this (an on-device reply times out after 5 minutes, and a crash's placeholder is finalized at boot), so an
+ * older one is a snapshot from before this device lost touch, and retention applies to it like any other.
+ */
+export const STREAMING_SPARE_MS = 15 * 60_000;
+
 /** A positive, finite TTL, or undefined (zero, negative, NaN and null all mean "no retention"). */
 function usableTtl(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -52,10 +59,12 @@ export function retentionTtlFor(
 
 /**
  * The ids of held messages past their retention, with what the node deletes alongside them: the replies under
- * an expired post and the reactions on any expired message. A reply still streaming is spared, as on the node.
+ * an expired post and the reactions on any expired message. A reply still streaming is spared, as on the node,
+ * for up to {@link STREAMING_SPARE_MS}.
  *
- * `now` is the later of this device's clock and the newest `createdAt` it holds (a server stamp): a phone whose
- * clock runs slow would otherwise keep messages the node already dropped. A clock that runs fast prunes early,
+ * `now` is the later of this device's clock and the newest `createdAt` it holds (a server stamp), which catches
+ * a slow clock up to the last message this device saw. A device that is offline with a slow clock can still
+ * keep a message past the node's TTL, by up to how slow its clock runs. A clock that runs fast prunes early,
  * which only removes the copy sooner.
  */
 export function expiredMessageIds(
@@ -71,8 +80,10 @@ export function expiredMessageIds(
     now = Math.max(now, message.createdAt);
   }
 
+  const sparedStream = (message: Message): boolean =>
+    message.meta?.streaming === true && message.createdAt >= now - STREAMING_SPARE_MS;
   for (const message of messages) {
-    if (message.meta?.streaming) {
+    if (sparedStream(message)) {
       continue;
     }
     const ttl = retentionTtlFor(message, channelsById, nodeTtlMs);
@@ -92,7 +103,7 @@ export function expiredMessageIds(
     for (const message of messages) {
       if (
         message.type === "channelReply" &&
-        !message.meta?.streaming &&
+        !sparedStream(message) &&
         expired.has(message.parentMessageId) &&
         !expired.has(message.id)
       ) {

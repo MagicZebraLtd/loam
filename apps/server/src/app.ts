@@ -2595,17 +2595,29 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
   /**
    * At boot: say that an Emergency Reset paused sync, while it still applies (sync off, peers left), and drop
-   * the note once it doesn't (config.json turned sync on by hand, or there are no peers). A reset that
+   * the note once it doesn't (config.json turned sync on by hand after the reset, or there are no peers). A reset that
    * restarted the node also dropped the sync token, which the admin has to set again.
    */
-  function reportSyncPausedByReset(): void {
+  async function reportSyncPausedByReset(): Promise<void> {
     const paused = lifecycle.syncPausedByReset();
     if (!paused) {
       return;
     }
-    if (appConfig.sync.enabled || !appConfig.sync.peers.length) {
+    if (!appConfig.sync.peers.length) {
       lifecycle.clearSyncPausedByReset();
       return;
+    }
+    if (appConfig.sync.enabled) {
+      // Sync is on again. Honour that only if someone turned it on after the reset: an ephemeral network's
+      // database (holding the paused config) is gone after a restart, and a config.json written before the
+      // reset would otherwise switch sync back on and let the linked networks hand the wiped posts back.
+      // An admin's save clears the note itself, so here the only later source is a hand edit of config.json.
+      const configChangedAt = await stat(configPath).then((info) => info.mtimeMs, () => undefined);
+      if (configChangedAt === undefined || configChangedAt > paused.at) {
+        lifecycle.clearSyncPausedByReset();
+        return;
+      }
+      appConfig = { ...appConfig, sync: { ...appConfig.sync, enabled: false } };
     }
     const tokenNote =
       paused.hadToken && appConfig.sync.token === undefined
@@ -2641,7 +2653,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
   try {
     await loadAppConfig();
-    reportSyncPausedByReset();
+    await reportSyncPausedByReset();
     loadData();
     reapExpiredMessages();
   } catch (error) {

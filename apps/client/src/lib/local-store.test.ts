@@ -86,6 +86,20 @@ describe("local-store", () => {
     }
   });
 
+  it("a tab that loaded before another tab heard the hint doesn't reopen the deleted database", async () => {
+    await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+    try {
+      // Another tab heard the hint and deleted the copy; this tab's in-memory flag is still the old one.
+      localStorage.setItem("loam.hostNoLocalCache", "1");
+      await destroyDatabase();
+      await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
+      expect((await indexedDB.databases()).map((database) => database.name)).not.toContain("loam-poc");
+    } finally {
+      localStorage.removeItem("loam.hostNoLocalCache");
+      resetLocalStoreForTests();
+    }
+  });
+
   it("destroyDatabase deletes an existing database while the host app refuses a copy", async () => {
     await putRecords<Channel>("channels", [{ id: "general", name: "General" }]);
     resetLocalStoreForTests();
