@@ -15,6 +15,13 @@ export const SERVER_PORT = 3000;
  */
 export const HOST_WEBVIEW_ORIGIN = `http://127.0.0.1:${SERVER_PORT}`;
 
+/**
+ * The origin earlier releases loaded the host WebView from. Its storage (the web client's IndexedDB cache,
+ * localStorage with the identity token, the service worker) stays on the phone after an upgrade, and the
+ * new origin can't reach it, so an Emergency Reset wouldn't either. The host screen deletes it at launch.
+ */
+export const LEGACY_HOST_WEBVIEW_ORIGIN = `http://localhost:${SERVER_PORT}`;
+
 /** RFC-1918 10.0.0.0/8 or 172.16.0.0/12 (192.168.* is handled separately by the caller). */
 export function isPrivate10or172(address: string): boolean {
   return address.startsWith('10.') || /^172\.(1[6-9]|2\d|3[01])\./.test(address);

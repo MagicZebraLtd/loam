@@ -127,6 +127,8 @@ describe('the host WebView addresses its server by IP literal (F-004)', () => {
     expect(source).toMatch(/const LOAM_URL = HOST_WEBVIEW_ORIGIN;/);
     expect(source).toMatch(/originWhitelist=\{\[LOAM_URL\]\}/);
     expect(source).toMatch(/fetch\(`\$\{LOAM_URL\}\/api\/bootstrap`/);
+    // What an earlier release stored under the old origin is deleted at launch, so a reset can't miss it.
+    expect(source).toMatch(/deleteWebOriginData\(LEGACY_HOST_WEBVIEW_ORIGIN\)/);
   });
 });
 

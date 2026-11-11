@@ -37,7 +37,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { colorSchemeForClientMessage } from '@/lib/client-theme';
 import { alertLevelForClientMessage, conversationPath, messageNotifier } from '@/lib/message-notifications';
 import { t } from '@/lib/i18n';
-import { HOST_WEBVIEW_ORIGIN, withInviteCode } from '@/lib/join-url';
+import { HOST_WEBVIEW_ORIGIN, LEGACY_HOST_WEBVIEW_ORIGIN, withInviteCode } from '@/lib/join-url';
 import {
   clearStoredDbKeys,
   DB_ENCRYPTION_DRIVER_MISSING_CODE,
@@ -74,6 +74,7 @@ import {
   addOpenConversationListener,
   clearMessageNotifications,
   closeApp,
+  deleteWebOriginData,
   startKiosk,
   stopKiosk,
   takeOpenedConversation,
@@ -387,6 +388,12 @@ function HostScreen() {
   // A file handed to the share sheet last time (lib/save-file.ts) doesn't stay in the cache past a restart.
   useEffect(() => {
     void clearSharedFiles();
+  }, []);
+
+  // What an earlier release's WebView stored under its old origin (cached messages, the identity token) can't
+  // be reached from 127.0.0.1, so no reset would clear it. Delete it at every launch; a no-op once gone.
+  useEffect(() => {
+    deleteWebOriginData(LEGACY_HOST_WEBVIEW_ORIGIN);
   }, []);
 
   // Wire the Android hardware/gesture Back button to the WebView's in-app history. The LOAM web client

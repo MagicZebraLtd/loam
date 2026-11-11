@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.webkit.WebStorage
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
@@ -155,6 +156,19 @@ class LoamHotspotModule : Module() {
           ),
         )
         true
+      }
+    }
+
+    // Delete everything the WebView stored for an origin, without loading a page there: the host WebView
+    // once ran at http://localhost:3000, and that origin's message cache and identity token would otherwise
+    // outlive an upgrade and every Emergency Reset. WebStorage must be used on the UI thread.
+    Function("deleteWebOriginData") { origin: String ->
+      Handler(Looper.getMainLooper()).post {
+        try {
+          WebStorage.getInstance().deleteOrigin(origin)
+        } catch (error: Throwable) {
+          Log.w("LoamHotspot", "Couldn't delete an earlier WebView origin's storage", error)
+        }
       }
     }
 

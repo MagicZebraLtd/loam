@@ -682,7 +682,9 @@ support it); avoid Android-only Easy Connect for v1.
   security config permits cleartext to `127.0.0.1` only, so a stray `localhost` load fails instead of
   reaching another app. (Builds before this change loaded `localhost`. WebView storage is per origin, so on
   a network that keeps its data the host's own person starts as a new member after the update; the host
-  token makes them admin again.)
+  token makes them admin again. The host screen deletes the old origin's storage at every launch
+  (`deleteWebOriginData`, Android's `WebStorage.deleteOrigin`, no page loaded there), so the old message
+  cache and identity token don't outlive the update and every later Emergency Reset.)
 - WebView needs: `credentials`/cookies enabled (the app relies on the `loam_session` cookie —
   `thirdPartyCookiesEnabled`, `sharedCookiesEnabled`), WebSocket allowed (works over `ws://` on the LAN;
   fine in a WebView), and cleartext HTTP permitted for the LAN origin (Android `usesCleartextTraffic` /
