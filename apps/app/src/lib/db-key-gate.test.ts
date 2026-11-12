@@ -14,9 +14,34 @@
 // wiring was verified by inspection (`git diff` on nodejs-project-template/main.js) and `node --check`
 // (syntax only). A real-device/emulator smoke test of a Retry tap during a resumed wipe is the only way
 // to exercise the full path end-to-end.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { mayResolveDbKeyThisBoot } from "../../nodejs-project-template/db-key-gate.js";
+import { mayResolveDbKeyThisBoot, mayRunBootPipeline } from "../../nodejs-project-template/db-key-gate.js";
+
+const MAIN_JS = readFileSync(join(__dirname, "..", "..", "nodejs-project-template/main.js"), "utf8");
+
+describe("mayRunBootPipeline (F-053: a mode change on a running network waits for the next start)", () => {
+  it("refuses once the server is running, so an ephemeral pick can't delete the live database", () => {
+    expect(mayRunBootPipeline(true)).toBe(false);
+  });
+
+  it("allows a boot while no server is running (first boot, locked, recovery screens)", () => {
+    expect(mayRunBootPipeline(false)).toBe(true);
+  });
+
+  it("is consulted by bootWithWipeResume and by the start-fresh listener before any reboot", () => {
+    const boot = MAIN_JS.slice(MAIN_JS.indexOf("function bootWithWipeResume() {"));
+    expect(boot.slice(0, boot.indexOf("if (wipeResumeWait)"))).toMatch(/if \(!mayRunBootPipeline\(serverReadyAnnounced\)\) \{\s*return Promise\.resolve\(\);/);
+    const listener = MAIN_JS.slice(MAIN_JS.indexOf("rnBridge.channel.on('loam-db-start-fresh'"));
+    const beforeReboot = listener.slice(0, listener.indexOf("bootWithWipeResume()"));
+    expect(beforeReboot).toMatch(/if \(!mayRunBootPipeline\(serverReadyAnnounced\)\) \{[\s\S]{0,200}return;/);
+    // The marker is still installed (and acked) first, so the change applies at the next start.
+    expect(beforeReboot.indexOf("installStartFreshMarker(")).toBeLessThan(beforeReboot.indexOf("mayRunBootPipeline("));
+  });
+});
 
 describe("mayResolveDbKeyThisBoot", () => {
   it("refuses to resolve a key when a wipe-pending marker exists", () => {

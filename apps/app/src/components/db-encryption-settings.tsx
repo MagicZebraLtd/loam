@@ -22,6 +22,7 @@ import {
   type DbEncryptionMode,
   type PassphrasePresence,
 } from '@/lib/db-encryption';
+import { passphraseEntryProblem } from '@/lib/passphrase-confirm';
 
 type DbEncryptionSettingsOverlayProps = {
   visible: boolean;
@@ -73,6 +74,9 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
   // showing a blank first-time-entry prompt.
   const [candidatePending, setCandidatePending] = useState(false);
   const [passphraseInput, setPassphraseInput] = useState('');
+  // Every passphrase typed here is asked for twice (F-055): the entry is used at the next start, which may
+  // be the one that creates the database (a mode change just made schedules exactly that).
+  const [passphraseConfirm, setPassphraseConfirm] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | undefined>();
   const [loaded, setLoaded] = useState(false);
   // A transition is in flight: drives the DISABLED state of every mode row.
@@ -92,6 +96,7 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
     let cancelled = false;
     setStatusMessage(undefined);
     setPassphraseInput('');
+    setPassphraseConfirm('');
     setCandidatePending(false);
     void (async () => {
       const [currentMode, passphraseSet] = await Promise.all([getDbEncryptionMode(), hasStoredPassphrase()]);
@@ -243,7 +248,12 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
   // committed; a confirmed open only records that one governs the DB (`markPassphraseKeyMigrated`).
   const handleSavePassphrase = async () => {
     const trimmed = passphraseInput;
-    if (!trimmed) {
+    const problem = passphraseEntryProblem(passphraseInput, passphraseConfirm, true);
+    if (problem === 'empty') {
+      return;
+    }
+    if (problem === 'mismatch') {
+      setStatusMessage(t('boot.passphraseMismatch'));
       return;
     }
     try {
@@ -253,6 +263,7 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
       return;
     }
     setPassphraseInput('');
+    setPassphraseConfirm('');
     setCandidatePending(true);
     setStatusMessage(t('encryption.passphraseEntered'));
   };
@@ -372,6 +383,17 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        returnKeyType="next"
+                        style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
+                      />
+                      <TextInput
+                        value={passphraseConfirm}
+                        onChangeText={setPassphraseConfirm}
+                        placeholder={t('boot.passphraseConfirmPlaceholder')}
+                        placeholderTextColor={theme.textSecondary}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        secureTextEntry
                         returnKeyType="done"
                         onSubmitEditing={() => void handleSavePassphrase()}
                         style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
@@ -379,9 +401,9 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                       <View style={styles.passphraseActions}>
                         <Pressable
                           onPress={() => void handleSavePassphrase()}
-                          disabled={!passphraseInput}
+                          disabled={!passphraseInput || !passphraseConfirm}
                           accessibilityRole="button"
-                          style={[styles.button, !passphraseInput && styles.buttonDisabled]}>
+                          style={[styles.button, (!passphraseInput || !passphraseConfirm) && styles.buttonDisabled]}>
                           <ThemedText type="smallBold" style={styles.buttonLabel}>
                             {t('encryption.useAtNextStart')}
                           </ThemedText>
@@ -418,6 +440,17 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        returnKeyType="next"
+                        style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
+                      />
+                      <TextInput
+                        value={passphraseConfirm}
+                        onChangeText={setPassphraseConfirm}
+                        placeholder={t('boot.passphraseConfirmPlaceholder')}
+                        placeholderTextColor={theme.textSecondary}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        secureTextEntry
                         returnKeyType="done"
                         onSubmitEditing={() => void handleSavePassphrase()}
                         style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
@@ -425,9 +458,9 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                       <View style={styles.passphraseActions}>
                         <Pressable
                           onPress={() => void handleSavePassphrase()}
-                          disabled={!passphraseInput}
+                          disabled={!passphraseInput || !passphraseConfirm}
                           accessibilityRole="button"
-                          style={[styles.button, !passphraseInput && styles.buttonDisabled]}>
+                          style={[styles.button, (!passphraseInput || !passphraseConfirm) && styles.buttonDisabled]}>
                           <ThemedText type="smallBold" style={styles.buttonLabel}>
                             {t('encryption.savePassphrase')}
                           </ThemedText>

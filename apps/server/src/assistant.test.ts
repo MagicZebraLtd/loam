@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp, type LoamApp } from "./app.js";
+import { capHistoryByChars, ON_DEVICE_CONTEXT_MAX_CHARS } from "./llm.js";
 import {
   cleanups,
   type InjectResponse,
@@ -67,6 +68,53 @@ describe("on-device LLM provider", () => {
     expect(dm.statusCode).toBe(201);
 
     expect(await assistantReply(app, user.cookie)).toBe("Hello from the phone");
+  });
+
+  it("caps the history sent to the phone by characters, keeping the newest turns (F-006)", async () => {
+    const seen: { role: string; content: string }[][] = [];
+    (globalThis as { __loamOnDeviceChat?: unknown }).__loamOnDeviceChat = (
+      messages: { role: string; content: string }[],
+      callbacks: { onDelta: (t: string) => void; onEnd: () => void; onError: (m: string) => void },
+    ) => {
+      seen.push(messages);
+      callbacks.onDelta("R".repeat(3000));
+      callbacks.onEnd();
+    };
+
+    const app = await makeApp({ llm: { onDevice: { enabled: true, model: "gemma-test" } } });
+    const user = await newSession(app);
+
+    for (let turn = 0; turn < 6; turn += 1) {
+      const dm = await app.server.inject({
+        method: "POST",
+        url: "/api/messages",
+        headers: { cookie: user.cookie },
+        payload: { type: "dm", recipientUserId: BOT_ID, body: `${turn}:`.padEnd(7000, "q") },
+      });
+      expect(dm.statusCode).toBe(201);
+      for (let attempt = 0; attempt < 80 && seen.length <= turn; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      // Let the reply persist before the next DM (one reply in flight per member).
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    const last = seen.at(-1) ?? [];
+    const turns = last.filter((message) => message.role !== "system");
+    expect(turns.at(-1)?.content.startsWith("5:")).toBe(true);
+    expect(turns[0].role).toBe("user");
+    expect(turns.reduce((total, message) => total + message.content.length, 0)).toBeLessThanOrEqual(ON_DEVICE_CONTEXT_MAX_CHARS);
+    // 6 questions + 5 answers were written; only the newest fit.
+    expect(turns.length).toBeLessThan(11);
+  });
+
+  it("capHistoryByChars keeps the newest turn even alone over the cap, and never opens on an assistant turn", () => {
+    const user = (content: string) => ({ role: "user" as const, content });
+    const bot = (content: string) => ({ role: "assistant" as const, content });
+    expect(capHistoryByChars([user("a".repeat(50))], 10)).toEqual([user("a".repeat(50))]);
+    expect(capHistoryByChars([user("1"), bot("22"), user("333")], 5)).toEqual([user("333")]);
+    expect(capHistoryByChars([user("1"), bot("22"), user("333")], 6)).toEqual([user("1"), bot("22"), user("333")]);
+    expect(capHistoryByChars([bot("x"), user("y")], 100)).toEqual([user("y")]);
   });
 
   it("degrades to a graceful error when no on-device hook is present (e.g. desktop/CI)", async () => {

@@ -39,6 +39,8 @@ const SOURCES: { file: string; sections: string[]; viaT?: boolean }[] = [
   { file: 'src/lib/host-errors.ts', sections: ['hostError.'] },
   { file: 'src/lib/hotspot-errors.ts', sections: ['hotspot.'], viaT: false },
   { file: 'src/components/qr-code.tsx', sections: ['qr.'] },
+  { file: 'src/components/boot-details.tsx', sections: ['boot.'] },
+  { file: 'src/lib/boot-messages.ts', sections: ['boot.'], viaT: false },
 ];
 
 function read(file: string): string {

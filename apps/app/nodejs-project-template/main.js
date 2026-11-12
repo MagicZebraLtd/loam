@@ -16,7 +16,7 @@ const crypto = require('crypto');
 const rnBridge = require('rn-bridge');
 // The pure "may a key be resolved this boot?" decision, split out so it can be
 // unit-tested directly (this file itself can't be — see db-key-gate.js's doc comment).
-const { mayResolveDbKeyThisBoot } = require('./db-key-gate');
+const { mayResolveDbKeyThisBoot, mayRunBootPipeline } = require('./db-key-gate');
 // The pure three-outcome durable install of the start-fresh marker, split out for the same
 // reason (unit-testable with an injected `fs` — see start-fresh-marker.js's doc comment). Distinguishes
 // a durable install from a provably-absent write and from an INDETERMINATE post-rename commit, which a
@@ -94,13 +94,22 @@ const DB_ENCRYPTION_NOTICE_CODES = ['db_encryption_recovered_fresh'];
 // instead of just the generic readiness-poll timeout. Also used directly, below, by this file's own
 // DB-encryption lock paths (db_encryption_locked / db_encryption_driver_missing) — same single
 // choke point decides notice-vs-fatal for both callers.
-global.__loamReportBootError = function (message, code) {
+global.__loamReportBootError = function (message, code, details) {
   const isNotice = DB_ENCRYPTION_NOTICE_CODES.indexOf(code) !== -1;
   if (!isNotice) {
     // This attempt is over: retire its watchdog, so a timeout can't replace the real reason later.
     readinessPollGeneration += 1;
   }
-  notify(isNotice ? 'notice' : 'error', { message: message, code: code });
+  var payload = { message: message, code: code };
+  // `newDatabase` (launcher-only, see `keyCreatesDatabase`): the locked screen asks for a first passphrase twice.
+  if (details && typeof details.newDatabase === 'boolean') {
+    payload.newDatabase = details.newDatabase;
+  }
+  // `reason` (boot-config.js): which locked case this is, so the host screen shows translated text for it.
+  if (details && typeof details.reason === 'string') {
+    payload.reason = details.reason;
+  }
+  notify(isNotice ? 'notice' : 'error', payload);
 };
 
 // The server's kill switch calls this (`globalThis.__loamRequestWipeRestart`, see
@@ -941,6 +950,19 @@ function dbFileExists() {
   }
 }
 
+// Whether the key the operator is about to type will CREATE a database rather than open one: no database
+// file yet, or a start-fresh marker waiting (the server moves the old one aside or deletes it and creates a
+// fresh one under this key). Sent beside a `db_encryption_locked` report so the locked screen asks for a
+// first passphrase twice (src/lib/passphrase-confirm.ts): a typo there keys the network under a passphrase
+// nobody knows. Errs towards true, since asking twice is harmless.
+function keyCreatesDatabase() {
+  try {
+    return !fs.existsSync(path.join(dataDir, 'loam.db')) || fs.existsSync(START_FRESH_MARKER_PATH);
+  } catch (err) {
+    return true;
+  }
+}
+
 // Write the mode-NAME hint TRANSACTIONALLY with a mode SELECTION, on request from the
 // RN picker (db-encryption.ts's `setDbModeHint`), rather than only when a mode is successfully RESOLVED
 // at boot. Otherwise an off→encrypted selection would leave the stale `off` hint (or, on a fresh encrypted
@@ -1126,7 +1148,7 @@ rnBridge.channel.on('loam-db-start-fresh', function (payload) {
 
   // Install the marker DURABLY (fd + fsync + atomic rename + parent-dir fsync) and only ack
   // ok:true AFTER it is on stable storage. When this is requested from the ALREADY-running Settings
-  // screen the in-process reboot below is a no-op (the server is already up), so the marker must survive
+  // screen the in-process reboot below is skipped (`mayRunBootPipeline`), so the marker must survive
   // until the NEXT real app restart; a non-durable write that a power-loss then discarded would report a
   // false "scheduled" success and force the operator to repeat the destructive confirmation.
   //
@@ -1178,6 +1200,15 @@ rnBridge.channel.on('loam-db-start-fresh', function (payload) {
   } catch (postErr) {
     // RN side isn't listening for the ack — still proceed with the in-process reboot below; the operator
     // will see the recovered server's outcome via the next `loam-status` regardless.
+  }
+
+  // Requested from Encryption settings on a RUNNING network: the marker waits on disk for the next app
+  // start, as the Settings copy says. Re-running the boot pipeline now would apply the new mode's boot
+  // decisions under the live server (ephemeral deletes the open database and media at once; passphrase
+  // drops the host screen to Locked), see `mayRunBootPipeline`.
+  if (!mayRunBootPipeline(serverReadyAnnounced)) {
+    console.warn('LOAM-DB: start-fresh scheduled for the next app start (the server is already running)');
+    return;
   }
 
   // Re-attempt boot right here, in the SAME still-alive process. The marker is now on disk, so this time
@@ -1531,7 +1562,13 @@ function resolveDbEncryptionAndBoot() {
         writeDbModeHint(cfg.writeHint);
       }
       if (cfg.bootError) {
-        global.__loamReportBootError(cfg.bootError.message, cfg.bootError.code);
+        global.__loamReportBootError(
+          cfg.bootError.message,
+          cfg.bootError.code,
+          cfg.bootError.code === 'db_encryption_locked'
+            ? { newDatabase: keyCreatesDatabase(), reason: cfg.bootError.reason }
+            : undefined,
+        );
       }
       return cfg.outcome;
     })
@@ -1623,6 +1660,12 @@ var wipeResumeWait;
 var bootInFlight;
 
 function bootWithWipeResume() {
+  // Never run key resolution and its boot decisions (an ephemeral delete, a mode hint) under a server that
+  // is already listening, whoever asks (see `mayRunBootPipeline`).
+  if (!mayRunBootPipeline(serverReadyAnnounced)) {
+    return Promise.resolve();
+  }
+
   if (wipeResumeWait) {
     return wipeResumeWait;
   }
