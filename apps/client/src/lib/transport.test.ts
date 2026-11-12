@@ -892,12 +892,87 @@ describe("transport", () => {
       });
     }
 
-    function sealedReply(serverKey: string, body: unknown, status = 200): Response {
-      return new Response(JSON.stringify({ enc: sealTransport(serverKey, JSON.stringify(body), RESUME_AAD) }), {
-        status,
-        headers: { "x-loam-enc": "1" },
-      });
+    /** A resume reply sealed the way the server seals an `r: 1` request: under `aad#seq#status`. `seq`
+     *  defaults to the `s` the body echoes. */
+    function sealedReply(serverKey: string, body: unknown, status = 200, seq = (body as { s?: number }).s): Response {
+      return new Response(
+        JSON.stringify({ enc: sealTransport(serverKey, JSON.stringify(body), `${RESUME_AAD}#${seq}#${status}`) }),
+        { status, headers: { "x-loam-enc": "1" } },
+      );
     }
+
+    it("asks for a status-bound reply (r: 1) on every resume", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      let sawR: unknown;
+      let serverKey: string | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          if (url === "/api/transport/handshake") {
+            const accepted = transportServerAccept({
+              hostSecret: host.secretKey,
+              clientEphemeralPublic: (JSON.parse(init.body as string) as { clientEphemeralPublic: string }).clientEphemeralPublic,
+            });
+            serverKey = accepted.sessionKey;
+            return new Response(
+              JSON.stringify({ sessionId: "s", hostEphemeralPublic: accepted.hostEphemeralPublic, hostPublicKey: host.publicKey }),
+              { status: 200 },
+            );
+          }
+          const opened = openTransport(serverKey!, (JSON.parse(init.body as string) as { enc: string }).enc, RESUME_AAD);
+          const envelope = JSON.parse(opened!) as { s: number; r?: unknown };
+          sawR = envelope.r;
+          return sealedReply(serverKey!, { s: envelope.s, m: "POST", p: "/api/session/resume", currentUser: { id: "u" }, token: "t" });
+        }),
+      );
+      await ensureSession("required", host.publicKey);
+      await resumeIdentity();
+      expect(sawR).toBe(1);
+    });
+
+    it("keeps the stored token on a forged 401 (x-loam-enc: 1, body that doesn't open)", async () => {
+      // The outer status and the x-loam-enc header travel in the clear. An on-path attacker who drops the
+      // real resume and answers 401 must not make the client throw its identity away.
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      const storageKey = `loam.identityToken.${window.location.origin}`;
+      localStorage.setItem(storageKey, "real-token");
+      const presented: (string | undefined)[] = [];
+      vi.stubGlobal(
+        "fetch",
+        mockNode(host, (token) => {
+          presented.push(token);
+          return new Response(JSON.stringify({ enc: "garbage" }), { status: 401, headers: { "x-loam-enc": "1" } });
+        }),
+      );
+      await ensureSession("required", host.publicKey);
+      await expect(resumeIdentity()).rejects.toThrow(/401/);
+      expect(presented).toEqual(["real-token"]); // no tokenless mint follows
+      expect(localStorage.getItem(storageKey)).toBe("real-token");
+    });
+
+    it("keeps the stored token on a 401 sealed for another sequence or status", async () => {
+      // A genuine sealed reply replayed from an earlier request, or a sealed 200 relabelled as 401, must
+      // not open under this request's binding either.
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      const storageKey = `loam.identityToken.${window.location.origin}`;
+      localStorage.setItem(storageKey, "real-token");
+      const presented: (string | undefined)[] = [];
+      vi.stubGlobal(
+        "fetch",
+        mockNode(host, (token, key, seq) => {
+          presented.push(token);
+          const relabelled = sealedReply(key, { error: { message: "x" } }, 200, seq);
+          return new Response(relabelled.body, { status: 401, headers: { "x-loam-enc": "1" } });
+        }),
+      );
+      await ensureSession("required", host.publicKey);
+      await expect(resumeIdentity()).rejects.toThrow(/401/);
+      expect(presented).toEqual(["real-token"]);
+      expect(localStorage.getItem(storageKey)).toBe("real-token");
+    });
 
     it("mints a fresh identity, stores the token, and returns currentUser (credentials omitted)", async () => {
       const host = createTransportIdentity();
@@ -927,7 +1002,7 @@ describe("transport", () => {
       window.location.hash = `#k=${host.publicKey}`;
       const fetchMock = mockNode(host, (_token, key, seq) =>
         // Wrong sequence echoed back — a cross-fed reply. The client must refuse it.
-        sealedReply(key, { s: seq + 99, m: "POST", p: "/api/session/resume", currentUser: { id: "x" }, token: "t" }),
+        sealedReply(key, { s: seq + 99, m: "POST", p: "/api/session/resume", currentUser: { id: "x" }, token: "t" }, 200, seq),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -976,7 +1051,7 @@ describe("transport", () => {
         presented.push(token);
         if (token !== undefined) {
           // The stale token is rejected with a SEALED 401 (from the handler, after decrypt).
-          return sealedReply(key, { error: { message: "Invalid identity token" } }, 401);
+          return sealedReply(key, { error: { message: "Invalid identity token" } }, 401, seq);
         }
         return sealedReply(key, { s: seq, m: "POST", p: "/api/session/resume", currentUser: { id: "user.new" }, token: "fresh" });
       });

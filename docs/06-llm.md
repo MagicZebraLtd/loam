@@ -21,8 +21,17 @@ All in `apps/server/src/llm.ts`, gated on a backend being enabled (`activeLlmPro
   `meta.model` cap).
 - **Unbounded context**: `llmMessagesForUser()` maps the **entire** DM history to chat messages every
   turn (+ optional system prompt), now **capped to the most-recent `MAX_LLM_CONTEXT_MESSAGES` (40)** so a
-  long chat no longer grows the request every turn or overflows the model's context window; a token budget
-  + summarization is still the fuller follow-up.
+  long chat no longer grows the request every turn. A message count is **not** a context bound: 40 turns
+  of up to 8000 characters each are far more than a small model holds. That bit the **on-device** model,
+  whose context is 4096 tokens with llama.rn's `ctx_shift` off: after a dozen or so exchanges every reply
+  failed with "Context is full", and a prompt just under the limit stopped mid-reply and was saved as
+  complete. The on-device path is now bounded twice: the server caps its history at
+  `ON_DEVICE_CONTEXT_MAX_CHARS` (16 000 characters, newest turns kept, never opening on an assistant
+  turn), and the phone (`apps/app/src/lib/llm-context-budget.ts`) formats the turns with the model's own
+  chat template, counts them with its tokenizer and drops the oldest turns until the prompt plus the
+  512-token reply fits (`ON_DEVICE_PROMPT_BUDGET`). A newest message too long to fit on its own is refused
+  without generating. Ollama and OpenAI-compatible services still get the 40-turn window, since their
+  context is set on their side; a token budget + summarization is still the fuller follow-up.
 - ~~**Streaming is bandwidth-inefficient**~~ **(FIXED)**: streaming now uses the **`StreamEvent`** union
   (`start`/`delta`/`end`/`error`) — each delta carries only the *new* text to the DM participants, and the
   final body is persisted + broadcast **once** at `end` (a single `messageUpdated`, so non-streaming
@@ -234,7 +243,7 @@ shipped.
   off-grid stays local-only.
 
 ## Quick wins vs. bigger bets
-- **Quick wins:** ~~wire `StreamEvent`~~ (done), ~~bound context length~~ (done, 40 messages),
+- **Quick wins:** ~~wire `StreamEvent`~~ (done), ~~bound context length~~ (done: 40 messages, plus a token fit on the on-device model),
   ~~a concurrency cap~~ (done); user cancellation remains.
 - **Bigger bets:** provider abstraction, channel/@mention participation, and local RAG (the most
   differentiated feature for an off-grid information-sharing app).

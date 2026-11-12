@@ -17,6 +17,10 @@ export type SocketClient = {
   readyState: number;
   send: (payload: string) => void;
   close: () => void;
+  /** Bytes queued for this socket that the kernel hasn't taken yet (`ws`); grows when the peer stops reading. */
+  bufferedAmount?: number;
+  /** Destroy the connection at once, without a close handshake the peer may never answer (`ws`). */
+  terminate?: () => void;
   on: {
     (event: "close", listener: () => void): void;
     (event: "message", listener: (data: unknown) => void): void;
@@ -42,6 +46,19 @@ export type SocketSession = {
   /** The transport session id this (encrypted) socket rides, so it can be torn down when that session is
    * evicted/pruned (docs/20 §7 — a confirmed socket must not outlive its session key). */
   transportSessionId?: string;
+  /** Whether the socket rides a `bound` transport session (docs/20): its identity is the session key, not a
+   * cookie. Switching the node to `required` closes every socket without it (`closeUnboundSockets`). */
+  bound?: boolean;
+};
+
+/** An encrypted socket still answering its key-confirmation challenge (realtime.ts `pendingSockets`). */
+export type PendingSocket = {
+  userId: string;
+  /** The peer's IP (`request.ip`), so the per-address socket caps count it. */
+  remoteAddress: string;
+  /** Whether it rides a `bound` transport session (see `SocketSession.bound`). */
+  bound: boolean;
+  close: () => void;
 };
 
 export type AppData = {
@@ -216,6 +233,12 @@ export type AppOptions = {
    * a LAN each device has its own IP, so this is effectively per-device. Defaults to 60.
    */
   maxNewIdentitiesPerWindow?: number;
+  /**
+   * Caps on admitted WebSockets (realtime.ts). A connect past any of them is refused with an error frame.
+   * Defaults: 16 per identity (a browser's tabs share one), 64 per address, 256 per IPv6 /64, 1024 in all.
+   * Tests lower them.
+   */
+  webSocketLimits?: { perIdentity?: number; perAddress?: number; perSubnet?: number; total?: number };
   /**
    * Whether a person must agree to LOAM's member rules (the Welcome screen, `MEMBER_RULES_VERSION`) before
    * they can post, upload or create a channel. On by default; tests that aren't about the rules turn it off.

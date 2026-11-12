@@ -52,8 +52,15 @@
 > `required` mode the avatar/attachment routes are no longer exempt — a direct `<img src>` GET (which
 > can't carry the session header) is refused (401), forcing the client to fetch images through the tunnel
 > (`encryptedImageUrl` / the `useEncryptedImage` hook) and render them from a cached `blob:` object URL,
-> so image bytes are sealed on the wire like everything else. `optional` nodes (and Developer Mode) still
-> serve images directly in clear (lighter). So in `required` mode a **post-handshake REST request** reveals only that
+> so image bytes are sealed on the wire like everything else. Encryption follows how the client joined, not
+> only the node's mode: on an `optional` node a client that joined by the code also tunnels every request,
+> images included (a client holding the QR key treats the join as `required`, `transport.ts` `ensureSession`,
+> and a bound session is tunnel-only on any node, `transport-server.ts`). Only a client that typed the address
+> (no key) loads images and files from their direct URL in clear, and Developer Mode serves everything in clear.
+> None of it is cacheable: every `/api/` response, pictures included, is `Cache-Control: no-store` (review
+> 2026-11-07, F-027), because a typed-address joiner's browser would otherwise keep pictures and URL keys
+> such as `/api/search?q=<term>` in an HTTP cache that an Emergency Reset can't clear.
+> So in `required` mode a **post-handshake REST request** reveals only that
 > a `POST /api/transport/tunnel` happened, plus coarse ciphertext size/timing — its method, path/query,
 > and body are all sealed. Still observable (unavoidably): the **bootstrap** — `GET /api/bootstrap` and
 > `POST /api/transport/handshake` run before a session exists — and the **WebSocket upgrade**
@@ -84,7 +91,10 @@
 > bare aad as before, so the server stays compatible; the client and server ship together because the
 > node serves the client. Sync pullers don't send `r`, and their responses stay under `#${s}` so 0.6.0
 > peers keep working; a relabelled status there can only fail a pull, since a non-2xx answer carries no
-> data the puller imports.
+> data the puller imports. The sealed identity resume (docs/20 §9) sends `r: 1` too, and the client
+> forgets its identity token only on a `401` that opens under `POST /api/session/resume#${s}#401`; a fake
+> `401` with `x-loam-enc: 1` (both outside the AEAD) is treated as an expired session and the token is
+> kept.
 > Binding only helps if the client also refuses a reply with the seal stripped off. Under a live session
 > it accepts an unsealed reply only for the three refusals the node makes before it has looked the session
 > up: a `401` for a session it doesn't know, a `421` for a Host name it doesn't serve, and a `503` while an
@@ -92,7 +102,8 @@
 > stable error code (the wire body is unauthenticated and is dropped). Every other unsealed reply is an
 > `UnsealedResponseError`. A `204` would otherwise be the one unsealed answer to a bound request, so the
 > server seals a bodyless answer to an `r: 1` request as an empty `200` (an older client still gets the
-> `204`). Images and file downloads are unaffected: in `optional` mode they load from their direct URL,
+> `204`). Images and file downloads don't use this path: a client that joined by the code fetches them
+> through the tunnel, and a typed-address client on an `optional` node loads them from their direct URL,
 > never through the sealed fetch.
 >
 > **Client pin rules (pre-release review 2026-09-25).** A `#k=` fragment only ever *establishes* a pin for
@@ -223,11 +234,31 @@ unavailable, so ship one):
   itself. Only a signed native client closes it. The host's own windows (the Android app's WebView and the
   desktop app's Electron window) load the client from loopback, so they are not exposed to it; every
   phone that joins over the LAN is.
+- ❌ Does **not** protect a client that **typed the address** (no `#k=`, no cached pin) on an `optional`
+  node, even from a *passive* listener. Its identity is the anonymous `loam_session` cookie, which rides
+  every request (sealed or not) and the WS upgrade as a plain HTTP header, and the server resolves that
+  cookie with no tie to a transport session (`getSessionUserId`). Anyone who captures one request can replay
+  the cookie in plain requests, read that member's DMs and post as them, until the cookie expires (a year).
+  Its picture and file downloads are in clear, and a first handshake that fails leaves it on plaintext with
+  no notice. docs/20 records the cookie model as an accepted residual of anonymous sessions; joining by the
+  code, or a node in `required` mode, closes it.
 - ❌ Does **not** hide plaintext **from the host** (it decrypts to relay/LLM/search). That's the E2EE
   layer, deliberately separate.
 - ❌ Does not restore the **service worker / offline PWA** (still an insecure context) — see below.
 - ⚠️ **Metadata** (who talks to whom, timing, sizes) is still visible to the host and partially to the
   network. Note it honestly.
+- ⚠️ **Cookie sessions and other web pages** (review 2026-11-07, F-012). A member who typed the address
+  holds a `SameSite=Lax` cookie, and browsers share cookies across the ports of one host, so a page on
+  another port of the same machine counts as the same site and its form POSTs carry the cookie. A
+  cross-site form POST carries no cookie but used to mint or clear one. The server now refuses any
+  state-changing request whose `Origin` isn't the node's own page (the `/ws` rule: the Host's name, on its
+  port or the advertised client port), or that has no Origin but a `Sec-Fetch-Site` from elsewhere, and
+  any `text/plain`, urlencoded or multipart body (every route takes JSON, and only those types skip a CORS
+  preflight). A client that sends neither header (curl, a sync peer) is judged by its credentials, as
+  before. Bound (QR-joined) members were never exposed: their identity is the session key, not a cookie.
+  Not covered: a same-host page can still *set* a `loam_session` cookie with a longer path, which the
+  browser sends first, so the member acts as that page's identity (cookie fixation); only typed-address
+  members are affected.
 
 ## Node-to-node sync over the transport channel (BUILT)
 

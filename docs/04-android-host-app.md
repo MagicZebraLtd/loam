@@ -125,9 +125,15 @@ The host runs a `WifiManager.LocalOnlyHotspot`. Joiners **Step 1** scan the WiFi
   once, while the app is in the foreground and before the first start; denying it only hides the
   notification (the overlay says so) and never blocks hosting. Screen-on + app-open is still the most
   reliable state; the FGS path is not yet device-verified.
-- **The Step-2 address.** Android assigns a LocalOnlyHotspot a **random** IPv4 address on every start —
+- **The Step-2 address.** Android assigns a LocalOnlyHotspot a **random** IPv4 address —
   a /24 in 192.168.0.0/16, 172.16.0.0/12 or 10.0.0.0/8 (the /8 ~94% of the time since Android 16), host
-  part never .0/.1/.255 (`packages/modules/Connectivity`, `PrivateAddressCoordinator`). There is no fixed
+  part never .0/.1/.255 (`packages/modules/Connectivity`, `PrivateAddressCoordinator`). AOSP keeps it
+  sticky within one phone boot (`requestStickyDownstreamAddress`), so app relaunches, APK updates and the
+  restart after a reset keep the same address; a phone reboot, an upstream-prefix conflict or a
+  network-stack restart can bring a new one (read from AOSP, not yet confirmed on a phone, Samsung
+  included). Everything a joiner holds is keyed to the origin (`http://<address>:3000`): its identity
+  token, its pin, its IndexedDB copy and its cookie. After an address change members come back as new
+  people, and the old origin's copy stays in their browser where no later reset reaches it. There is no fixed
   gateway: `192.168.49.1`, which 0.4.0–0.5.0 hardcoded, is reserved for **Wi-Fi Direct** group owners, so a
   joiner got `ERR_ADDRESS_UNREACHABLE` (Galaxy S25 Ultra, 2026-09-28). No API hands an app the hotspot's
   address, so the native module **discovers** it: `hotspotAddressCandidates()` enumerates every
@@ -250,6 +256,25 @@ retries). Readiness comes only from the server's in-process `__loamReportBootRea
 on `127.0.0.1:3000`, which another app could give; main.js keeps a 5-minute `boot_timeout` watchdog, retired by
 any reported failure. For the same reason main.js sends no host-token request (`meshRequest`: the mesh bridge,
 `/api/host/*`) until that signal has arrived, so a squatter on the port never sees the token.
+
+Once that signal has arrived the launcher never runs its key-resolution-and-boot pipeline again in that
+process (`mayRunBootPipeline` in `db-key-gate.js`, checked by `bootWithWipeResume` and the start-fresh
+listener). A new encryption mode picked in Encryption settings on a running network writes the start-fresh
+marker and waits for the next app start, as the screen says. Running the pipeline live would have applied
+the new mode's boot decisions under the open database: Ephemeral deleted `loam.db` and the media folders at
+once, and Passphrase dropped the host screen to Locked while the network kept serving.
+
+The recovery screens speak the host's language: the launcher and the server report boot errors and notices
+in English, with a code, and the host screen shows the catalog text for the code (`src/lib/boot-messages.ts`;
+a `db_encryption_locked` report also carries `reason`, `no_key` for the usual passphrase prompt) and keeps
+the English behind a Details disclosure (`components/boot-details.tsx`), as the desktop host does.
+
+A passphrase that will create the database is asked for twice, as the desktop host and `loamnet` do. The
+launcher's `db_encryption_locked` report carries `newDatabase` (no `loam.db` yet, or a start-fresh marker
+waiting), and the locked screen shows a second field when that is true or when no passphrase has ever opened
+this database (`passphraseNeedsConfirmation` in `src/lib/passphrase-confirm.ts`). An entry typed in
+Encryption settings is always asked for twice. On an existing database one entry is enough: a typo just
+fails to open it.
 
 ### Message notifications
 
@@ -383,7 +408,7 @@ and its `.node` source version must stay in lockstep (change both together).
 - **Committed (source):** `apps/server/src/db.ts` (`driver` option), `embedded.ts`
   (`LOAM_DB_DRIVER`), `apps/app/scripts/{bundle-server.mjs,fetch-native-modules.mjs}`,
   `apps/app/nodejs-project-template/{main.js,package.json}` (the CJS launcher template),
-  `apps/app/plugins/with-loam-host.js` (config plugin: cleartext localhost + arm64-only ABIs +
+  `apps/app/plugins/with-loam-host.js` (config plugin: cleartext to 127.0.0.1 only + arm64-only ABIs +
   hotspot/WiFi/FGS permissions + `data_extraction_rules.xml` + optional `uses-feature` + the
   stale-prebuild fingerprint), `apps/app/plugins/with-release-signing.js`, `apps/app/nodejs-assets/BUILD_NATIVE_MODULES.txt` (`0`),
   `apps/app/app.json` (package `com.loamnet.app`, `loam://` scheme, plugin), `apps/app/src/app/index.tsx` (host WebView
@@ -621,7 +646,7 @@ full-screen modal). The overlay starts the hotspot on open and feeds
 `{ssid,password}` + the derived Step-2 display (`src/lib/join-display.ts`) into the presentational
 `HostPanel`, which shows **Step 1** (WiFi-join QR + SSID/password text) and **Step 2** (LOAM-URL QR +
 address text). While the hotspot runs, the join URL is the hotspot's **own discovered address** (see "The
-Step-2 address" above — Android assigns it at random per start, so there is nothing to show until it is
+Step-2 address" above — Android assigns it at random, so there is nothing to show until it is
 found; Step 2 says "Finding the hotspot's address…" meanwhile, and gives the manual Gateway route if it
 never is). When the hotspot can't start, `HostPanel` shows the error in Step 1 while keeping Step 2 with
 the launcher-reported LAN address (graceful degradation).
@@ -666,13 +691,25 @@ support it); avoid Android-only Easy Connect for v1.
 
 - The embedded server serves the built client from `apps/client/dist` with an SPA fallback (already
   implemented in `registerStaticFiles()` / `setNotFoundHandler`). The host phone's WebView loads
-  `http://localhost:<clientPort>`; remote joiners load `http://<hotspot-ip>:<clientPort>`.
+  `http://127.0.0.1:<clientPort>` (`HOST_WEBVIEW_ORIGIN` in `src/lib/join-url.ts`); remote joiners load
+  `http://<hotspot-ip>:<clientPort>`. **Never `localhost`:** the embedded server binds the IPv4 wildcard
+  only, so nothing of LOAM's listens on `[::1]`, and any other app with the INTERNET permission can bind
+  `[::1]:3000` without a conflict. Chromium tries `::1` first for `localhost`, so that app's page would sit
+  at LOAM's pinned origin and receive the injected host token and transport key. The WebView `source`,
+  `originWhitelist`, the `isLoamUrl` pin and the bootstrap fetch all use the IP literal, and the network
+  security config permits cleartext to `127.0.0.1` only, so a stray `localhost` load fails instead of
+  reaching another app. (Builds before this change loaded `localhost`. WebView storage is per origin, so on
+  a network that keeps its data the host's own person starts as a new member after the update; the host
+  token makes them admin again. At launch the host requests native cleanup of `localhost` without loading
+  a page there. On WebViews with scoped browsing-data deletion this covers IndexedDB, localStorage and
+  the HTTP cache. On older Chromium WebViews the origin-level fallback targets the IndexedDB message cache;
+  the old localStorage token can remain, but the host no longer loads or reads that origin.)
 - WebView needs: `credentials`/cookies enabled (the app relies on the `loam_session` cookie —
   `thirdPartyCookiesEnabled`, `sharedCookiesEnabled`), WebSocket allowed (works over `ws://` on the LAN;
   fine in a WebView), and cleartext HTTP permitted for the LAN origin (Android `usesCleartextTraffic` /
   network-security-config, since there's no TLS on a local hotspot).
 - The client already supports a configurable server origin (`loam.serverUrl` in localStorage) and uses
-  `credentials: "include"` — but same-origin (WebView → localhost) is simplest; prefer that.
+  `credentials: "include"` — but same-origin (WebView → 127.0.0.1) is simplest; prefer that.
 - **Emergency reset from the host app** (in the host menu on a private, `hardened` network; at the bottom
   of Encryption settings on every network) closes the app once everything is erased: the native
   `closeApp()` (loam-hotspot module) stops the host service, finishes the task and kills the process. A
@@ -710,8 +747,11 @@ support it); avoid Android-only Easy Connect for v1.
   an older version of the app wrote is deleted on the first page load under the flag. The WebView also gets
   `cacheEnabled={false}`, so pictures served in the clear (`optional` transport mode) aren't kept in an HTTP
   cache, and each WebView mount on such a network calls `clearCache(true)` to drop one an older version
-  wrote. localStorage stays on (the identity token and preferences, no messages). An `off` network keeps
-  both caches, as before. Not yet checked on a device.
+  wrote. localStorage stays on (the identity token and preferences, no message text, though
+  `loam.lastConversation` names the last conversation, such as `/dm/user.<id>`), and so do the cookie, the
+  service worker registration and its Cache Storage (build files only). The app never clears WebView storage
+  natively: a reset relies on the page receiving the `wipe` frame, and an in-process reset closes the app
+  300 ms after the reply, which can race the page's purge. An `off` network keeps both caches, as before. Not yet checked on a device.
 
 ### What the host phone logs
 

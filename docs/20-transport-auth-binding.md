@@ -69,7 +69,12 @@ an attacker's own sealed `/resume` and restore the whole attack.
 "made public". Instead:
 
 - **New `GET /api/bootstrap`** — **always public, cookie-free**, fetched with `credentials: "omit"`.
-  Returns only public data: `mode`, host `transportPublicKey`, `nodeName`, `version`, connection details.
+  Returns `{ nodeName, version, joinUrl, websocketPath, networkConfig }` (`routes-session.ts`), where
+  `networkConfig` is the **whole** `NetworkConfig` that `/api/config` returns, minus `currentUser`: the mode
+  (`transportEncryption`) and host `transportPublicKey`, and also every feature flag, `joinPolicy`,
+  `securityProfile`, `enableMesh`, `dbEncryption`, `allowAdminClaim`, `devMode`, `locale` and
+  `assistantDestination` (an online assistant's hostname included). All of it is readable by anyone who can
+  reach the node, without joining. No identity is minted and no cookie is read.
   The client hits this *first* (it doesn't yet know the mode).
 - **`GET /api/config`** — unchanged for optional/off (authenticated bootstrap, returns `currentUser`).
   For a **bound** session it is reached **through the tunnel** like any content route; a bound client gets
@@ -84,7 +89,8 @@ an attacker's own sealed `/resume` and restore the whole attack.
 
 ```
 1. GET /api/bootstrap          (PUBLIC, credentials:"omit")                           [NEW]
-   → mode, transportPublicKey, nodeName, version. No identity, no cookie, no currentUser.
+   → nodeName, version, joinUrl, websocketPath, networkConfig (mode + transportPublicKey inside).
+     No identity, no cookie, no currentUser.
 
 2. POST /api/transport/handshake   (anonymous; credentials:"omit")
    → transport session, authMode:"anonymous". No user bound.
@@ -152,6 +158,19 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   on a reconnected socket B under the same transport session: use AAD `loam.ws.frame.v1 ${connectionId}`
   with a **per-connection** sequence (the `connectionId` is the challenge's, fresh per socket). Acceptance
   test: a valid frame from connection A is rejected on connection B.
+- **Admitted sockets are capped too** (review 2026-11-07, F-003): at most 16 per identity (a browser's tabs
+  share one, so 8 would refuse a person's own tabs), 64 per address, 256 per IPv6 /64 and 1024 in all.
+  A socket still mid-challenge counts against the address, /64 and total caps but not the identity's: its
+  session id is visible on the wire and proves nothing, so counting it would let someone who saw a
+  member's id fill that member's cap. The identity cap is checked again when a socket proves its key.
+  A connect past a cap gets an error frame (`too_many_attempts`) and
+  is closed; no existing socket is closed to make room, since a tab closed that way would reconnect and
+  close the next. Presence goes out only when the online set changes (a newly admitted socket that changes
+  nothing is told on its own), and a socket with more than 1 MiB queued and unsent is terminated.
+- **Switching to `required` at runtime** (directly or through the hardened profile) closes every socket
+  that doesn't ride a bound session, plaintext and anonymous encrypted alike, with an
+  `encrypted_session_required` error frame first and before the `configUpdated` broadcast (F-010). The
+  `required` rule is otherwise checked only when a socket connects.
 
 ## 8. Token lifecycle (the revocations are real; migration is not)
 
@@ -160,7 +179,10 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   docs/15 #4 for this credential), **kill switch**, or **explicit rotation**.
 - **Ban / deny** is deliberately DIFFERENT: it tears down the identity's **bound sessions + sockets**
   (immediate cutoff) but **KEEPS the token pinned** — exactly mirroring how a banned identity's cookie
-  session mapping is retained. This is a considered choice: revoking the token would let the banned device
+  session is retained: its row stays in memory **and** in the store, so the cookie still names the banned
+  identity after a host restart. (Until review 2026-11-07, F-011, the ban deleted the stored rows while
+  keeping the in-memory mapping, so the next restart minted the banned person a clean identity on their
+  next request.) This is a considered choice: revoking the token would let the banned device
   **re-mint a fresh (unbanned) identity** on its next resume, whereas keeping it pinned means a reconnect
   re-binds to the *same* banned identity (participation + WS admission both refuse it), so the ban **stays
   pinned** rather than being shed by a re-handshake. (On a LAN a determined user can still clear local
@@ -180,6 +202,13 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   client sent `p`, the server echoes the same bytes, so no separate canonicalisation is needed and both
   compare identical values). The client **verifies** them before using the response — especially before
   storing a returned identity **token**. Closes review #3 (constant-aad tunnel responses cross-fed).
+- **The resume reply is bound to its status too** (review 2026-11-07, F-001). The resume envelope carries
+  `r: 1`, so the server seals every answer under `POST /api/session/resume#<seq>#<status>`. The client
+  discards its stored identity token only on a `401` that opens under that binding (the handler refusing
+  the token after decrypting it). An unsealed `401`, or one that doesn't open under this request's
+  sequence and status, is treated as an expired session: the client re-handshakes and keeps the token. The
+  outer status and the `x-loam-enc` header travel in the clear, so before this an on-path attacker could
+  answer a resume with a fake `401` and make the member a new person.
 - **Re-handshake resumes before retrying;** concurrent re-handshakes share one in-flight op.
 - **Unsealed tunnel replies are never used** (pre-release review 2026-09-25). On a live tunnel session the
   client acts on exactly one unsealed reply: a `401` to a `GET`/`HEAD`, which triggers one re-handshake +
@@ -220,7 +249,10 @@ is not a token. Session **key**: never transmitted → can't seal as the victim.
 is server-side + **immutable**. A sniffed session **id** is inert (can't seal, can't reach content, can't
 pass the WS challenge). Bootstrap is cookie-free. **Residuals:** device compromise exposes the local
 token (network is the threat model; covered by at-rest enc + wipe/kill switch); metadata (session id,
-timing, sizes, bootstrap) observable; `anonymous`/optional sessions keep the weaker cookie model.
+timing, sizes, bootstrap) observable; `anonymous`/optional sessions keep the weaker cookie model: a
+client that typed the address on an `optional` node sends its cookie as a plain header, so a passive
+listener who captures it can replay it as that member (read their DMs, post as them) for the cookie's
+lifetime. The public copy says so (site FAQ, privacy policy, README); docs/08 "What this buys / doesn't".
 
 ## 13. Compatibility & a factual correction
 

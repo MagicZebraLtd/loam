@@ -159,13 +159,14 @@ also carries the network's encryption key, so messages to and from the host are 
   shows a single-use link code; the other phone scans it during setup. Direct messages and private
   channels never leave either network. (Mesh mail, experimental and off by default, can travel through
   linked networks, sealed so that only its recipient's network can open it.)
-- **Emergency reset.** Press and hold to erase the whole network at once, on the host and on every phone
-  connected to it.
+- **Emergency reset.** Press and hold to erase the network on the host and tell every connected phone to
+  clear its copy.
 - **Fifteen languages,** left to right and right to left: English, Español, Français, العربية, فارسی,
   Português, Українська, Русский, Türkçe, မြန်မာ, اردو, دری, پښتو, Kiswahili and বাংলা. The host picks
   one for the whole network. The 14 besides English are machine translations still waiting for a native
   speaker's review ([docs/13](docs/13-i18n.md)).
-- **Copes with a bad signal.** Phones keep what they've already seen and reconnect on their own.
+- **Copes with a bad signal.** While LOAM stays open, phones keep what they've already seen and reconnect
+  on their own.
 - **An assistant, if you want one.** It answers in direct messages, from a small AI model on the host
   phone, from [Ollama](https://ollama.com) or another model server on a computer nearby, or from an online
   service with an OpenAI-style API, such as OpenRouter or OpenAI. The first two need no internet. An
@@ -181,7 +182,7 @@ admin area.
 | | Who can join | Names | Messages | Stored on the host |
 |---|---|---|---|---|
 | **Community** | anyone nearby | people choose a name and photo | kept until erased | encrypted, survives a restart |
-| **Private and short-lived** | each person approved first | random names and pictures | disappear after an hour (by default) | encrypted under a key that exists only while LOAM runs |
+| **Private and short-lived** | approved first, unless they scan the code on the host's own screen | random names and pictures | disappear after an hour on the host and on connected phones (by default) | encrypted under a key that exists only while LOAM runs |
 | **Choose every setting myself** | your choice | your choice | your choice | encrypted unless you turn it off |
 
 A Private network also only accepts encrypted connections and doesn't show who is online. On a
@@ -201,9 +202,10 @@ computer, the same settings live in the admin area as **security profiles**
   itself still arrives over plain HTTP, so someone who can change traffic on the network while the page
   loads could give a phone a tampered copy that reads its messages (the host app's own window isn't
   exposed to that). Pictures and files are encrypted too. Someone who types the address instead of
-  scanning gets less: their messages are encrypted under the key the host announces, which their phone
-  can't check, and their pictures and files travel unencrypted. A network that requires encryption (the
-  Private one does) refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
+  scanning gets much less. On a network that doesn't require encryption, their sign-in cookie travels
+  unencrypted, so anyone listening on the Wi-Fi can copy it, then read their messages and send messages as
+  them, and their pictures and files travel unencrypted too. Scanning the code avoids that. A network that
+  requires encryption (the Private one does) refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
   can't get a certificate, so LOAM serves plain HTTP and encrypts inside the app instead, using the
   [noble](https://paulmillr.com/noble/) libraries and the host key carried in the code. It has had no
   outside security audit yet.
@@ -211,10 +213,14 @@ computer, the same settings live in the admin area as **security profiles**
   the device's keystore or keychain, a passphrase, or a key that lives only in memory. An encrypted
   setting never falls back to storing data unencrypted. Pictures and files are stored beside the database, not
   encrypted; an Emergency reset deletes them.
-- **Emergency reset.** Erases every message, person, picture and file, and tells connected phones to
-  clear their copy. On an encrypted network in the Android or desktop app, and in `loamnet` with a key
-  that lives only in memory, the key is replaced too, so what's left in the database files can't be
-  read ([docs/02](docs/02-kill-switch.md)).
+- **Emergency reset.** Erases every message, person, picture and file on the host, and tells connected
+  phones to clear their copy. On an encrypted network in the Android or desktop app, and in `loamnet` with
+  a key that lives only in memory, the key is replaced too, so what's left in the database files can't be
+  read. (On Linux without a keychain, a passphrase network keeps its key file unprotected on disk. A reset
+  deletes it, but flash storage can keep deleted blocks, so someone who recovers it and knows the passphrase
+  could still read the old database: [docs/24](docs/24-electron-desktop.md).) A network you linked keeps its own copy of the public channels, and hands it back if linking stays
+  on. A phone that joined under an earlier address of the host keeps that copy until its browser data is
+  cleared ([docs/02](docs/02-kill-switch.md)).
 
 **Know the limits.** The host can read every message: it's the server, as the operator of any chat
 service can. A host device taken while it's running, with the key in memory, can give up what it holds.

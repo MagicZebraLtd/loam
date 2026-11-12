@@ -43,6 +43,7 @@
 
 import { getBackendDevicesInfo, initLlama, type LlamaContext } from 'llama.rn';
 
+import { fitMessagesToContext, ON_DEVICE_N_CTX, ON_DEVICE_N_PREDICT, ON_DEVICE_PROMPT_BUDGET } from './llm-context-budget';
 import { loadModelManagerState } from './model-manager-store';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -79,6 +80,18 @@ const ENGINE_POISONED_MESSAGE =
  * can't wedge the queue; a later request retries once the native load settles and is disposed. */
 const ENGINE_LOAD_TIMEOUT_MESSAGE =
   'Loading the on-device model timed out: try again in a moment, or restart the LOAM host app if it persists.';
+/** Shown when even the system prompt plus the newest message leave no room for a reply in the context. */
+const PROMPT_TOO_LONG_MESSAGE = 'That message is too long for the on-device model: send a shorter one.';
+
+/**
+ * The tokens `messages` take once formatted with the loaded model's own chat template, the same way
+ * `completion({ messages })` formats them (no explicit template, default params).
+ */
+async function countPromptTokens(ctx: LlamaContext, messages: ChatMessage[]): Promise<number> {
+  const formatted = await ctx.getFormattedChat(messages);
+  const { tokens } = await ctx.tokenize(formatted.prompt ?? '');
+  return tokens.length;
+}
 
 /** Bounded ceiling on a single `initLlama` load. A multi-GB model on a slow phone can legitimately take a
  * while, so this is generous — but a native load that NEVER settles must not wedge the queue forever. On
@@ -271,7 +284,7 @@ async function loadTarget(target: string): Promise<LlamaContext> {
   const myEpoch = ++loadEpoch;
   loadingPath = target;
 
-  const native = Promise.resolve().then(() => initLlama({ model: target, n_ctx: 4096, n_gpu_layers: 99 }));
+  const native = Promise.resolve().then(() => initLlama({ model: target, n_ctx: ON_DEVICE_N_CTX, n_gpu_layers: 99 }));
   const op: { path: string; settled: Promise<void> } = { path: target, settled: Promise.resolve() };
   op.settled = native.then(
     (ctx) => onLoadResolved(ctx as LlamaContext, myEpoch, target, op),
@@ -400,33 +413,55 @@ async function runCompletion(ctx: LlamaContext, messages: ChatMessage[], callbac
       resolve(TIMED_OUT); // settle the race NOW so completion() can no longer win it
     }, INFERENCE_TIMEOUT_MS);
   });
+  // Fit the history to the context before generating (inside the timeout race, since the template and
+  // tokenizer are native calls too): llama.rn runs with `ctx_shift` off, so a prompt that leaves no room for
+  // `n_predict` tokens fails with "Context is full" or stops mid-reply. Oldest turns go first.
+  const fitAndComplete = async (): Promise<'completed' | 'too_long'> => {
+    const fitted = await fitMessagesToContext(
+      messages,
+      (candidate) => {
+        if (!deltasEnabled) {
+          // Timed out mid-search: the context is being released, so make no further native call on it.
+          return Promise.reject(new Error('__inference_timed_out__'));
+        }
+        return countPromptTokens(ctx, candidate);
+      },
+      ON_DEVICE_PROMPT_BUDGET,
+    );
+    if (!fitted.fits) {
+      return 'too_long';
+    }
+    if (!deltasEnabled) {
+      return 'completed'; // timed out while counting; the race is already settled
+    }
+    await ctx.completion(
+      {
+        messages: fitted.messages,
+        n_predict: ON_DEVICE_N_PREDICT,
+        // Gemma's turn terminator (+ the generic end token); llama.rn stops on any match.
+        stop: ['<end_of_turn>', '<eos>'],
+      },
+      (data) => {
+        if (!deltasEnabled) {
+          return;
+        }
+        const token = data?.token;
+        if (typeof token === 'string' && token.length > 0) {
+          callbacks.onDelta(token);
+        }
+      },
+    );
+    return 'completed';
+  };
   try {
-    const outcome = await Promise.race([
-      ctx
-        .completion(
-          {
-            messages,
-            n_predict: 512,
-            // Gemma's turn terminator (+ the generic end token); llama.rn stops on any match.
-            stop: ['<end_of_turn>', '<eos>'],
-          },
-          (data) => {
-            if (!deltasEnabled) {
-              return;
-            }
-            const token = data?.token;
-            if (typeof token === 'string' && token.length > 0) {
-              callbacks.onDelta(token);
-            }
-          },
-        )
-        .then(() => 'completed' as const),
-      timeout,
-    ]);
+    const outcome = await Promise.race([fitAndComplete(), timeout]);
     if (outcome === TIMED_OUT) {
       await stopCompletionWithinBudget(ctx);
       beginReleaseLoaded(); // release the wedged context (it is `loaded`); the next request gates on inFlightOp
       throw new Error(`On-device inference timed out after ${Math.round(INFERENCE_TIMEOUT_MS / 1000)}s.`);
+    }
+    if (outcome === 'too_long') {
+      throw new Error(PROMPT_TOO_LONG_MESSAGE);
     }
   } finally {
     if (timeoutTimer !== undefined) {

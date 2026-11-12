@@ -187,7 +187,8 @@
                 <p>
                   Channels, threads, direct messages, pictures and reactions, all on the local network.
                   Nothing goes to the internet, even if there is some, unless the host turns on an online
-                  assistant, which the admin page warns about.
+                  assistant, which the admin page warns about, or links another LOAM network, which then gets
+                  the public channels.
                 </p>
               </div>
             </li>
@@ -346,9 +347,10 @@
               <h3>Choose how private your network is</h3>
               <p>
                 When you start a network, LOAM asks one plain question. <strong>Private and short-lived</strong>
-                gives everyone a random name, deletes messages after an hour, lets you approve each person
-                who joins, and throws away the key to its messages when LOAM stops (pictures and files
-                are deleted the next time it starts). <strong>Community</strong> lets
+                gives everyone a random name and deletes messages after an hour, on the host and on the phones
+                connected to it. People who scan the code on the host's own screen join at once; anyone else
+                waits for your approval. It throws away the key to its messages when LOAM stops (pictures and
+                files are deleted the next time it starts). <strong>Community</strong> lets
                 people pick names and photos and keeps the conversation going for days.
               </p>
               <p class="muted">Or choose every setting yourself: joining rules, message lifetime, roles and more.</p>
@@ -415,9 +417,10 @@
             <div class="showcase-text">
               <h3>Link networks together</h3>
               <p>
-                One phone's hotspot reaches a field or a hall. For more, link another LOAM phone to the
-                network: the host shows a single-use link code, the new phone scans it, and their public
-                channels join up. Direct messages and private channels stay where they are.
+                A phone hotspot admits a limited number of devices, set by the phone. For a larger group,
+                host from a laptop or Raspberry Pi on a router. To join two LOAM networks, the host shows a
+                single-use link code, the other host scans it, and their public channels join up. Direct
+                messages and private channels stay where they are.
               </p>
             </div>
             <div class="showcase-visual">
@@ -457,7 +460,7 @@
             </li>
             <li class="feature reveal">
               <h3>Keeps working on a bad signal</h3>
-              <p>Phones keep what they've already seen and reconnect on their own when the Wi-Fi drops out.</p>
+              <p>While LOAM stays open, phones keep what they've already seen and reconnect on their own when the Wi-Fi drops out.</p>
             </li>
             <li class="feature reveal">
               <h3>An assistant, if you want one</h3>
@@ -498,7 +501,7 @@
             </li>
             <li>
               <strong>Emergency reset</strong>
-              <span>Press and hold to erase the whole network at once, on the host and on every phone connected to it. The Android app then closes, ready to start again.</span>
+              <span>Press and hold to erase the network on the host and tell every connected phone to clear its copy. The Android app then closes, ready to start again. A network you linked keeps its own copy of the public channels.</span>
             </li>
             <li>
               <strong>For adults, and here's why</strong>
@@ -506,7 +509,7 @@
             </li>
             <li>
               <strong>No tracking in the app</strong>
-              <span>No analytics, no advertising, no crash reporting. Nothing phones home, so if something goes wrong, or you would like a feature, please <a href="https://github.com/MagicZebraLtd/loam/issues" rel="noreferrer">open an issue</a> or <a href="mailto:opensource@magiczebra.co.uk">email us</a>.</span>
+              <span>No analytics, no advertising, no crash reporting. Nothing in the app reports to us, so if something goes wrong, or you would like a feature, please <a href="https://github.com/MagicZebraLtd/loam/issues" rel="noreferrer">open an issue</a> or <a href="mailto:opensource@magiczebra.co.uk">email us</a>.</span>
             </li>
           </ul>
         </div>
@@ -554,7 +557,8 @@
                 No. The host and the people joining only need to be on the same Wi-Fi, and the Android app can make
                 that Wi-Fi itself with a hotspot. A computer host with no Wi-Fi around can use a USB-powered travel
                 router or a phone's hotspot (<a href="/desktop#offgrid">how</a>). Nothing goes to the internet unless
-                the host turns on an online assistant.
+                the host turns on an online assistant or links another LOAM network, which then gets the
+                public channels.
               </p>
             </details>
             <details class="faq-item" id="faq-encryption">
@@ -568,17 +572,19 @@
               <p>
                 There's one gap we can't close on plain local Wi-Fi. LOAM itself loads into your browser
                 unencrypted, so someone who can tamper with the network's traffic could hand you a changed copy
-                that reads your messages. And someone who types the address instead of scanning the code gets less:
-                their messages are still encrypted, but with a key their phone can't check against the code, so
-                someone who can tamper with the traffic could read them, and their pictures and files travel
-                unencrypted. A host that requires encrypted connections asks them to scan the code instead. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
+                that reads your messages. And someone who types the address instead of scanning the code gets much
+                less. On a network that doesn't require encrypted connections, their sign-in cookie travels
+                unencrypted, so anyone listening on the Wi-Fi can copy it, then read their messages and send
+                messages as them. Their pictures and files travel unencrypted too.
+                Scanning the code keeps the cookie, pictures and files encrypted, and a host that requires encrypted connections asks them to
+                scan it. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
               </p>
             </details>
             <details class="faq-item" id="faq-mesh">
               <summary>Is it a mesh network?</summary>
               <p>
-                No. Each network has one host, and phones connect to it over Wi-Fi. To cover more ground, link a
-                second host to the first and their public channels join up. Direct messages and private channels
+                No. Each network has one host, and phones connect to it over Wi-Fi. Two hosts that can reach each
+                other can be linked, and their public channels join up. Direct messages and private channels
                 stay on the host they started on. Linked networks can also carry sealed messages for each other,
                 but that's experimental and off unless the host turns it on.
               </p>

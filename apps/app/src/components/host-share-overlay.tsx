@@ -19,6 +19,7 @@ import { deriveWifiJoinDisplay, toWifiPanelState, type HostMode } from '@/lib/ho
 import { ensureHostService, hostingNotificationDenied } from '@/lib/host-service';
 import { t, type AppCatalogKey } from '@/lib/i18n';
 import { deriveJoinDisplay, toHostPanelState, type HostInterface } from '@/lib/join-display';
+import { fragmentHasInvite } from '@/lib/join-url';
 
 // How often Wi-Fi mode re-reads the phone's Wi-Fi state while the share screen is open — the same cadence
 // as the launcher's `loam-hostinfo` tick, so a network change shows up within a few seconds.
@@ -208,6 +209,14 @@ export function HostShareOverlay({
 
               {/* Held until the stored mode is known, so a Wi-Fi host doesn't flash the hotspot steps. */}
               {loaded ? <HostPanel state={state} /> : null}
+
+              {/* An approval-only network: the host's own QR carries a rotating invite that skips the queue
+                  (docs/08, server invites.ts). Say so, as the desktop host does (F-047). */}
+              {loaded && fragmentHasInvite(transportKeyFragment) ? (
+                <ThemedText type="small" themeColor="textSecondary" style={styles.modeHelp}>
+                  {t('share.inviteNote')}
+                </ThemedText>
+              ) : null}
 
               {/* Display mode: "kiosk" and "keep screen on" as one plainly named choice. The screen staying
                   on only matters for showing the codes; the network itself keeps running with the screen

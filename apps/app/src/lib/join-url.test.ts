@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { alternateJoinUrls, hostJoinDisplay, isPrivate10or172, joinUrl, preferredLanAddress, withInviteCode } from './join-url';
+import {
+  alternateJoinUrls, fragmentHasInvite, HOST_WEBVIEW_ORIGIN, hostJoinDisplay, isPrivate10or172, joinUrl,
+  preferredLanAddress, withInviteCode,
+} from './join-url';
 
 describe('joinUrl', () => {
   it('targets the discovered hotspot address when the hotspot is running, never a reported LAN address', () => {
@@ -115,5 +118,25 @@ describe('alternateJoinUrls', () => {
   it('takes a bare fragment, and leaves the URL alone when there is none', () => {
     expect(alternateJoinUrls(['10.0.0.5'], '#k=abc')).toEqual(['http://10.0.0.5:3000#k=abc']);
     expect(alternateJoinUrls(['10.0.0.5'], '')).toEqual(['http://10.0.0.5:3000']);
+  });
+});
+
+describe('fragmentHasInvite', () => {
+  it('spots the invite code withInviteCode adds, with or without a key', () => {
+    expect(fragmentHasInvite(withInviteCode('#k=abc', 'CODE'))).toBe(true);
+    expect(fragmentHasInvite(withInviteCode('', 'CODE'))).toBe(true);
+  });
+
+  it('is false with no invite (an open node, or none fetched yet)', () => {
+    expect(fragmentHasInvite(withInviteCode('#k=abc', undefined))).toBe(false);
+    expect(fragmentHasInvite('')).toBe(false);
+    expect(fragmentHasInvite('#k=abci=x')).toBe(false);
+  });
+});
+
+describe('HOST_WEBVIEW_ORIGIN', () => {
+  it('is the IPv4 loopback literal on the server port, never localhost', () => {
+    expect(HOST_WEBVIEW_ORIGIN).toBe('http://127.0.0.1:3000');
+    expect(new URL(HOST_WEBVIEW_ORIGIN).origin).toBe(HOST_WEBVIEW_ORIGIN);
   });
 });

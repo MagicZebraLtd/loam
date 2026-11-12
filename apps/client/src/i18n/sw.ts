@@ -757,6 +757,6 @@ export const sw: Translation = {
   "admin.nav.label": "Sehemu",
   "admin.nav.sync": "Usawazishaji",
   "admin.nav.mesh": "Mesh",
-  "moderation.banConfirm": "Umpige marufuku {name}? Atapoteza ufikiaji wa mtandao huu hadi msimamizi aondoe marufuku.",
+  "moderation.banConfirm": "Umpige marufuku {name}? Utambulisho huu utapoteza ufikiaji wa mtandao huu hadi msimamizi aondoe marufuku. Kwenye mtandao ambao yeyote anaweza kujiunga, mtu huyo huyo anaweza kurudi kwa jina jipya. Ili kumzuia mtu, weka sharti la idhini ya kujiunga.",
   "toast.newMessages": { one: "ujumbe mpya {n} katika {place}", other: "jumbe mpya {n} katika {place}" },
 };

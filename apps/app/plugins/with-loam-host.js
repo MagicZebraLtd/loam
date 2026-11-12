@@ -1,7 +1,7 @@
 // Expo config plugin for the LOAM Android host (docs/04). Applied at `expo prebuild`. Its jobs:
 //
 //   1. Allow cleartext HTTP to loopback ONLY, through a res/xml/network_security_config.xml: the WebView
-//      loads http://localhost:3000 and the launcher fetches it (the embedded server has no TLS; there's no
+//      loads http://127.0.0.1:3000 and the launcher fetches it (the embedded server has no TLS; there's no
 //      CA on a local hotspot), while everything else the app itself fetches (model downloads, the GitHub
 //      update check) is HTTPS and stays refused in the clear. The embedded Node server's own sockets are
 //      not subject to this config (it isn't the Android HTTP stack). Replaces the app-wide
@@ -167,7 +167,10 @@ function dataExtractionRulesXml() {
 // Cleartext HTTP is permitted to these hosts only (see networkSecurityConfigXml): the embedded server's
 // loopback origin, which the host's own WebView loads and the launcher fetches. A LAN joiner's phone talks to
 // the server from its own browser, not through this app, so the LAN never needs an exception here.
-const CLEARTEXT_HOSTS = ["localhost", "127.0.0.1"];
+// `localhost` is deliberately absent: the server binds IPv4 only, so `localhost` may resolve to an
+// `[::1]` socket another app holds. The app addresses its server by IP literal, and a stray `localhost`
+// load fails loudly here instead of reaching that app.
+const CLEARTEXT_HOSTS = ["127.0.0.1"];
 const NETWORK_SECURITY_CONFIG_RESOURCE = "@xml/network_security_config";
 
 /** The res/xml/network_security_config.xml body: cleartext refused everywhere except CLEARTEXT_HOSTS. */
@@ -211,7 +214,7 @@ function withApplicationAttributes(config) {
   return withAndroidManifest(config, (cfg) => {
     const application = cfg.modResults.manifest.application?.[0];
     if (!application) {
-      // Silently skipping would ship an APK whose WebView can't reach http://localhost:3000.
+      // Silently skipping would ship an APK whose WebView can't reach http://127.0.0.1:3000.
       throw new Error("with-loam-host: no <application> element in AndroidManifest.xml to set networkSecurityConfig on.");
     }
     applyApplicationAttributes(application);

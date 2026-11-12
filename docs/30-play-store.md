@@ -62,9 +62,11 @@ device checks below, and size headroom before a production track.
   (developers.google.com/ml-kit/android-data-disclosure), with no switch. From 0.6.2 `plugins/with-loam-host.js`
   removes datatransport's `cct` upload backend from the merged manifest, so its uploader deletes the queued
   events unsent; 0.6.0 and 0.6.1 did send them. For Data safety, "No data
-  collected" holds **only while no path sends user data off the host device**: the default build keeps
-  messages, avatars and attachments on the phone and its hotspot LAN, and the on-device LLM runs locally.
-  It stops holding once the operator configures a path off the device: `llm.ollama.baseUrl` pointed at
+  collected" **does not hold** (review 2026-11-07): Google counts any transfer off the user's device, to
+  anyone, and every message, name and user id leaves the host phone for the other members' phones over
+  the hotspot LAN. "No telemetry" means Magic Zebra receives nothing, not that the app transmits nothing;
+  declare messages, other user-generated content, name and user ids as collected (PR #186's
+  `feat/encrypted-transport` adds the full answers). More leaves the device once the operator configures it: `llm.ollama.baseUrl` pointed at
   another machine (DM text to the assistant goes there); `llm.openai`, an OpenAI-compatible chat service
   (when the host turns it on, the messages people send the assistant, with the recent DM history the
   assistant reads, go to the chosen service, which can be an online company such as OpenRouter or OpenAI

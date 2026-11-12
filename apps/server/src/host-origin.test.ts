@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp, type LoamApp } from "./app.js";
-import { hostHeaderName, hostNameAllowed, loggedRequest, originMatchesHost } from "./transport-server.js";
+import { crossSiteRequestRefusal, hostHeaderName, hostNameAllowed, loggedRequest, originMatchesHost } from "./transport-server.js";
 import type { AppOptions } from "./types.js";
 
 // Host allowlist + WebSocket Origin check. Any `Host` used to be accepted, so on an
@@ -304,5 +304,111 @@ describe("WebSocket Origin check", () => {
     // The Host allowlist answers first (421); the Origin check never gets to agree with the rebinder.
     expect(await rawUpgradeStatus(baseUrl, { cookie, host: "evil.example.com", origin: "http://evil.example.com" })).toBe(421);
     expect(app.sockets.size).toBe(0);
+  });
+});
+
+describe("Cross-site request forgery on cookie sessions (review F-012)", () => {
+  const HOST = "192.168.1.5:3000";
+  const optional = { security: { profile: "custom", transportEncryption: "optional" } };
+
+  /** A cookie identity minted on the LAN address the node is reached by. */
+  async function lanCookie(app: LoamApp): Promise<{ cookie: string; userId: string }> {
+    const config = await app.server.inject({ method: "GET", url: "/api/config", headers: { host: HOST } });
+    return {
+      cookie: String(config.headers["set-cookie"]).split(";")[0]!,
+      userId: (config.json() as { currentUser: { id: string } }).currentUser.id,
+    };
+  }
+
+  it("crossSiteRequestRefusal judges Origin, Sec-Fetch-Site and the body type of state-changing requests", () => {
+    const request = (method: string, headers: Record<string, string>) => ({
+      method,
+      protocol: "http" as const,
+      headers: { host: HOST, ...headers },
+    });
+    // Reads are never refused.
+    expect(crossSiteRequestRefusal(request("GET", { origin: "http://evil.example" }), 3000)).toBeUndefined();
+    // The node's own page, and the advertised client port on the same name, pass.
+    expect(crossSiteRequestRefusal(request("POST", { origin: "http://192.168.1.5:3000" }), 3000)).toBeUndefined();
+    expect(crossSiteRequestRefusal(request("POST", { origin: "http://192.168.1.5:4000" }), 4000)).toBeUndefined();
+    // Another site, another port of the same host, and an opaque origin are refused.
+    expect(crossSiteRequestRefusal(request("POST", { origin: "http://evil.example" }), 3000)?.status).toBe(403);
+    expect(crossSiteRequestRefusal(request("DELETE", { origin: "http://192.168.1.5:8080" }), 3000)?.status).toBe(403);
+    expect(crossSiteRequestRefusal(request("PATCH", { origin: "null" }), 3000)?.status).toBe(403);
+    // No Origin: a browser's Sec-Fetch-Site still counts; a client with neither (curl, a peer) passes.
+    expect(crossSiteRequestRefusal(request("POST", { "sec-fetch-site": "same-site" }), 3000)?.status).toBe(403);
+    expect(crossSiteRequestRefusal(request("POST", { "sec-fetch-site": "same-origin" }), 3000)).toBeUndefined();
+    expect(crossSiteRequestRefusal(request("POST", {}), 3000)).toBeUndefined();
+    // Form-encodable bodies are refused even from the right origin; JSON is not.
+    for (const type of ["text/plain;charset=UTF-8", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"]) {
+      expect(crossSiteRequestRefusal(request("POST", { origin: "http://192.168.1.5:3000", "content-type": type }), 3000)?.status).toBe(415);
+    }
+    expect(crossSiteRequestRefusal(request("POST", { "content-type": "application/json" }), 3000)).toBeUndefined();
+  });
+
+  it("a page on another port of the host can't promote anyone with an admin's cookie", async () => {
+    const app = await makeApp(optional);
+    const admin = await lanCookie(app); // firstUser: the first session is admin
+    const attacker = await lanCookie(app);
+    const forged = await app.server.inject({
+      method: "POST",
+      url: `/api/admin/users/${attacker.userId}/promote`,
+      headers: { host: HOST, cookie: admin.cookie, origin: "http://192.168.1.5:8080", "content-type": "text/plain", "sec-fetch-site": "same-site" },
+      payload: "x=1",
+    });
+    expect(forged.statusCode).toBe(403);
+    expect(forged.json()).toMatchObject({ code: "invalid_request" });
+    const config = await app.server.inject({ method: "GET", url: "/api/config", headers: { host: HOST, cookie: attacker.cookie } });
+    expect((config.json() as { currentUser: { isAdmin: boolean } }).currentUser.isAdmin).toBe(false);
+  });
+
+  it("a cross-site form POST neither mints nor clears an identity", async () => {
+    const app = await makeApp(optional);
+    const member = await lanCookie(app);
+    const mint = await app.server.inject({
+      method: "POST",
+      url: "/api/users/me/reroll",
+      headers: { host: HOST, origin: "http://evil.example", "content-type": "text/plain" },
+      payload: "",
+    });
+    expect(mint.statusCode).toBe(403);
+    expect(mint.headers["set-cookie"]).toBeUndefined();
+
+    const end = await app.server.inject({
+      method: "POST",
+      url: "/api/session/end",
+      headers: { host: HOST, cookie: member.cookie, origin: "http://evil.example" },
+    });
+    expect(end.statusCode).toBe(403);
+    expect(end.headers["set-cookie"]).toBeUndefined();
+    expect(app.store.loadSessions().some((session) => session.userId === member.userId)).toBe(true);
+
+    // A text/plain body from the node's own page is refused too: no LOAM route takes one.
+    const plain = await app.server.inject({
+      method: "POST",
+      url: "/api/session/end",
+      headers: { host: HOST, cookie: member.cookie, origin: `http://${HOST}`, "content-type": "text/plain" },
+      payload: "x",
+    });
+    expect(plain.statusCode).toBe(415);
+  });
+
+  it("the node's own page, and a client that sends no Origin, still work", async () => {
+    const app = await makeApp(optional);
+    const member = await lanCookie(app);
+    const own = await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { host: HOST, cookie: member.cookie, origin: `http://${HOST}`, "sec-fetch-site": "same-origin" },
+      payload: { type: "channelPost", channelId: "general", body: "from the node's own page" },
+    });
+    expect(own.statusCode).toBe(201);
+    const curl = await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { host: HOST, cookie: member.cookie },
+      payload: { type: "channelPost", channelId: "general", body: "from a client with no Origin" },
+    });
+    expect(curl.statusCode).toBe(201);
   });
 });
