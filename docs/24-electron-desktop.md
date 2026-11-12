@@ -153,12 +153,13 @@ is `ephemeral`; **Community** and **Choose every setting myself** are `persisten
 computer has no keychain.
 
 **The passphrase** is typed at Setup (minimum 8 characters) and on every start, held in memory only and dropped
-on Stop. The hash includes the device secret, so the passphrase alone opens nothing, and destroying the secret
-makes the database on this disk unreadable even to someone who knows the passphrase. It does not reach an OS
-backup (Time Machine, File History, Déjà Dup) of the user-data folder taken while the secret existed: that
-backup holds both the database and the sealed secret, so the keychain is all that stands between it and the
-data. On a Linux desktop with no keychain (below), a passphrase network's secret sits in `device-secret.key`
-unprotected, so such a backup holds the secret in the clear and only the passphrase protects it. Exclude the LOAM folder from backups, or use an ephemeral key, if that matters. The SHA-256 only mixes the secret in:
+on Stop. The hash includes the device secret, so a passphrase network needs both the passphrase and the secret
+to open. Reset removes the secret file. On Linux without a keychain, the secret was stored unprotected in
+`device-secret.key`, so someone who recovers it from flash storage and knows the passphrase can still read
+recovered database pages. Reset does not reach an earlier OS backup (Time Machine, File History, Déjà Dup).
+A backup of the user-data folder holds the database and the device secret, sealed if the keychain was used
+and in the clear otherwise. The network passphrase is still needed to restore a passphrase network. Exclude
+the LOAM folder from backups, or use an ephemeral key, if that matters. The SHA-256 only mixes the secret in:
 the server hands that value to SQLCipher as a text key, and SQLCipher derives the real key from it with its own
 PBKDF2, so guessing a passphrase costs the driver's key derivation per guess, not one hash. A wrong passphrase maps to the Unlock
 screen saying so; a lost device secret under a device-held mode maps to `db_encryption_locked`.
@@ -218,8 +219,7 @@ no admin session and ignores `killSwitch.enabled`: it is the host's own screen. 
 - **`persistent` and `passphrase` (fixed key).** The server journals the wipe in `node/.loam-wipe-phase`,
   deletes the database and media, proves them gone, calls the launcher's hook (`globalThis.__loamRequestWipeRestart`,
   installed once) and answers `complete: false`. The launcher then stops the node, **deletes the device
-  secret** (the cryptographic wipe: nothing written under it on this disk can be read again, even with the
-passphrase; an OS backup taken earlier is not reached, see "The passphrase" above),
+  secret** (see the flash recovery and backup limits under "The passphrase" above),
   removes the journal and **proves it gone** (fsync of the folder), mints a fresh secret and boots again. The
   boot-time resume finishes the rest.
 - **The two journal phases** are routed on, never on mere presence (ported from the Android launcher):

@@ -437,8 +437,8 @@ carrier; **(2)** C must store-and-forward without decrypting. So add a **new dis
 ```ts
 // packages/schema/src/index.ts — new arm in MessageSchema / MessageCreateRequestSchema
 type: z.literal("sealed"),
-toTag: z.string().regex(/^[A-Za-z0-9_-]{22}$/),  // rotating per-recipient tag — NOT the recipient id
-sealed: z.string().min(1).max(87_480),           // base64url(e_pk‖nonce‖ct‖tag); ≤65 608 raw bytes — see §2 size math
+toTag: z.string().min(1).max(64),              // rotating per-recipient tag — NOT the recipient id
+sealed: z.string().min(1).max(90_000),           // base64url(e_pk‖nonce‖ct‖tag); shipped schema limit
 ttlExpiresAt: TimestampSchema,                    // hard drop-dead time
 hopLimit: z.number().int().min(0).max(16),        // decremented per relay
 ```
@@ -475,11 +475,11 @@ signature — structurally what Signal sealed-sender does):**
   guarantees instead of relying on a host-local fetch.
 - **Padding** `inner` to fixed buckets (256B/1K/4K/16K/64K) before sealing so ciphertext length
   doesn't fingerprint message size. **Not built** (review 2026-11-07): `sealMailbox` seals the inner JSON
-  unpadded, so length is visible (item 9 under "Where v1 differs"); the size cap below still holds as an upper bound.
-  This sets the **`sealed` size cap**: the largest bucket is 64 KiB =
+  unpadded, so length is visible (item 9 under "Where v1 differs").
+  For the planned padding scheme, the largest bucket would be 64 KiB =
   65 536 B of padded plaintext; XChaCha20-Poly1305 adds no length expansion beyond its 16 B tag, and the
   envelope prepends the 32 B ephemeral `e_pk` and 24 B nonce → **raw blob ≤ 65 536 + 32 + 24 + 16 =
-  65 608 bytes**. base64url-encoded that is `ceil(65 608 / 3) × 4 = 87 480` characters. The schema allows
+  65 608 bytes**. That would take at most `ceil(65 608 / 3) × 4 = 87 480` base64url characters. The shipped schema allows
   `.max(90_000)` (`SealedMessageSchema`), a little headroom over that and **not** `64_000`, which would truncate a
   full-size message, while `.min(1)` keeps the non-empty guard. Enforce the schema's bound, not 87 480.
 - **Authenticate the immutable relay metadata.** `toTag`, `ttlExpiresAt`, and the **original** hop
@@ -609,7 +609,7 @@ Bound on four axes, converge via acks, reusing the tombstone machinery:
 ### 4. How it layers on the current sync protocol
 
 **Reused verbatim:** `runSyncLoop` (ticker), `fetchPeerJson`/`readPeerBody` (size-capped validated
-fetch — a sealed blob is ≤65 608 raw bytes → ≤87 480 base64url chars (§2), well under `maxPeerJsonBytes`), `syncPeerAuthorized` + `x-loam-sync-token`
+fetch — the schema allows up to 90 000 base64url characters per sealed blob (§2), well under `maxPeerJsonBytes`), `syncPeerAuthorized` + `x-loam-sync-token`
 (**no new auth surface**), the `/api/sync/digest` + `/api/sync/messages` routes (same 404-when-disabled
 indistinguishability), the `tombstones` set+table, global message-id uniqueness (idempotent gossip).
 **Minimally changed:** `buildSyncDigest` (+`sealed`/`acks` arrays), `syncWithPeer` (+sealed & ack

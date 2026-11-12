@@ -102,8 +102,9 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "deletes its copy the next time it connects at the same address. The address can change when the " +
             "host restarts, and a copy saved under an earlier address stays in that browser until its site data " +
             "is cleared. A browser that used an unencrypted network on LOAM 0.7 or earlier can also keep pictures in " +
-            "its own cache, which a reset can't reach; clearing its site data removes them. A network the host linked keeps its own copy of the public channels, and hands it back " +
-            "if linking stays on.",
+            "its HTTP cache, which a reset can't reach. To remove cached pictures and attachments, clear cached " +
+            "images and files in the browser's settings. A network the host linked keeps its own copy of the " +
+            "public channels, and hands it back if linking stays on.",
           "The host can store the network encrypted. With encryption on, a reset also replaces the key in the " +
             "Android and desktop host apps, and in the `loamnet` terminal app when it uses a temporary key, so " +
             "the deleted data can't be recovered from the database files left on the device. The exception is the " +

@@ -136,8 +136,9 @@
             was offline deletes its copy the next time it reconnects at the same address. The address can change
             when the host restarts, and a copy saved under an earlier address stays in that browser until its
             site data is cleared. A browser that used an unencrypted network on LOAM 0.7 or earlier can also
-            keep pictures in its own cache, which a reset can't reach; clearing its site data removes them. A network the host linked keeps its own copy of the public channels, and hands
-            it back if linking stays on.
+            keep pictures and attachments in its HTTP cache, which a reset can't reach. To remove those copies,
+            clear cached images and files in the browser's settings. A network the host linked keeps its own
+            copy of the public channels, and hands it back if linking stays on.
           </li>
           <li>
             The host can turn on encryption of the stored database. With encryption on, a reset also replaces
