@@ -1,6 +1,6 @@
 # LOAM roadmap
 
-> **Status: current (25 October 2026; 0.7.0, the launch release, is on its release branch).** What LOAM does today, what comes next, and what is
+> **Status: current (7 November 2026; 0.7.0, the launch release, was tagged on 27 October 2026; npm still has 0.6.0).** What LOAM does today, what comes next, and what is
 > being considered. Nothing below the "Next" section has a date. The detailed list of open work is
 > [docs/25](25-backlog.md); settled and open design choices are in [decisions.md](decisions.md).
 
@@ -12,15 +12,18 @@ Features that would weaken one of those come last or not at all.
 ## Built today
 
 - **Hosting** on an Android phone (its own hotspot, or an existing Wi-Fi network), on a computer or a
-  Raspberry Pi (`npx loamnet`, with a full-screen terminal view and a kiosk mode). Phones join by
-  scanning a QR code; there are no accounts.
+  Raspberry Pi (`npx loamnet`, with a full-screen terminal view and a kiosk mode), or with the desktop app
+  for macOS, Windows and Linux (released with 0.7.0; the Mac builds are signed and notarized by Apple, the
+  Windows installer is not signed yet, and the Windows and Linux builds have not yet been run on real
+  machines, [docs/24](24-electron-desktop.md)). Phones join by scanning a QR code; there are no accounts.
 - **Messaging:** public and private channels, threads, direct messages, reactions, pictures and files,
   search, shared locations, and messages that expire after a set time.
 - **Moderation:** join approval with rotating invite codes, moderators and greeters, a report queue,
   bans, time-outs, shadow-bans, per-person blocking, and member rules everyone accepts before posting.
 - **Privacy and security:** encrypted connections from the join code (and a mode that refuses anything
   else), an encrypted database (SQLCipher), security profiles, and an Emergency Reset that erases the
-  network on the host and on every connected phone. [SECURITY.md](../SECURITY.md) states the limits,
+  network on the host and tells every connected phone to clear its copy (a linked network keeps its own
+  copy of the public channels). [SECURITY.md](../SECURITY.md) states the limits,
   starting with the fact that the host can read everything.
 - **Linking networks:** two networks can share their public channels.
 - **Fifteen languages**, five of them right to left.
@@ -34,12 +37,11 @@ Features that would weaken one of those come last or not at all.
 
 ## Next
 
-The 0.7.0 release and the work around it:
+The work after 0.7.0:
 
-- **A desktop app** for hosts who don't want a terminal: macOS, Windows and Linux, built and first
-  released with 0.7.0. The Mac builds are signed and notarized by Apple. The Windows installer is not
-  signed yet (SignPath Foundation is the plan), and the Windows and Linux builds have not yet been run on
-  real machines ([docs/24](24-electron-desktop.md)).
+- **Publishing `loamnet` 0.7.0 to npm.** `npx loamnet` still installs 0.6.0.
+- **The desktop app on real machines.** Signing the Windows installer (SignPath Foundation is the plan),
+  and running the Windows, Linux and Intel Mac builds on real computers ([docs/24](24-electron-desktop.md)).
 - **Testing on real phones.** Several features are verified in code and CI but not yet on a physical
   device: the encrypted database (keying, changing and wiping it), the on-device model, the host's
   background service, and the Android changes in recent releases. The checklist is

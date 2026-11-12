@@ -75,11 +75,13 @@ the remaining hardening); group/broadcast sealed fan-out; and the hardware trans
   DM.
 - **Phase 2 — bounded relay (server)**: carriers import sealed blobs opaquely and deliver-if-ours,
   else relay onward (hop-decremented, per-carrier cap), else drop; the reaper expires + tombstones by
-  TTL. **TTL + hop + cap converge — acks are intentionally NOT implemented** (that sub-design is
-  threat-model-*blocked*, §3/§6). Proven by a 3-node A→C→B test: the carrier relays mail whose
+  TTL. **TTL + hop + cap converge — acks are NOT implemented.** The design has since been decided (a
+  hash-lock capability receipt, [docs/23](23-atproto-p2p-plan.md) §11 and docs/25 S4; the blinded-MAC idea
+  in §3/§6 below was rejected); it is not built. Proven by a 3-node A→C→B test: the carrier relays mail whose
   ciphertext never contains the plaintext; the recipient decrypts it.
-- **Gated & non-breaking**: everything is behind `mesh.enabled` (default off, currently set via
-  `config.json` / `PATCH /api/admin/config` — an admin-UI toggle is a follow-up). With it off, public
+- **Gated & non-breaking**: everything is behind `mesh.enabled` (default off). The admin UI's **Mesh**
+  panel (`MeshPanel.tsx`) sets it, `relay`, the TTL, the hop limit and the carried/contact caps;
+  `maxSealedPullPerRound` is still `config.json` / `PATCH /api/admin/config` only. With it off, public
   sync is byte-identical to before; all pre-existing tests still pass.
 
 **Where v1 differs from the design below (deliberate, documented):**
@@ -283,6 +285,9 @@ the remaining hardening); group/broadcast sealed fan-out; and the hardware trans
    - *Configuration still fingerprints.* On the first hop `ttlExpiresAt − createdAt` is the origin node's
      `mesh.ttlMs`, so a non-default value points to the nodes configured with it (as before). Further on,
      a carrier sees it only blurred by the time the mail spent on earlier hops, plus the backdate.
+   - *Length is visible.* `sealMailbox` encrypts the inner payload unpadded (the padding buckets in §2 were
+     never built), so a carrier or sync peer reads the message's length off the blob, to within the fixed
+     overhead. It can tell a one-word reply from a paragraph and match replies by size.
    - None of this says who on the node sent the mail or to whom; that stays sealed.
 
    Hiding the rest would need relaying on by default, so that a node's digest mixes its own mail with
@@ -432,8 +437,8 @@ carrier; **(2)** C must store-and-forward without decrypting. So add a **new dis
 ```ts
 // packages/schema/src/index.ts — new arm in MessageSchema / MessageCreateRequestSchema
 type: z.literal("sealed"),
-toTag: z.string().regex(/^[A-Za-z0-9_-]{22}$/),  // rotating per-recipient tag — NOT the recipient id
-sealed: z.string().min(1).max(87_480),           // base64url(e_pk‖nonce‖ct‖tag); ≤65 608 raw bytes — see §2 size math
+toTag: z.string().min(1).max(64),              // rotating per-recipient tag — NOT the recipient id
+sealed: z.string().min(1).max(90_000),           // base64url(e_pk‖nonce‖ct‖tag); shipped schema limit
 ttlExpiresAt: TimestampSchema,                    // hard drop-dead time
 hopLimit: z.number().int().min(0).max(16),        // decremented per relay
 ```
@@ -469,12 +474,14 @@ signature — structurally what Signal sealed-sender does):**
   ciphertext bytes sized into the same padding buckets — so they inherit the sealed-sender/opacity
   guarantees instead of relying on a host-local fetch.
 - **Padding** `inner` to fixed buckets (256B/1K/4K/16K/64K) before sealing so ciphertext length
-  doesn't fingerprint message size. This sets the **`sealed` size cap**: the largest bucket is 64 KiB =
+  doesn't fingerprint message size. **Not built** (review 2026-11-07): `sealMailbox` seals the inner JSON
+  unpadded, so length is visible (item 9 under "Where v1 differs").
+  For the planned padding scheme, the largest bucket would be 64 KiB =
   65 536 B of padded plaintext; XChaCha20-Poly1305 adds no length expansion beyond its 16 B tag, and the
   envelope prepends the 32 B ephemeral `e_pk` and 24 B nonce → **raw blob ≤ 65 536 + 32 + 24 + 16 =
-  65 608 bytes**. base64url-encoded that is `ceil(65 608 / 3) × 4 = 87 480` characters, so the schema
-  uses `.max(87_480)` — **not** `64_000`, which would truncate a full-size message — while `.min(1)`
-  keeps the non-empty guard.
+  65 608 bytes**. That would take at most `ceil(65 608 / 3) × 4 = 87 480` base64url characters. The shipped schema allows
+  `.max(90_000)` (`SealedMessageSchema`), a little headroom over that and **not** `64_000`, which would truncate a
+  full-size message, while `.min(1)` keeps the non-empty guard. Enforce the schema's bound, not 87 480.
 - **Authenticate the immutable relay metadata.** `toTag`, `ttlExpiresAt`, and the **original** hop
   budget `hopLimit0` travel in cleartext (carriers route on them) but must be **bound to the envelope**
   so a carrier can't extend the TTL, retarget the tag, or reset hops undetected. Include them in the
@@ -602,7 +609,7 @@ Bound on four axes, converge via acks, reusing the tombstone machinery:
 ### 4. How it layers on the current sync protocol
 
 **Reused verbatim:** `runSyncLoop` (ticker), `fetchPeerJson`/`readPeerBody` (size-capped validated
-fetch — a sealed blob is ≤65 608 raw bytes → ≤87 480 base64url chars (§2), well under `maxPeerJsonBytes`), `syncPeerAuthorized` + `x-loam-sync-token`
+fetch — the schema allows up to 90 000 base64url characters per sealed blob (§2), well under `maxPeerJsonBytes`), `syncPeerAuthorized` + `x-loam-sync-token`
 (**no new auth surface**), the `/api/sync/digest` + `/api/sync/messages` routes (same 404-when-disabled
 indistinguishability), the `tombstones` set+table, global message-id uniqueness (idempotent gossip).
 **Minimally changed:** `buildSyncDigest` (+`sealed`/`acks` arrays), `syncWithPeer` (+sealed & ack
@@ -655,8 +662,8 @@ per-OEM battery-optimization allowlisting to be needed (document it honestly).
 | Concern | Reused | Changed | Net-new |
 |---|---|---|---|
 | Identity | `makeSessionUserId`, `display-name`/`avatar` | `importPeerAuthor` (verify id↔`sign`, `kx`↔`sign`), `UserSchema` (+`identityKey`+`kxSig`) | `packages/crypto`, keyseed storage |
-| Sealed mail | `MessageSchema` union, `createMessage`, `newMessageId` | new `sealed` arm; `db.ts` columns/index | seal/open, `toTag`, padding, compose+inbox UI |
-| Relay bounds | reaper, `tombstones` set+table, `store.addTombstone` | reaper TTL branch, tombstone GC horizon, `importPeerMessages` hop/cap/ack | `mesh` config, eviction, blinded acks (§3 — blocked) |
+| Sealed mail | `MessageSchema` union, `createMessage`, `newMessageId` | new `sealed` arm; `db.ts` columns/index | seal/open, `toTag`, padding (not built), compose+inbox UI |
+| Relay bounds | reaper, `tombstones` set+table, `store.addTombstone` | reaper TTL branch, tombstone GC horizon, `importPeerMessages` hop/cap/ack | `mesh` config, eviction, acks (hash-lock receipt decided, docs/23 §11; not built) |
 | Sync layering | `runSyncLoop`, `fetchPeerJson`, `syncPeerAuthorized`, `/api/sync/*` | `buildSyncDigest`, `syncWithPeer`, `importPeerMessages`, `isSyncableMessage`, `SyncDigestSchema` | ack kind, sealed digest arrays |
 | Transport | `LoamHostService`, `LocalOnlyHotspot`, `with-loam-host.js` | duty-cycled hosting policy | BLE discovery, Wi-Fi Aware bulk link (Android-first) |
 

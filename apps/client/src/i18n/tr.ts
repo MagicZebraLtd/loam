@@ -754,6 +754,6 @@ export const tr: Translation = {
   "admin.nav.label": "Bölümler",
   "admin.nav.sync": "Eşitleme",
   "admin.nav.mesh": "Mesh ağı",
-  "moderation.banConfirm": "{name} yasaklansın mı? Bir moderatör yasağı kaldırana kadar bu ağa erişemez.",
+  "moderation.banConfirm": "{name} yasaklansın mı? Bu kimlik, bir moderatör yasağı kaldırana kadar bu ağa erişemez. Herkesin katılabildiği bir ağda aynı kişi başka bir adla geri gelebilir. Birini dışarıda tutmak için katılmayı onaya bağlayın.",
   "toast.newMessages": { one: "{place} içinde {n} yeni mesaj", other: "{place} içinde {n} yeni mesaj" },
 };

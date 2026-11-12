@@ -167,7 +167,7 @@ archive = read-only-available, delete = permanent (§3 Track 0.2).
 |---|---|
 | Review P1 1–3 (mutation authz) + archive/delete semantics + lifecycle tests | **Track 0.1–2, 0.8** |
 | Review P1 5 / S7 remainder (CLI `#k=`) | **Track 0.3** (browser/Android surfaces already built) |
-| Review P2 body-limit · SW1 tunnel limits | **Track 0.4–5** (engineering defaults) |
+| Review P2 body-limit · SW1 tunnel limits (SW1 since done, docs/25 §9) | **Track 0.4–5** (engineering defaults) |
 | Review P1 4 (media at rest) | honesty **Track 0.6** → encryption **Track 2** |
 | Expo matrix triage · doc drift | **Track 0.7, 0.9** |
 | S1 SQLCipher runtime · I3 signed install · T3 on-device LLM · I2 webview verify · I1 checklist · HW1 | **Track 1** |
