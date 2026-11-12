@@ -12,12 +12,12 @@
     "typecheck:test": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@fastify/websocket": "^11.3.4",
+    "@fastify/websocket": "^11.3.7",
     "@loam/crypto": "workspace:*",
     "@loam/display-name": "workspace:*",
     "@loam/schema": "workspace:*",
     "better-sqlite3-multiple-ciphers": "^12.11.1",
-    "fastify": "^5.12.7"
+    "fastify": "^5.12.8"
   },
   "devDependencies": {
     "@types/node": "catalog:",

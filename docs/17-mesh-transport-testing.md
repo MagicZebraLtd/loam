@@ -64,7 +64,13 @@ GET per 30 s). The endpoints need **both** a loopback socket (`request.ip` must 
 host. Loopback alone isn't enough: on Android every installed app (and `adb forward`) can reach it, and
 behind a same-host reverse proxy or the Vite dev proxy every LAN client arrives as loopback. So a
 joiner on the hotspot LAN or a co-located app can neither read the queue's routing metadata nor inject
-blobs; peer-to-peer mail stays on the token-guarded `/api/sync/*`. A host with no host token (a
+blobs through these endpoints; peer-to-peer mail stays on the token-guarded `/api/sync/*`. One way round
+it (review 2026-11-07, not run on a device): once mesh is on, the Wi-Fi Aware responder
+(`MeshWifiAwareController.kt` `startResponderSocket`) opens `ServerSocket(0)` on **every** interface, and
+whatever framed blob it reads goes to `/api/mesh/inbound` with the launcher's own token. So a LAN client
+that finds that port can feed blobs into the same unauthenticated radio intake a nearby radio peer has
+(the shared "radio" quota, risk 9), without Aware hardware. It gains no more than a radio peer does.
+A host with no host token (a
 desktop/Pi node) has **no bridge** — both routes `404`. Their per-route rate limits also count tunnel
 re-dispatches (`allowList: () => false`).
 

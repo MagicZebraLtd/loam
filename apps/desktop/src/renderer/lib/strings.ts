@@ -37,7 +37,7 @@ export const en = {
   "setup.typeBody": "This decides who can join, what people can see about each other, and how long anything is kept.",
   "setup.privateTitle": "Private and short-lived",
   "setup.privateBody":
-    "Everyone gets a random name and picture, messages disappear after an hour, and you approve each person who joins. Messages are locked with a key that exists only while LOAM runs; pictures and files are deleted the next time it starts.",
+    "Everyone gets a random name and picture, and messages disappear after an hour on this computer and on connected phones. People who scan the code on this computer's screen join at once; anyone else waits for your approval. Messages are locked with a key that exists only while LOAM runs; pictures and files are deleted the next time it starts.",
   "setup.privateNote": "If LOAM closes or the computer restarts, the network and its messages are gone for good.",
   "setup.communityTitle": "Community",
   "setup.communityBody":

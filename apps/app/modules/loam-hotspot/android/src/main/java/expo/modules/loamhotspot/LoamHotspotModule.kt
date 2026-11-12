@@ -8,6 +8,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.webkit.WebStorage
+import androidx.webkit.WebStorageCompat
+import androidx.webkit.WebViewFeature
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
@@ -155,6 +158,24 @@ class LoamHotspotModule : Module() {
           ),
         )
         true
+      }
+    }
+
+    // The host no longer loads localhost. Use the WebView's site cleanup API where available so the
+    // old IndexedDB and localStorage are both covered. Older Chromium providers can still clear the
+    // old origin's IndexedDB with deleteOrigin. Don't clear all data: the current host uses 127.0.0.1.
+    Function("deleteWebOriginData") { origin: String ->
+      Handler(Looper.getMainLooper()).post {
+        try {
+          val storage = WebStorage.getInstance()
+          if (WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
+            WebStorageCompat.deleteBrowsingDataForSite(storage, origin) {}
+          } else {
+            storage.deleteOrigin(origin)
+          }
+        } catch (error: Throwable) {
+          Log.w("LoamHotspot", "Couldn't delete an earlier WebView origin's storage", error)
+        }
       }
     }
 

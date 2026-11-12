@@ -45,15 +45,16 @@ describe("with-loam-host: cleartext only to loopback", () => {
     expect(application.$).not.toHaveProperty("android:usesCleartextTraffic");
   });
 
-  it("refuses cleartext by default and allows it for exactly localhost and 127.0.0.1", () => {
+  it("refuses cleartext by default and allows it for exactly 127.0.0.1 (never localhost)", () => {
     const xml = networkSecurityConfigXml();
     expect(xml).toContain('<base-config cleartextTrafficPermitted="false" />');
     const domainConfigs = [...xml.matchAll(/<domain-config cleartextTrafficPermitted="([^"]+)">([\s\S]*?)<\/domain-config>/g)];
     expect(domainConfigs).toHaveLength(1);
     expect(domainConfigs[0][1]).toBe("true");
     const hosts = [...domainConfigs[0][2].matchAll(/<domain includeSubdomains="false">([^<]+)<\/domain>/g)].map((match) => match[1]);
-    expect(hosts.sort()).toEqual(["127.0.0.1", "localhost"]);
-    expect(CLEARTEXT_HOSTS.sort()).toEqual(["127.0.0.1", "localhost"]);
+    expect(hosts).toEqual(["127.0.0.1"]);
+    expect(CLEARTEXT_HOSTS).toEqual(["127.0.0.1"]);
+    expect(xml).not.toContain("localhost");
     // No LAN range, no wildcard, no second permitted block: the joiners' phones never go through this app.
     expect(xml).not.toMatch(/includeSubdomains="true"|192\.168|10\.0|\*/);
     expect(xml).not.toContain("<debug-overrides");

@@ -3,8 +3,9 @@
 > **Status: landed.** `killSwitch: { enabled (default false), requireConfirmation (default true),
 > panicToken? }` in the shared config schema; `POST /api/admin/kill-switch` (admin + enabled +
 > `{ "confirm": "wipe" }` when confirmation is on) and unauthenticated `POST /api/panic` (404
-> unless a token ≥16 chars is configured; rate-limited; the token is stored **scrypt-hashed**, so
-> a seized node's config does not reveal it). The wipe empties all tables via the DAL's `wipeAll()`
+> unless `killSwitch.enabled` is on **and** a token ≥16 chars is configured, `routes-admin.ts` `armed`; a
+> token left on a disabled switch answers exactly like no token, so the operator can't tell it is dead;
+> rate-limited; the token is stored **scrypt-hashed**, so a seized node's config does not reveal it). The wipe empties all tables via the DAL's `wipeAll()`
 > (on a plaintext store, which runs with `secure_delete` on, the deleted rows are zeroed in the file;
 > see "What the plaintext wipe does now" below),
 > deletes `avatars/` and `attachments/`, invalidates every session, broadcasts a `wipe` event, closes all sockets, and
@@ -12,7 +13,23 @@
 > localStorage, service worker + caches, and show a neutral "Disconnected" screen. Admin UI has a
 > Safety panel with type-to-confirm arming. A client that was **offline** during the wipe (so missed the
 > `wipe` event) purges its cache when it reconnects: it records the last server-confirmed identity
-> (`loam.confirmedUserId`) and treats a different `currentUser` on its next boot as a reset. **Now with a cryptographic wipe when encryption at rest
+> (`loam.confirmedUserId`) and treats a different `currentUser` on its next boot as a reset. That record is
+> per origin, so it works only when the node comes back at the **same address**: a copy saved under an
+> earlier address (a hotspot address that changed after the host phone rebooted, a `loamnet` or desktop
+> node that stepped to the next free port) is never purged by any later reset.
+>
+> **What a reset does not reach** (and the public copy says so). (1) **Linked networks**: the in-process
+> reset keeps `sync.enabled` and the peer list (it only forgets per-peer state), and `wipeAll()` deletes the
+> tombstones that would block re-import, so the next round pulls the peers' copies of this node's public
+> channels, their authors and pictures back in. Turn sync off or remove the peers first; a hooked fixed-key
+> reset turns sync off only when it had to strip a `sync.token`, and nodes linked by code have none. (2)
+> **Browser HTTP caches**: on an unencrypted node, avatars and attachments go out `private, max-age=3600`,
+> and a typed-address joiner (no tunnel) loads them directly, so its browser's HTTP cache can keep them;
+> script can't clear that cache. (3) **The `loamnet` admin's browser**: unlike the Android WebView and the
+> desktop window, it gets no `__loamHostNoLocalCache`, so it keeps an unencrypted IndexedDB copy, on
+> ephemeral networks too, until the reset reaches it. (4) **Copies under an earlier address** (above). (5)
+> **OS backups** of the host's data folder. (6) Browser history and address-bar suggestions (see "What a
+> wipe cannot reach" below). **Now with a cryptographic wipe when encryption at rest
 > is on** (`LOAM_DB_KEY`): instead of a logical `DELETE`, the kill switch closes the store, deletes
 > the DB files (`loam.db`/`-wal`/`-shm`), and — in `ephemeral` mode — rotates to a fresh random key,
 > so any bytes still physically present on flash become unreadable. Every branch also removes the
@@ -88,11 +105,17 @@ in the default UI (don't advertise heavily).
 
 **Critical insight:** wiping only the server is not enough. Every connected client caches messages,
 users, and channels in **IndexedDB** (`loam-poc` db) and identity in **localStorage**, plus the service
-worker cache (`loam-poc-v1`). For the protest threat model, the kill switch must also tell connected
+worker cache (then `loam-poc-v1`; today `loam-shell-<build hash>`, and the purge deletes every cache name
+it finds). For the protest threat model, the kill switch must also tell connected
 clients to purge their local copies. Server-only wipe leaves the conversation on every participant's
 phone.
 
-## Current state (what you'll touch)
+## Before it was built (historical)
+
+> This section is the pre-implementation snapshot the design started from. None of it describes the code
+> today: the wipe API, the `wipe` event and the client purge all exist (status block above), storage is
+> SQLite, there are no seed users, the service worker cache is `loam-shell-<build hash>`, and nothing writes
+> `loam.serverUrl` any more (the client still reads and removes it).
 
 - **No wipe/config API exists.** Routes are enumerated in `CLAUDE.md`; there is no admin/config/wipe
   endpoint yet.
@@ -125,7 +148,8 @@ phone.
 
 ### Client
 - Handle the `wipe` WS event: clear IndexedDB (delete the `loam-poc` database), remove the localStorage
-  keys, unregister the service worker + `caches.delete('loam-poc-v1')`, drop in-memory state, and show a
+  keys, unregister the service worker + delete every cache (`caches.keys()`; the design named
+  `loam-poc-v1`), drop in-memory state, and show a
   neutral "disconnected" screen (avoid a scary banner that signals what happened).
 - The admin who triggers it gets the same purge locally.
 - **What a wipe cannot reach**: the browser's own history and address-bar suggestions on a joiner's phone

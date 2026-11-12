@@ -190,6 +190,18 @@ export function clearMessageNotifications(): void {
   }
 }
 
+/**
+ * Delete what the app's WebView stored under `origin` (no page is loaded there). Best effort: a no-op when
+ * unsupported; never throws.
+ */
+export function deleteWebOriginData(origin: string): void {
+  try {
+    LoamHotspotModule?.deleteWebOriginData(origin);
+  } catch {
+    // Best effort.
+  }
+}
+
 /** The conversation a message notification opened LOAM at from cold, once; undefined otherwise. */
 export function takeOpenedConversation(): string | undefined {
   try {

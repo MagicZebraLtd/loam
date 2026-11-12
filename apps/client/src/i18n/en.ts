@@ -827,7 +827,7 @@ export const en = {
   "admin.nav.label": "Sections",
   "admin.nav.sync": "Sync",
   "admin.nav.mesh": "Mesh",
-  "moderation.banConfirm": "Ban {name}? They lose access to this network until a moderator unbans them.",
+  "moderation.banConfirm": "Ban {name}? This identity loses access to this network until a moderator unbans it. On a network anyone can join, the same person can come back under a new name. To keep someone out, require approval to join.",
   "toast.newMessages": { one: "{n} new message in {place}", other: "{n} new messages in {place}" },
   "unreadBadge.new": "New messages",
   "newMessage.open": "New message",

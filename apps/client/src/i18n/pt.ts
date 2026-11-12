@@ -766,7 +766,7 @@ export const pt: Translation = {
   "admin.nav.label": "Seções",
   "admin.nav.sync": "Sincronização",
   "admin.nav.mesh": "Malha",
-  "moderation.banConfirm": "Banir {name}? A pessoa perde o acesso a esta rede até que um moderador a desbana.",
+  "moderation.banConfirm": "Banir {name}? Esta identidade perde o acesso a esta rede até que um moderador a desbana. Numa rede em que qualquer pessoa pode entrar, a mesma pessoa pode voltar com outro nome. Para manter alguém de fora, exija aprovação para entrar.",
   "toast.newMessages": {
     one: "{n} mensagem nova em {place}",
     many: "{n} mensagens novas em {place}",

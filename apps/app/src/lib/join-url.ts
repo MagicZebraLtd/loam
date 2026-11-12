@@ -6,6 +6,22 @@
 /** The embedded LOAM host server's port (mirrors SERVER_PORT in the host screen and the launcher). */
 export const SERVER_PORT = 3000;
 
+/**
+ * The origin the host phone's own WebView loads, and the launcher-side fetches use: an IP literal,
+ * never the name `localhost`. The embedded server binds the IPv4 wildcard only, so nothing of LOAM's
+ * listens on `[::1]`; another app on the phone can bind `[::1]:3000`, and Chromium tries `::1` first
+ * for `localhost`. That app would then sit at LOAM's pinned origin and receive the injected host token
+ * and transport key. `127.0.0.1` can only reach LOAM's own IPv4 socket (the bind would collide).
+ */
+export const HOST_WEBVIEW_ORIGIN = `http://127.0.0.1:${SERVER_PORT}`;
+
+/**
+ * The origin earlier releases loaded the host WebView from. Its storage (the web client's IndexedDB cache,
+ * localStorage with the identity token, the service worker) stays on the phone after an upgrade, and the
+ * new origin can't reach it, so an Emergency Reset wouldn't either. The host screen deletes it at launch.
+ */
+export const LEGACY_HOST_WEBVIEW_ORIGIN = `http://localhost:${SERVER_PORT}`;
+
 /** RFC-1918 10.0.0.0/8 or 172.16.0.0/12 (192.168.* is handled separately by the caller). */
 export function isPrivate10or172(address: string): boolean {
   return address.startsWith('10.') || /^172\.(1[6-9]|2\d|3[01])\./.test(address);
@@ -83,6 +99,14 @@ export function withInviteCode(fragment: string, code: string | undefined): stri
     return fragment;
   }
   return fragment ? `${fragment}&i=${code}` : `#i=${code}`;
+}
+
+/**
+ * Whether a join fragment carries an invite code (`withInviteCode`): then anyone who scans the host's QR is
+ * let in without waiting for approval, and the share screen says so (F-047).
+ */
+export function fragmentHasInvite(fragment: string): boolean {
+  return /^#(?:.*&)?i=[A-Za-z0-9_-]+(?:&|$)/.test(fragment);
 }
 
 /**

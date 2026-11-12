@@ -69,7 +69,12 @@ an attacker's own sealed `/resume` and restore the whole attack.
 "made public". Instead:
 
 - **New `GET /api/bootstrap`** — **always public, cookie-free**, fetched with `credentials: "omit"`.
-  Returns only public data: `mode`, host `transportPublicKey`, `nodeName`, `version`, connection details.
+  Returns `{ nodeName, version, joinUrl, websocketPath, networkConfig }` (`routes-session.ts`), where
+  `networkConfig` is the **whole** `NetworkConfig` that `/api/config` returns, minus `currentUser`: the mode
+  (`transportEncryption`) and host `transportPublicKey`, and also every feature flag, `joinPolicy`,
+  `securityProfile`, `enableMesh`, `dbEncryption`, `allowAdminClaim`, `devMode`, `locale` and
+  `assistantDestination` (an online assistant's hostname included). All of it is readable by anyone who can
+  reach the node, without joining. No identity is minted and no cookie is read.
   The client hits this *first* (it doesn't yet know the mode).
 - **`GET /api/config`** — unchanged for optional/off (authenticated bootstrap, returns `currentUser`).
   For a **bound** session it is reached **through the tunnel** like any content route; a bound client gets
@@ -84,7 +89,8 @@ an attacker's own sealed `/resume` and restore the whole attack.
 
 ```
 1. GET /api/bootstrap          (PUBLIC, credentials:"omit")                           [NEW]
-   → mode, transportPublicKey, nodeName, version. No identity, no cookie, no currentUser.
+   → nodeName, version, joinUrl, websocketPath, networkConfig (mode + transportPublicKey inside).
+     No identity, no cookie, no currentUser.
 
 2. POST /api/transport/handshake   (anonymous; credentials:"omit")
    → transport session, authMode:"anonymous". No user bound.
@@ -243,7 +249,10 @@ is not a token. Session **key**: never transmitted → can't seal as the victim.
 is server-side + **immutable**. A sniffed session **id** is inert (can't seal, can't reach content, can't
 pass the WS challenge). Bootstrap is cookie-free. **Residuals:** device compromise exposes the local
 token (network is the threat model; covered by at-rest enc + wipe/kill switch); metadata (session id,
-timing, sizes, bootstrap) observable; `anonymous`/optional sessions keep the weaker cookie model.
+timing, sizes, bootstrap) observable; `anonymous`/optional sessions keep the weaker cookie model: a
+client that typed the address on an `optional` node sends its cookie as a plain header, so a passive
+listener who captures it can replay it as that member (read their DMs, post as them) for the cookie's
+lifetime. The public copy says so (site FAQ, privacy policy, README); docs/08 "What this buys / doesn't".
 
 ## 13. Compatibility & a factual correction
 

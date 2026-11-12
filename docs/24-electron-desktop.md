@@ -1,6 +1,6 @@
 # 24 — Desktop host app (macOS / Windows / Linux)
 
-> **Status: implemented, unreleased; the first release ships with 0.7.0.** `apps/desktop` is an Electron app
+> **Status: released with 0.7.0 (tag `v0.7.0`, 27 October 2026).** `apps/desktop` is an Electron app
 > that runs a LOAM network from a Mac, a Windows PC or a Linux laptop: setup screens, a host screen with the
 > join QR, and the web client in its own window with the host already admin. It is the sibling of the Android
 > host ([docs/04](04-android-host-app.md)) and the `loamnet` terminal app ([docs/14](14-distribution.md)), for
@@ -153,8 +153,13 @@ is `ephemeral`; **Community** and **Choose every setting myself** are `persisten
 computer has no keychain.
 
 **The passphrase** is typed at Setup (minimum 8 characters) and on every start, held in memory only and dropped
-on Stop. The hash includes the device secret, so the passphrase alone opens nothing, and destroying the secret
-makes the database unreadable even to someone who knows the passphrase. The SHA-256 only mixes the secret in:
+on Stop. The hash includes the device secret, so a passphrase network needs both the passphrase and the secret
+to open. Reset removes the secret file. On Linux without a keychain, the secret was stored unprotected in
+`device-secret.key`, so someone who recovers it from flash storage and knows the passphrase can still read
+recovered database pages. Reset does not reach an earlier OS backup (Time Machine, File History, Déjà Dup).
+A backup of the user-data folder holds the database and the device secret, sealed if the keychain was used
+and in the clear otherwise. The network passphrase is still needed to restore a passphrase network. Exclude
+the LOAM folder from backups, or use an ephemeral key, if that matters. The SHA-256 only mixes the secret in:
 the server hands that value to SQLCipher as a text key, and SQLCipher derives the real key from it with its own
 PBKDF2, so guessing a passphrase costs the driver's key derivation per guess, not one hash. A wrong passphrase maps to the Unlock
 screen saying so; a lost device secret under a device-held mode maps to `db_encryption_locked`.
@@ -176,7 +181,9 @@ Honest caveats:
 - **No keychain, no persistent mode.** On a Linux desktop with no secret service (GNOME Keyring, KWallet),
   `persistent` is not offered, Community defaults to `passphrase`, and the Setup screen says why. A
   passphrase network there stores the device secret in `device-secret.key` unprotected: the passphrase is the
-  protection, and the secret still gives Emergency Reset its "destroy the key" property. That file is left
+  protection, and the secret still gives Emergency Reset its "destroy the key" property, but only as far as
+  deleting a file erases it. Flash storage can keep a deleted file's blocks, so someone who recovers the old
+  secret and knows the passphrase could still read recovered database pages. That file is left
   as it is even when a later session does have a keychain (a graphical login after an SSH start, or the other
   way round): sealing it then would make the network unreadable in the next session without one, which an
   earlier build did (`keys.ts` sealed a plain secret "once this computer has a keychain").
@@ -192,7 +199,8 @@ Honest caveats:
 - **What the database encryption does not cover.** As for the CLI, pictures, files and avatars are stored
   beside the database unencrypted. The host's own client window keeps **no copy of an encrypted network's
   content on the disk** (next section, "Storage partition"): its browser-side cache is switched off, and its
-  HTTP cache too, so only its identity and preferences (localStorage) persist. On an unencrypted network the
+  HTTP cache too, so only its localStorage (the identity token, preferences and `loam.lastConversation`,
+  which names the last conversation), its cookie and the service worker's build-file cache persist. On an unencrypted network the
   window caches as any browser would; that copy is erased by Emergency Reset (both the in-process reset and
   the fixed-key handoff), by "Start a new network" and by setup, never left behind for a later network, and
   `desktop.json` carries a `clientCopyStale` mark from the start of each of those until the erase succeeded,
@@ -211,7 +219,7 @@ no admin session and ignores `killSwitch.enabled`: it is the host's own screen. 
 - **`persistent` and `passphrase` (fixed key).** The server journals the wipe in `node/.loam-wipe-phase`,
   deletes the database and media, proves them gone, calls the launcher's hook (`globalThis.__loamRequestWipeRestart`,
   installed once) and answers `complete: false`. The launcher then stops the node, **deletes the device
-  secret** (the cryptographic wipe: nothing written under it can be read again, even with the passphrase),
+  secret** (see the flash recovery and backup limits under "The passphrase" above),
   removes the journal and **proves it gone** (fsync of the folder), mints a fresh secret and boots again. The
   boot-time resume finishes the rest.
 - **The two journal phases** are routed on, never on mere presence (ported from the Android launcher):
@@ -264,10 +272,12 @@ Rules for every page the app creates:
   profile on disk **outside the database's encryption**. So on every encrypted network the preload also sets
   `window.__loamHostNoLocalCache`, and the web client (`lib/local-store.ts`) then keeps no IndexedDB at all:
   what it shows is held in memory and loaded from the node, on loopback, at every page load; its localStorage
-  (identity token, preferences, no messages) is what persists. Both partitions are created without an HTTP
-  cache, so pictures served in the clear (`optional` transport mode) never land on the disk either. Both are
-  erased on every Emergency Reset and when a network is discarded. The Android host's WebView does the same on
-  every encrypted network: it injects the flag and runs without an HTTP cache (docs/04).
+  (identity token, preferences and the last conversation's id, no message text), its cookie and the service
+  worker's build-file cache are what persist. Both partitions are created without an HTTP cache, so pictures
+  served in the clear never land on the disk either. Both are erased natively (`clearStorageData` +
+  `clearCache`) on every Emergency Reset and when a network is discarded. The Android host's WebView injects
+  the same flag and runs without an HTTP cache on every encrypted network, but never clears its storage
+  natively (docs/04).
 - **CSP.** The built host shell carries `default-src 'self'`, `script-src 'self'`, `style-src 'self'`,
   `img-src 'self' data:`, `connect-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'none'`:
   no network, no inline script. (Added at build time only; Vite's dev server injects `<style>` elements.) The web
