@@ -218,8 +218,9 @@ computer, the same settings live in the admin area as **security profiles**
   a key that lives only in memory, the key is replaced too, so what's left in the database files can't be
   read. (On Linux without a keychain, a passphrase network keeps its key file unprotected on disk. A reset
   deletes it, but flash storage can keep deleted blocks, so someone who recovers it and knows the passphrase
-  could still read the old database: [docs/24](docs/24-electron-desktop.md).) A network you linked keeps its own copy of the public channels, and hands it back if linking stays
-  on. A phone that joined under an earlier address of the host keeps that copy until its browser data is
+  could still read the old database: [docs/24](docs/24-electron-desktop.md).) A reset pauses syncing. Linked
+  networks keep their own copies of public channels and can send them back if you turn syncing on again.
+  A phone that joined under an earlier address of the host keeps that copy until its browser data is
   cleared ([docs/02](docs/02-kill-switch.md)).
 
 **Know the limits.** The host can read every message: it's the server, as the operator of any chat

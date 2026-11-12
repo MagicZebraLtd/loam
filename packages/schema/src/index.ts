@@ -410,6 +410,12 @@ export const NetworkConfigSchema = z.object({
   joinPolicy: JoinPolicySchema,
   /** The node's active security posture, surfaced so the client can gate secure-only affordances. */
   securityProfile: SecurityProfileSchema,
+  /**
+   * The effective node-wide message retention (`retention.messageTtlMs` after the security profile's preset),
+   * absent when messages are kept. The client drops cached messages past it (and past a channel's own
+   * shorter `messageTtlMs`), so a device that was away when the node's reaper ran doesn't keep them.
+   */
+  messageTtlMs: z.number().int().positive().optional(),
   /** App-layer transport-encryption posture (docs/08), so the client knows whether to handshake. */
   transportEncryption: TransportEncryptionSchema,
   /** The host's static X25519 public key (base64url) for the transport handshake, when transport
@@ -1542,6 +1548,15 @@ export const SyncStatusReportSchema = z.object({
       link: z.enum(["linking", "refused"]).optional(),
     }),
   ),
+  /**
+   * Present while an Emergency Reset's pause still applies: the reset turned sync off (keeping the peers) so
+   * the linked networks couldn't hand the wiped public posts back, and nobody has turned it on since. `at` is
+   * when (0 when unknown); `tokenDropped` says the reset also dropped the sync token (a reset that restarts
+   * the node can't carry it), so a new one is needed before sync goes back on.
+   */
+  pausedByReset: z
+    .object({ at: z.number().int().nonnegative(), tokenDropped: z.boolean() })
+    .optional(),
 });
 export type SyncStatusReport = z.infer<typeof SyncStatusReportSchema>;
 

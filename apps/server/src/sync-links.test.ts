@@ -186,6 +186,44 @@ describe("POST /api/sync/link", () => {
     expect((await link(existing, { code, port: 3457 })).status).toBe(403);
   });
 
+  it.skipIf(!LAN_ADDRESS)("mints a mesh token on a first link when the node has none, so its sync routes stop being open", async () => {
+    const existing = await lanNode({ node: { name: "Riverside" } });
+    const cookie = await sessionCookie(existing.app);
+    // Before the link: no token, so anyone who can reach the node could read its public channels over sync.
+    const code = await mintCode(existing.app, cookie);
+
+    const linked = await link(existing, { code, port: 3456, transportKey: "a".repeat(43), name: "Hilltop" });
+    expect(linked.status).toBe(200);
+    const answer = JSON.parse(linked.text) as { name: string; token?: string };
+    expect(answer.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const config = (
+      await existing.app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie } })
+    ).json() as { sync: { enabled: boolean; token?: string } };
+    expect(config.sync).toMatchObject({ enabled: true, token: answer.token });
+    // A lost answer asked for again gets the same token, not a second one.
+    const repeat = await link(existing, { code, port: 3456, transportKey: "a".repeat(43), name: "Hilltop" });
+    expect(JSON.parse(repeat.text)).toEqual(answer);
+
+    // The sync routes now want the token: a caller without it is refused as if sync were off.
+    const open = await existing.app.server.inject({ method: "GET", url: "/api/sync/digest", remoteAddress: "192.168.4.99" });
+    expect(open.statusCode).toBe(404);
+  });
+
+  it.skipIf(!LAN_ADDRESS)("mints no token when the node already syncs with a tokenless peer, which would start being refused", async () => {
+    const existing = await lanNode({ sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }] } });
+    const cookie = await sessionCookie(existing.app);
+    const code = await mintCode(existing.app, cookie);
+
+    const linked = await link(existing, { code, port: 3456, transportKey: "a".repeat(43) });
+    expect(linked.status).toBe(200);
+    expect(JSON.parse(linked.text)).not.toHaveProperty("token");
+    const config = (
+      await existing.app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie } })
+    ).json() as { sync: { token?: string; peers: unknown[] } };
+    expect(config.sync.token).toBeUndefined();
+    expect(config.sync.peers).toHaveLength(2);
+  });
+
   it.skipIf(!LAN_ADDRESS)("forgets every shown code on an Emergency Reset", async () => {
     const existing = await lanNode();
     const code = await mintCode(existing.app, await sessionCookie(existing.app));
@@ -229,6 +267,27 @@ describe("a new node using its link code", () => {
     ).json() as { sync: { token?: string; peers: { linkCode?: string }[] } };
     expect(config.sync.token).toBe("mesh-secret-0123456789");
     expect(config.sync.peers[0]!.linkCode).toBeUndefined();
+  });
+
+  it.skipIf(!LAN_ADDRESS)("leaves two tokenless nodes sharing the token the first link minted", async () => {
+    const existing = await lanNode({ node: { name: "Riverside" } });
+    const existingAdmin = await sessionCookie(existing.app);
+    const code = await mintCode(existing.app, existingAdmin);
+    const joining = await lanNode({
+      node: { name: "Hilltop" },
+      sync: { enabled: true, peers: [{ url: existing.url, transportKey: existing.key, linkCode: code }] },
+    });
+    const joiningAdmin = await sessionCookie(joining.app);
+
+    await joining.app.server.inject({ method: "POST", url: "/api/admin/sync/run", headers: { cookie: joiningAdmin } });
+
+    const tokenOf = async (app: LoamApp, cookie: string) =>
+      ((await app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie } })).json() as {
+        sync: { token?: string };
+      }).sync.token;
+    const minted = await tokenOf(existing.app, existingAdmin);
+    expect(minted).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await tokenOf(joining.app, joiningAdmin)).toBe(minted);
   });
 
   it("never lets an admin save put back (or add) a link code", async () => {

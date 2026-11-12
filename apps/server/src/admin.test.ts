@@ -737,10 +737,14 @@ describe("security profiles", () => {
     // The public bootstrap advertises the forced axes cookie-free.
     const network = (
       await app.server.inject({ method: "GET", url: "/api/bootstrap" })
-    ).json() as { networkConfig: { joinPolicy: string; securityProfile: string; transportEncryption: string } };
+    ).json() as {
+      networkConfig: { joinPolicy: string; securityProfile: string; transportEncryption: string; messageTtlMs?: number };
+    };
     expect(network.networkConfig.securityProfile).toBe("hardened");
     expect(network.networkConfig.joinPolicy).toBe("approval");
     expect(network.networkConfig.transportEncryption).toBe("required");
+    // The effective retention reaches clients, so a device that was away prunes its own copies (docs/07).
+    expect(network.networkConfig.messageTtlMs).toBe(3_600_000);
 
     const session = await openTransport08(app);
     const bound = await resumeIdentity(app, session, 1);

@@ -271,6 +271,14 @@ export const fr: Translation = {
   "admin.syncTokenPlaceholder": "Laisser vide pour une synchro ouverte",
   "admin.syncTokenGenerate": "Générer",
   "admin.syncTokenNote": "Une fois défini, seuls les pairs présentant ce jeton exact peuvent se synchroniser. Donnez le même jeton à chaque nœud de votre maillage.",
+  "admin.killSwitchLinkedNote":
+    "Ce réseau est relié à d’autres réseaux. La réinitialisation désactive la synchro pour qu’ils ne renvoient pas les canaux publics, mais ils gardent leur propre copie, et réactiver la synchro la ramène.",
+  "admin.syncPausedByReset":
+    "La Réinitialisation d’urgence a désactivé la synchro pour que les réseaux reliés ne renvoient pas les canaux publics effacés. Ils en gardent leur propre copie. Réactivez la synchro quand vous le souhaitez.",
+  "admin.syncPausedTokenDropped":
+    "La réinitialisation a aussi supprimé le jeton partagé du maillage. Définissez le même nouveau jeton sur chaque nœud relié avant de réactiver la synchro.",
+  "admin.syncOpenWarning":
+    "La synchro est active sans jeton : toute personne qui peut joindre ce réseau peut lire ses canaux publics par la synchro, y compris les personnes bannies ou non approuvées. Générez un jeton et définissez-le sur chaque nœud relié.",
   "admin.noPeers": "Aucun pair pour l’instant.",
   "admin.peerChangesNote": "Les changements de pairs s’appliquent lorsque vous enregistrez la configuration du nœud ci-dessous.",
   "admin.meshHeading": "Maillage opportuniste",

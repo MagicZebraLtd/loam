@@ -272,11 +272,14 @@ host phone, **Invite people → Link another LOAM node → Show a link code**; i
 **Node-to-node sync → Link another node**. On the other phone, during setup choose **Join another LOAM
 network** and scan it. That's all: the two networks sync from then on, with nothing to approve. A code
 works once, for 10 minutes, so show it only to the phone you mean to link. The plain join code can't link
-a network.
+a network. If this network had no shared mesh token and no other linked network, the first link makes one
+and hands it to the other side, so only the two of you can read each other's public channels over sync.
 
 **By hand.** In **Admin → Node-to-node sync**, turn sync on and add a peer by its join address, then
 **Sync now**. Each side pulls from the other only if it lists the other, so add it on both. A **shared
-mesh token** limits sync to networks that know it.
+mesh token** limits sync to networks that know it; without one, anyone who can reach this network can read
+its public channels through sync, including people you banned or haven't approved, and the Sync panel
+warns you.
 
 **What phones can do** ([docs/11](11-node-sync.md)): two phones each running a hotspot usually can't see
 each other. Linking works when one network can reach the other: a phone on the other's hotspot or Wi-Fi,
@@ -306,12 +309,14 @@ its copy the next time it reaches the network at the same address. What it doesn
   completely, and next time it opens on setup. If something couldn't be erased, the screen says so and
   stays open: closing LOAM and opening it again finishes the job.
 - **From the admin area:** **Emergency Reset**, once enabled there (the Hardened profile enables it).
-  The settings survive, so the network starts again empty. Sync settings survive too: if this network is
-  linked, the next sync round pulls the linked networks' public channels back in. To keep it empty, turn
-  sync off or remove the peers first. When the reset has to restart LOAM with a new key (the host phone and
-  the desktop app on an encrypted network with a fixed key), the sync token and an online assistant's API
-  key aren't carried over, since they're never written to disk unencrypted: sync is turned off if it used
-  a token, and the online assistant is switched off. Set them again afterwards.
+  The settings survive, so the network starts again empty. If this network is linked, the reset turns sync
+  off and keeps the list of linked networks, and the Sync panel says so: the linked networks keep their own
+  copy of the public channels, and turning sync on again can pull that copy back in. When the reset has to
+  restart LOAM to replace a fixed key (the Android and desktop apps), or finishes at the next start after an
+  interruption, the shared sync token and any assistant API key are left out of the restart snapshot.
+  The Sync panel reports a dropped token: set it again before syncing with networks that need it. An
+  assistant that relied on an API key is switched off until it is configured again. A reset that finishes
+  without a restart keeps the token.
 - **Without logging in:** set a **panic token** (16 characters or more) in the same panel, and a request
   to `POST /api/panic` with it erases the network, from a bookmark or another device. The token is stored
   hashed. It works only while Emergency Reset is enabled: the address answers "not found" unless both are

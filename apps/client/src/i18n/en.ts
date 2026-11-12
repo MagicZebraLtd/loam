@@ -323,6 +323,14 @@ export const en = {
   "admin.syncTokenPlaceholder": "Leave blank for open sync",
   "admin.syncTokenGenerate": "Generate",
   "admin.syncTokenNote": "When set, only peers presenting this exact token can sync. Give every node in your mesh the same token.",
+  "admin.killSwitchLinkedNote":
+    "This network is linked to other networks. The reset turns sync off so they can't send the public channels back, but they keep their own copy, and turning sync on again brings it back.",
+  "admin.syncPausedByReset":
+    "Emergency Reset turned sync off so the linked networks couldn't send the wiped public channels back. They still have their own copy. Turn sync on again when you choose.",
+  "admin.syncPausedTokenDropped":
+    "The reset also removed the shared mesh token. Set the same new token on every linked node before you turn sync on.",
+  "admin.syncOpenWarning":
+    "Sync is on without a token, so anyone who can reach this network can read its public channels through sync, including people you banned or haven't approved. Generate a token and set it on every linked node.",
   "admin.noPeers": "No peers yet.",
   "admin.peerChangesNote": "Peer changes apply when you save the node config below.",
   // Admin view — opportunistic mesh panel.

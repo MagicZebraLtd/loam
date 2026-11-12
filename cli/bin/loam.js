@@ -563,11 +563,15 @@ function printPlain(app) {
       return;
     }
     const key = app.host.transportPublicKey();
-    const link = `${joinUrl}#${key ? `k=${key}&` : ""}a=${minted.code}`;
+    const fragment = `#${key ? `k=${key}&` : ""}a=${minted.code}`;
+    const link = `${joinUrl}${fragment}`;
     current = { code: minted.code, expiresAt: minted.expiresAt, resets: status.resets };
     if (process.stdout.isTTY) {
-      console.log("Nobody is admin yet. Open this link to become admin (it works once, for 10 minutes):");
-      console.log(`  ${link}`);
+      // Two links to one code. A browser on this computer should use loopback: only a loopback caller is told
+      // to keep no copy of an encrypted network's messages on this disk (`hostNoLocalCache`, docs/02).
+      console.log("Nobody is admin yet. Open one of these links to become admin (it works once, for 10 minutes):");
+      console.log(`  On this computer:    http://127.0.0.1:${advertised.port}/${fragment}`);
+      console.log(`  From another device: ${link}`);
       console.log("");
       return;
     }

@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -280,6 +281,25 @@ describe("encryption at rest + key-discard kill switch", () => {
     expect(await avatarCacheControl(plain.app)).toBe("no-store");
   });
 
+  it("tells a browser on the host machine to keep no local copy while the database is encrypted, and nobody else", async () => {
+    async function hint(app: LoamApp, remoteAddress: string): Promise<unknown> {
+      const response = await app.server.inject({ method: "GET", url: "/api/bootstrap", remoteAddress });
+      return (response.json() as { hostNoLocalCache?: unknown }).hostNoLocalCache;
+    }
+
+    const ephemeral = await makeEncryptedApp({ ephemeralDbKey: true, dbEncryptionMode: "ephemeral" });
+    expect(await hint(ephemeral.app, "127.0.0.1")).toBe(true);
+    expect(await hint(ephemeral.app, "::1")).toBe(true);
+    expect(await hint(ephemeral.app, "192.168.4.20")).toBeUndefined();
+
+    const passphrase = await makeEncryptedApp({ dbEncryptionKey: "a fixed host passphrase", dbEncryptionMode: "passphrase" });
+    expect(await hint(passphrase.app, "127.0.0.1")).toBe(true);
+
+    // Unencrypted, the host's database is in the clear anyway: the browser's cache adds nothing to hide.
+    const plain = await makeEncryptedApp({});
+    expect(await hint(plain.app, "127.0.0.1")).toBeUndefined();
+  });
+
   it("kill switch on a passphrase-key node also empties and recovers", async () => {
     const { app } = await makeEncryptedApp(
       { dbEncryptionKey: "a fixed host passphrase" },
@@ -534,8 +554,7 @@ describe("encryption at rest + key-discard kill switch", () => {
           method: "PATCH",
           url: "/api/admin/config",
           headers: { cookie: admin.cookie },
-          // No token: a tokenless sync setting rides across unchanged (a token turns sync off, see the next test).
-          payload: { sync: { enabled: true } },
+          payload: { node: { name: "Set by the admin" }, sync: { enabled: true, peers: [{ url: "http://192.168.7.20:3000" }] } },
         })
       ).statusCode,
     ).toBe(200);
@@ -554,22 +573,32 @@ describe("encryption at rest + key-discard kill switch", () => {
     // back to. The phase reached key-clear-ready.
     expect(readJournalPhase(dataDir)).toBe("key-clear-ready");
     const persisted = JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8")) as {
-      sync: { enabled: boolean; token?: string };
+      node: { name: string };
+      sync: { enabled: boolean; token?: string; peers: { url: string }[] };
     };
-    expect(persisted.sync.enabled).toBe(true);
+    expect(persisted.node.name).toBe("Set by the admin");
+    // Sync comes back paused, peers kept: a linked network would hand the wiped posts back (docs/02).
+    expect(persisted.sync.enabled).toBe(false);
+    expect(persisted.sync.peers.map((peer) => peer.url)).toEqual(["http://192.168.7.20:3000"]);
     expect(persisted.sync.token).toBeUndefined();
-    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(false);
+    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(true);
 
     // Simulate the launcher's verified restart with a rotated key: the fresh DB's config table is empty, so
-    // config.json is the ONLY carrier of the DB-only sync change into the new boot.
+    // config.json is the ONLY carrier of the DB-only changes into the new boot.
     rmSync(join(dataDir, ".loam-wipe-phase"), { force: true });
     const restarted = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false, dbEncryptionKey: "key B", dbEncryptionMode: "persistent" });
     cleanups.push(() => restarted.close());
     const restartedAdmin = await session(restarted);
     const config = (
       await restarted.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie: restartedAdmin.cookie } })
-    ).json() as { sync: { enabled: boolean } };
-    expect(config.sync.enabled).toBe(true);
+    ).json() as { node: { name: string }; sync: { enabled: boolean; peers: unknown[] } };
+    expect(config.node.name).toBe("Set by the admin");
+    expect(config.sync.enabled).toBe(false);
+    expect(config.sync.peers).toHaveLength(1);
+    const report = (
+      await restarted.server.inject({ method: "GET", url: "/api/admin/sync", headers: { cookie: restartedAdmin.cookie } })
+    ).json() as { pausedByReset?: { tokenDropped: boolean } };
+    expect(report.pausedByReset).toMatchObject({ tokenDropped: false });
   });
 
   it("turns sync off in the config a hooked fixed-key wipe carries across the restart when its token had to be stripped, and the next boot says so", async () => {
@@ -585,7 +614,7 @@ describe("encryption at rest + key-discard kill switch", () => {
           method: "PATCH",
           url: "/api/admin/config",
           headers: { cookie: admin.cookie },
-          payload: { sync: { enabled: true, token: "a-plaintext-bearer-sync-token-z" } },
+          payload: { sync: { enabled: true, token: "a-plaintext-bearer-sync-token-z", peers: [{ url: "http://192.168.7.20:3000" }] } },
         })
       ).statusCode,
     ).toBe(200);
@@ -608,8 +637,8 @@ describe("encryption at rest + key-discard kill switch", () => {
     expect(persisted.sync.enabled).toBe(false);
     expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(true);
 
-    // The launcher clears the journal and restarts under a rotated key: that boot logs why sync is off and
-    // consumes the note, so it is said once.
+    // The launcher clears the journal and restarts under a rotated key: that boot logs why sync is off, and
+    // that the token has to be set again; the note stays for the admin Sync panel until sync is back on.
     rmSync(join(dataDir, ".loam-wipe-phase"), { force: true });
     const lines: string[] = [];
     const restarted = await buildApp({
@@ -621,7 +650,8 @@ describe("encryption at rest + key-discard kill switch", () => {
     });
     cleanups.push(() => restarted.close());
     expect(lines.join("")).toContain("Sync was turned off by the Emergency Reset");
-    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(false);
+    expect(lines.join("")).toContain("dropped the sync token");
+    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(true);
 
     const restartedAdmin = await session(restarted);
     const config = (
@@ -629,6 +659,10 @@ describe("encryption at rest + key-discard kill switch", () => {
     ).json() as { sync: { enabled: boolean; token?: string } };
     expect(config.sync.enabled).toBe(false);
     expect(config.sync.token).toBeUndefined();
+    const report = (
+      await restarted.server.inject({ method: "GET", url: "/api/admin/sync", headers: { cookie: restartedAdmin.cookie } })
+    ).json() as { pausedByReset?: { tokenDropped: boolean } };
+    expect(report.pausedByReset).toMatchObject({ tokenDropped: true });
   });
 
   it("strips the chat service's API key from the config a hooked fixed-key wipe carries across the restart, switching that service off", async () => {
@@ -2454,6 +2488,56 @@ describe("encryption at rest + key-discard kill switch", () => {
         (await app.server.inject({ method: "GET", url: "/api/channels", headers: { cookie: admin.cookie } })).statusCode,
       ).toBe(503);
     });
+  });
+});
+
+describe("sync stays paused after a reset when the database holding that is gone (ephemeral restart)", () => {
+  it("an unrelated config.json rewrite can't resume sync, but an explicit admin save can", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loam-sync-pause-test-"));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const configPath = join(dataDir, "config.json");
+    const fileConfig = { sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }] } };
+    const marker = join(dataDir, ".loam-sync-off-after-reset");
+    const resetAt = Date.now() - 60_000;
+    writeFileSync(configPath, JSON.stringify(fileConfig));
+    const beforeReset = new Date(resetAt - 60_000);
+    utimesSync(configPath, beforeReset, beforeReset);
+    writeFileSync(marker, JSON.stringify({ at: resetAt, hadToken: false }));
+
+    const syncEnabled = async (app: LoamApp, cookie: string) => {
+      const config = await app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie } });
+      expect(config.statusCode).toBe(200);
+      return (config.json() as { sync: { enabled: boolean } }).sync.enabled;
+    };
+
+    const first = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false });
+    try {
+      expect(await syncEnabled(first, (await newSession(first)).cookie)).toBe(false);
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      await first.close();
+    }
+
+    // An ephemeral restart drops the database. A later launcher write preserves the old sync settings.
+    rmSync(join(dataDir, "loam.db"), { force: true });
+    rmSync(join(dataDir, "loam.db-wal"), { force: true });
+    rmSync(join(dataDir, "loam.db-shm"), { force: true });
+    writeFileSync(configPath, JSON.stringify({ ...fileConfig, llm: { onDevice: { enabled: false } } }));
+    const second = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false });
+    cleanups.push(() => second.close());
+    const admin = await newSession(second);
+    expect(await syncEnabled(second, admin.cookie)).toBe(false);
+    expect(existsSync(marker)).toBe(true);
+
+    const resume = await second.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie: admin.cookie },
+      payload: { sync: { enabled: true } },
+    });
+    expect(resume.statusCode).toBe(200);
+    expect(await syncEnabled(second, admin.cookie)).toBe(true);
+    expect(existsSync(marker)).toBe(false);
   });
 });
 

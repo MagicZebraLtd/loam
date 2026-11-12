@@ -70,6 +70,30 @@ export function createKillSwitch(ctx: AppContext) {
     }
   }
 
+  /**
+   * Turn sync off for the reset, keeping the peers and the token (docs/02, docs/11). A linked network still
+   * holds every public post this node had, and once the wipe has emptied the tombstones, the imported-record
+   * provenance and the users, nothing here would refuse them: the next round would hand them back, with their
+   * authors and pictures, within one interval. The live config changes in memory here; each branch persists it
+   * (the plaintext and in-process ones in the database, the restarting ones through the sanitized snapshot).
+   * The durable note it leaves is what the admin Sync panel and every later boot report, until an admin turns
+   * sync on again.
+   */
+  function pauseSyncForReset(): void {
+    const sync = ctx.appConfig.sync;
+    if (!sync.enabled) {
+      return;
+    }
+    ctx.appConfig = ctx.lifecycle.withSyncPausedByReset(ctx.appConfig);
+    if (!ctx.lifecycle.noteSyncPausedByReset(sync.token !== undefined)) {
+      ctx.server.log.warn("Kill switch: could not record that the reset turned sync off; the admin Sync panel won't say why");
+    }
+    ctx.server.log.warn(
+      "Kill switch: sync turned off (peers kept), so the linked networks can't hand the wiped public posts back. " +
+        "They keep their own copies; turn sync on again from the admin Sync panel when you choose.",
+    );
+  }
+
   /** The actual kill-switch work, split out so {@link executeKillSwitch} can guarantee `wipeInProgress`
    *  is cleared via `finally` regardless of how this returns. */
   async function executeKillSwitchBody(): Promise<KillSwitchResult> {
@@ -83,6 +107,9 @@ export function createKillSwitch(ctx: AppContext) {
     // And its message notifications (their text is this network's content) go now, through the launcher,
     // whoever ran the reset: the host's WebView may be suspended or offline and never hear the `wipe` event.
     notifyHostOfReset();
+    // Sync goes off before anything is deleted, in every branch below (they persist the paused config or carry
+    // it in the wipe journal): the wipe empties the tombstones and provenance that would refuse a re-import.
+    pauseSyncForReset();
     // Whether this run committed the `{ phase: "delete-pending", config }` wipe journal to disk. EVERY branch
     // writes it before its first destructive step, so a `wipeAll()` or reopen that throws can never leave the
     // node locked in memory only, with the next boot serving the original messages. It decides what an
@@ -241,12 +268,6 @@ export function createKillSwitch(ctx: AppContext) {
             ctx.server.log.error(message);
             reportBootNotice(message, "kill_switch_wipe_incomplete");
             return incompleteResult();
-          }
-
-          // The snapshot could not carry a configured sync token, so it turned sync off: leave the next boot a
-          // note saying why (the operator sets a new token and turns sync on again). A courtesy, never a gate.
-          if (ctx.lifecycle.restartDisablesSync(ctx.appConfig) && !ctx.lifecycle.noteSyncDisabledByReset()) {
-            ctx.server.log.warn("Kill switch: could not record that the reset turned sync off; the next boot gets no notice");
           }
 
           // Every artifact + media path is PROVEN gone and config.json is current. Advance to `key-clear-ready`
@@ -416,6 +437,9 @@ export function createKillSwitch(ctx: AppContext) {
           );
         }
         ctx.store.wipeAll();
+        // wipeAll keeps the `config` row, which still has sync on: store the paused config (pauseSyncForReset)
+        // in the same file before the checkpoint below makes both durable.
+        ctx.store.setConfigValue("config", JSON.stringify(ctx.appConfig));
         // `secure_delete` zeroed what wipeAll just deleted, but pages an older build freed without it (rows
         // deleted before this node was upgraded) still hold their content until reused. VACUUM rewrites the
         // file from the live rows alone, so none of those pages survive the checkpoint below either.

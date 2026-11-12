@@ -12,6 +12,9 @@ const STORE_NAMES: StoreName[] = ["channels", "messages", "sync", "users"];
 // the in-memory latch, which would reset and let the pending-deletion DB rehydrate. While set, the store
 // stays latched (no hydration) and the deletion is retried on boot; it's cleared only once deletion succeeds.
 const WIPE_PENDING_KEY = "loam.wipePending";
+// The node's own "keep no copy here" hint (`hostNoLocalCache` in `/api/bootstrap`), remembered so the next page
+// load refuses before it hydrates rather than once the bootstrap answers. It holds a flag, never content.
+const HOST_NO_LOCAL_CACHE_KEY = "loam.hostNoLocalCache";
 
 let databasePromise: Promise<IDBDatabase> | undefined;
 
@@ -28,6 +31,10 @@ function readWipePending(): boolean {
 // DB (docs/15 #4). Initialised from the PERSISTENT flag so a reload during a deferred wipe stays latched
 // (docs/20) rather than rehydrating the DB that's still pending deletion.
 let wiped = readWipePending();
+
+// The node's "keep no copy here" hint as this page load knows it: remembered from an earlier load, then what
+// this load's bootstrap says (`applyHostNoLocalCacheHint`).
+let nodeRefusesLocalCache = readNodeRefusal();
 
 function clearWipePending(): void {
   try {
@@ -69,6 +76,7 @@ export async function recoverPendingWipe(): Promise<void> {
  * a clean module. */
 export function resetLocalStoreForTests(): void {
   wiped = false;
+  nodeRefusesLocalCache = readNodeRefusal();
   databasePromise = undefined;
   refusedCopyPurged = false;
   clearWipePending();
@@ -78,12 +86,50 @@ export function resetLocalStoreForTests(): void {
  * A host app's own window may say that no copy of the network belongs on this device's storage: the desktop
  * app (apps/desktop/src/preload/client.cts) and the Android host's WebView (apps/app/src/app/index.tsx) set
  * `window.__loamHostNoLocalCache` before the page's scripts run on every encrypted network, since this
- * IndexedDB copy would sit on disk outside the database's key. The app
- * then holds what it shows in memory only and loads it from the node (on loopback) on every page load.
- * localStorage (the identity token, preferences) is untouched: it holds no messages.
+ * IndexedDB copy would sit on disk outside the database's key. A browser on the host machine with no
+ * launcher around it (the `loamnet` operator's own) hears the same from the node instead, in
+ * `/api/bootstrap` ({@link applyHostNoLocalCacheHint}). The app then holds what it shows in memory only and
+ * loads it from the node (on loopback) on every page load. localStorage (the identity token, preferences) is
+ * untouched: it holds no messages.
  */
 function localCacheRefused(): boolean {
-  return typeof window !== "undefined" && window.__loamHostNoLocalCache === true;
+  // The stored flag is read every time, not just at load: another tab may have heard the hint since, and this
+  // tab must not reopen (and refill) the database that tab deleted.
+  return (typeof window !== "undefined" && window.__loamHostNoLocalCache === true) || nodeRefusesLocalCache || readNodeRefusal();
+}
+
+/** Whether an earlier page load was told by the node to keep no copy here (see {@link applyHostNoLocalCacheHint}). */
+function readNodeRefusal(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(HOST_NO_LOCAL_CACHE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Apply the node's `hostNoLocalCache` hint from `/api/bootstrap`: true on the host machine's own browser while
+ * the database is encrypted. Remembered for the next page load; on the change to true the copy this browser
+ * already holds is deleted (this page's own connection closes on the deletion's `versionchange`).
+ */
+export function applyHostNoLocalCacheHint(refused: boolean): void {
+  try {
+    if (refused) {
+      localStorage.setItem(HOST_NO_LOCAL_CACHE_KEY, "1");
+    } else {
+      localStorage.removeItem(HOST_NO_LOCAL_CACHE_KEY);
+    }
+  } catch {
+    // ignore: the in-memory flag below still holds for this page load
+  }
+  if (refused === nodeRefusesLocalCache) {
+    return;
+  }
+  nodeRefusesLocalCache = refused;
+  if (refused) {
+    refusedCopyPurged = false;
+    purgeRefusedCopy();
+  }
 }
 
 /** Whether this browser has IndexedDB at all, refused or not (what a purge or a wipe can act on). */
