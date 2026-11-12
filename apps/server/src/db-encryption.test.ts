@@ -2492,35 +2492,52 @@ describe("encryption at rest + key-discard kill switch", () => {
 });
 
 describe("sync stays paused after a reset when the database holding that is gone (ephemeral restart)", () => {
-  it("a config.json from before the reset can't turn sync back on; one edited after it can", async () => {
+  it("an unrelated config.json rewrite can't resume sync, but an explicit admin save can", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loam-sync-pause-test-"));
     cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
     const configPath = join(dataDir, "config.json");
-    writeFileSync(configPath, JSON.stringify({ sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }] } }));
-    const resetAt = Date.now();
-    utimesSync(configPath, new Date(resetAt - 60_000), new Date(resetAt - 60_000));
-    writeFileSync(join(dataDir, ".loam-sync-off-after-reset"), JSON.stringify({ at: resetAt, hadToken: false }));
+    const fileConfig = { sync: { enabled: true, peers: [{ url: "http://192.168.4.30:3000" }] } };
+    const marker = join(dataDir, ".loam-sync-off-after-reset");
+    const resetAt = Date.now() - 60_000;
+    writeFileSync(configPath, JSON.stringify(fileConfig));
+    const beforeReset = new Date(resetAt - 60_000);
+    utimesSync(configPath, beforeReset, beforeReset);
+    writeFileSync(marker, JSON.stringify({ at: resetAt, hadToken: false }));
 
-    const syncEnabled = async (app: LoamApp) => {
-      const admin = await newSession(app);
-      const config = await app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie: admin.cookie } });
+    const syncEnabled = async (app: LoamApp, cookie: string) => {
+      const config = await app.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie } });
+      expect(config.statusCode).toBe(200);
       return (config.json() as { sync: { enabled: boolean } }).sync.enabled;
     };
 
     const first = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false });
-    expect(await syncEnabled(first)).toBe(false);
-    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(true);
-    await first.close();
+    try {
+      expect(await syncEnabled(first, (await newSession(first)).cookie)).toBe(false);
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      await first.close();
+    }
 
-    // The operator turns it on by hand after the reset: that choice stands, and the note goes.
+    // An ephemeral restart drops the database. A later launcher write preserves the old sync settings.
     rmSync(join(dataDir, "loam.db"), { force: true });
     rmSync(join(dataDir, "loam.db-wal"), { force: true });
     rmSync(join(dataDir, "loam.db-shm"), { force: true });
-    utimesSync(configPath, new Date(resetAt + 60_000), new Date(resetAt + 60_000));
+    writeFileSync(configPath, JSON.stringify({ ...fileConfig, llm: { onDevice: { enabled: false } } }));
     const second = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false });
     cleanups.push(() => second.close());
-    expect(await syncEnabled(second)).toBe(true);
-    expect(existsSync(join(dataDir, ".loam-sync-off-after-reset"))).toBe(false);
+    const admin = await newSession(second);
+    expect(await syncEnabled(second, admin.cookie)).toBe(false);
+    expect(existsSync(marker)).toBe(true);
+
+    const resume = await second.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie: admin.cookie },
+      payload: { sync: { enabled: true } },
+    });
+    expect(resume.statusCode).toBe(200);
+    expect(await syncEnabled(second, admin.cookie)).toBe(true);
+    expect(existsSync(marker)).toBe(false);
   });
 });
 

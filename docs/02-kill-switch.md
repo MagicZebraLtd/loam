@@ -73,7 +73,8 @@
 > also strips the plaintext bearer `sync.token` (and the chat service's API key). Each reset that found sync
 > on leaves `.loam-sync-off-after-reset` in the data folder (JSON: when, and whether a token was set); every
 > boot logs it, `GET /api/admin/sync` reports it as `pausedByReset { at, tokenDropped }` and the admin Sync
-> panel shows it, until an admin turns sync on again or removes every peer. **A linked network keeps its own
+> panel shows it, until an admin turns sync on again or removes every peer. Editing `config.json` does not
+> lift the pause; turn sync back on in the admin Sync panel. **A linked network keeps its own
 > copy** of the public channels: the reset cannot reach it, and turning sync on again brings that copy back.
 > The admin reset dialog says so whenever peers are configured.
 

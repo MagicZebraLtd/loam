@@ -2594,31 +2594,16 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   }
 
   /**
-   * At boot: say that an Emergency Reset paused sync, while it still applies (sync off, peers left), and drop
-   * the note once it doesn't (config.json turned sync on by hand after the reset, or there are no peers). A reset that
-   * restarted the node also dropped the sync token, which the admin has to set again.
+   * A reset's sync pause outlives the database, including on an ephemeral restart. A config file write
+   * does not lift the pause: the launcher can rewrite unrelated settings while preserving stale sync values.
    */
-  async function reportSyncPausedByReset(): Promise<void> {
+  function applySyncPauseAfterReset(): void {
     const paused = lifecycle.syncPausedByReset();
     if (!paused) {
       return;
     }
-    if (!appConfig.sync.peers.length) {
-      lifecycle.clearSyncPausedByReset();
-      return;
-    }
-    if (appConfig.sync.enabled) {
-      // Sync is on again. Honour that only if someone turned it on after the reset: an ephemeral network's
-      // database (holding the paused config) is gone after a restart, and a config.json written before the
-      // reset would otherwise switch sync back on and let the linked networks hand the wiped posts back.
-      // An admin's save clears the note itself, so here the only later source is a hand edit of config.json.
-      const configChangedAt = await stat(configPath).then((info) => info.mtimeMs, () => undefined);
-      if (configChangedAt === undefined || configChangedAt > paused.at) {
-        lifecycle.clearSyncPausedByReset();
-        return;
-      }
-      appConfig = { ...appConfig, sync: { ...appConfig.sync, enabled: false } };
-    }
+    appConfig = lifecycle.withSyncPausedByReset(appConfig);
+    if (!appConfig.sync.peers.length) return;
     const tokenNote =
       paused.hadToken && appConfig.sync.token === undefined
         ? " The reset also dropped the sync token (it is not carried across a restart): set a new one first."
@@ -2653,7 +2638,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
   try {
     await loadAppConfig();
-    await reportSyncPausedByReset();
+    applySyncPauseAfterReset();
     loadData();
     reapExpiredMessages();
   } catch (error) {
