@@ -390,8 +390,8 @@ function HostScreen() {
     void clearSharedFiles();
   }, []);
 
-  // What an earlier release's WebView stored under its old origin (cached messages, the identity token) can't
-  // be reached from 127.0.0.1, so no reset would clear it. Delete it at every launch; a no-op once gone.
+  // The new origin cannot reach data left at the old address. Request native cleanup on every launch without
+  // navigating there; the native module picks the most complete cleanup supported by this WebView.
   useEffect(() => {
     deleteWebOriginData(LEGACY_HOST_WEBVIEW_ORIGIN);
   }, []);

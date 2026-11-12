@@ -46,7 +46,7 @@ declare class LoamHotspotModule extends NativeModule<LoamHotspotEvents> {
   /** Unpin the app (leave lock-task mode). */
   stopKiosk(): void;
   closeApp(): void;
-  /** Delete everything a WebView origin stored (IndexedDB, localStorage, service workers, caches). */
+  /** Request scoped WebView storage cleanup without navigating to the old origin. */
   deleteWebOriginData(origin: string): void;
 }
 
