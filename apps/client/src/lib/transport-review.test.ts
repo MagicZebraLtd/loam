@@ -547,6 +547,34 @@ describe("clearing the image cache while images are mounted (review 2026-09-25 #
     expect(await encryptedImageUrl("/img/a")).toMatch(/^blob:test\//);
   });
 
+  it("withholds a pinned image until an Optional node's tunnel is ready", async () => {
+    const host = createTransportIdentity();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const fetch = vi.fn(tunnelNode(host, () => ({ status: 200, json: {} })));
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test/pinned");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    function Img() {
+      return h("img", { src: useEncryptedImage("/img/a") });
+    }
+    try {
+      expect(await encryptedImageUrl("/img/a")).toBe("/img/a");
+      localStorage.setItem(PIN_KEY(), host.publicKey);
+      render(h(Img, null), container);
+      expect(container.querySelector("img")?.hasAttribute("src")).toBe(false);
+      expect(await encryptedImageUrl("/img/a")).toBe("");
+      expect(fetch).not.toHaveBeenCalled();
+
+      await ensureSession("optional", host.publicKey);
+      await vi.waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:test/pinned"));
+      expect(fetch.mock.calls.every(([url]) => !String(url).endsWith("/img/a"))).toBe(true);
+    } finally {
+      render(null, container);
+      container.remove();
+    }
+  });
+
   it("a mounted useEncryptedImage re-resolves its revoked blob: URL after the clear", async () => {
     await tunnelWithBlobs();
     const container = document.createElement("div");

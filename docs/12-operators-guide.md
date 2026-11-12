@@ -156,8 +156,9 @@ the QR, and the address it gives when linking networks), and that address doesn'
 
 **The code is the whole invitation.** People connect to the same Wi-Fi or hotspot, scan the code, and
 LOAM opens in their browser. Nothing to install, no account, and the code carries the network's
-encryption key, so everything they post or receive is encrypted from the first request, pictures and files
-included. (Someone who types the address instead gets less: see **Connections** in [§4](#4-shaping-the-network).)
+encryption key. The page and public bootstrap load over plain HTTP. Once the secure session is established,
+it encrypts messages, pictures and files. (Someone who types the address instead gets less: see
+**Connections** in [§4](#4-shaping-the-network).)
 
 - **From the host phone:** **Invite people** in the host menu shows the codes. On Hotspot there are two, the hotspot's
   Wi-Fi first and then LOAM; on Wi-Fi there's one. A network the phone hosts always requires encryption,
@@ -198,10 +199,11 @@ until you switch back to **Custom** ([docs/09](09-security-profiles.md)):
 
 (Open and Standard currently set the same things.)
 
-**Connections.** **Optional** encrypts everything for everyone who joins by scanning, and still lets in a
+**Connections.** **Optional** encrypts messages, pictures and files for people who join by scanning, and still lets in a
 device that typed the address by hand. That device's pictures and files go unencrypted, and its sign-in
 cookie travels unencrypted too, so anyone listening on the Wi-Fi can read its messages and send messages as
-it. **Required** refuses those devices (they are asked to scan) and hides which pages anyone asks for. A
+it. **Required** refuses unencrypted sessions (users are asked to scan) and hides API paths once a secure
+session is established. The connection key does not grant admission; the network's join policy still applies. A
 network the Android app hosts is always **Required**, whatever this setting says. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
 released app) runs unencrypted, and it shows everyone a red warning ([docs/08](08-transport-security.md)).
 Neither setting protects against someone on the Wi-Fi who can alter traffic while a phone loads LOAM: the

@@ -1,13 +1,15 @@
 import { useEffect, useState } from "preact/hooks";
+import { useSyncExternalStore } from "preact/compat";
 
 import {
   apiUrl,
   encryptedImageUrl,
   getImageCacheGeneration,
-  isTunnelActive,
+  getImageTransportMode,
   releaseImageUrl,
   retainImageUrl,
   subscribeImageCacheCleared,
+  subscribeImageTransportChanged,
 } from "./transport";
 
 /**
@@ -23,27 +25,18 @@ import {
  * @returns The `src` to use, or `undefined` while a tunnelled image is still resolving.
  */
 export function useEncryptedImage(path: string | undefined): string | undefined {
-  const [src, setSrc] = useState<string | undefined>(() =>
-    path === undefined ? undefined : isTunnelActive() ? undefined : apiUrl(path),
-  );
+  const mode = useSyncExternalStore(subscribeImageTransportChanged, getImageTransportMode);
+  const [image, setImage] = useState<{ path: string; src: string }>();
   // The image cache's generation: `clearImageObjectUrls` (a wipe, an identity change) revokes every cached
   // `blob:` URL and bumps it, so an image still on screen re-resolves instead of keeping a dead URL.
   const [generation, setGeneration] = useState(getImageCacheGeneration);
   useEffect(() => subscribeImageCacheCleared(() => setGeneration(getImageCacheGeneration())), []);
 
   useEffect(() => {
-    if (path === undefined) {
-      setSrc(undefined);
-      return;
-    }
-
-    if (!isTunnelActive()) {
-      setSrc(apiUrl(path));
-      return;
-    }
+    setImage(undefined);
+    if (path === undefined || mode !== "tunnel") return;
 
     let active = true;
-    setSrc(undefined);
     // Hold the cached `blob:` URL for as long as this element shows it, so the bounded cache never revokes
     // a URL still on screen (it would render as a broken image). Retained BEFORE resolving, so a fetch that
     // completes and fills the cache in between can't evict it either.
@@ -51,7 +44,7 @@ export function useEncryptedImage(path: string | undefined): string | undefined 
     void encryptedImageUrl(path).then((resolved) => {
       if (active) {
         // Fail-closed "" → undefined: never set an empty src (the browser would re-request the page URL).
-        setSrc(resolved || undefined);
+        setImage(resolved ? { path, src: resolved } : undefined);
       }
     });
 
@@ -59,11 +52,9 @@ export function useEncryptedImage(path: string | undefined): string | undefined 
       active = false;
       releaseImageUrl(path);
     };
-    // `isTunnelActive()` is a dep, not just `path`: when the node's transport mode flips live (an admin
-    // toggling `transportEncryption` → `configUpdated` re-renders the tree), the tunnel activation changes
-    // for the SAME path, and the image must be re-resolved (direct URL ⇄ tunnelled `blob:`) — keying only on
-    // `path` would leave a stale, possibly-401ing src. `generation` re-resolves after a cache clear.
-  }, [path, isTunnelActive(), generation]);
+  }, [path, mode, generation]);
 
-  return src;
+  if (path === undefined || mode === "pending") return undefined;
+  if (mode === "direct") return apiUrl(path);
+  return image?.path === path ? image.src : undefined;
 }
