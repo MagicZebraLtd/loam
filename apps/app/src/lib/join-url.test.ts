@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { fragmentHasInvite, HOST_WEBVIEW_ORIGIN, hostJoinDisplay, isPrivate10or172, joinUrl, preferredLanAddress, typedAddress, withInviteCode } from './join-url';
+import {
+  alternateJoinUrls, fragmentHasInvite, HOST_WEBVIEW_ORIGIN, hostJoinDisplay, isPrivate10or172, joinUrl,
+  preferredLanAddress, withInviteCode,
+} from './join-url';
 
 describe('joinUrl', () => {
   it('targets the discovered hotspot address when the hotspot is running, never a reported LAN address', () => {
@@ -104,10 +107,17 @@ describe('withInviteCode', () => {
   });
 });
 
-describe('typedAddress', () => {
-  it('drops the key and invite code that only work scanned', () => {
-    expect(typedAddress('http://10.0.2.16:3000#k=abc&i=CODE')).toBe('http://10.0.2.16:3000');
-    expect(typedAddress('http://10.0.2.16:3000')).toBe('http://10.0.2.16:3000');
+describe('alternateJoinUrls', () => {
+  it('writes each address as a join URL carrying the same key and invite fragment', () => {
+    expect(alternateJoinUrls(['10.0.0.5', '192.168.1.9'], 'http://172.20.10.2:3000#k=abc&i=xyz')).toEqual([
+      'http://10.0.0.5:3000#k=abc&i=xyz',
+      'http://192.168.1.9:3000#k=abc&i=xyz',
+    ]);
+  });
+
+  it('takes a bare fragment, and leaves the URL alone when there is none', () => {
+    expect(alternateJoinUrls(['10.0.0.5'], '#k=abc')).toEqual(['http://10.0.0.5:3000#k=abc']);
+    expect(alternateJoinUrls(['10.0.0.5'], '')).toEqual(['http://10.0.0.5:3000']);
   });
 });
 

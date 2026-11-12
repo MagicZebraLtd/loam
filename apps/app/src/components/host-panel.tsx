@@ -1,5 +1,5 @@
 import { wifiPayload } from '@loam/qr';
-import { Platform, StyleSheet } from 'react-native';
+import { Platform, Pressable, Share, StyleSheet } from 'react-native';
 
 import { QRCode } from './qr-code';
 import { ThemedText } from './themed-text';
@@ -9,7 +9,7 @@ import { Spacing } from '@/constants/theme';
 import type { HostMode } from '@/lib/host-mode';
 import { androidApiLevel, hotspotAsksForLocation } from '@/lib/hotspot-permissions';
 import { t, type AppCatalogKey } from '@/lib/i18n';
-import { typedAddress } from '@/lib/join-url';
+import { alternateJoinUrls } from '@/lib/join-url';
 
 /** Live host state, supplied by the embedded server + hotspot native module (initiative 4). */
 export type HotspotInfo = {
@@ -121,14 +121,42 @@ export function HostPanel({ state }: { state: HostState }) {
   );
 }
 
-/** "If that doesn't load, this host is also at: …" — only when there is somewhere else to try. */
-function AlsoAt({ addresses }: { addresses?: string[] }) {
+/**
+ * The join link printed under a QR, in full: every network the app hosts requires encryption, so the address
+ * without its `#k=` key only opens the "scan the code" screen. Selectable, with a button that hands it to the
+ * share sheet (which also copies it), for a laptop or a phone that can't scan.
+ */
+function JoinLink({ url }: { url: string }) {
+  return (
+    <>
+      <ThemedText type="code" style={styles.manual} selectable>
+        {url}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textSecondary" style={styles.manual}>
+        {t('host.fullLinkHint')}
+      </ThemedText>
+      <Pressable
+        accessibilityRole="button"
+        hitSlop={Spacing.two}
+        onPress={() => {
+          Share.share({ message: url }).catch(() => undefined);
+        }}>
+        <ThemedText type="link">{t('host.shareLink')}</ThemedText>
+      </Pressable>
+    </>
+  );
+}
+
+/** "If that doesn't load, this host is also at: …", only when there is somewhere else to try. */
+/** The host's other addresses, each as a URL carrying the join key (`joinUrl`'s fragment): every network the
+ * app hosts requires encryption, so a bare address would only open the "scan the code" screen. */
+function AlsoAt({ addresses, joinUrl }: { addresses?: string[]; joinUrl: string }) {
   if (!addresses || addresses.length === 0) {
     return null;
   }
   return (
     <ThemedText type="small" themeColor="textSecondary" style={styles.manual}>
-      {t('host.alsoAt', { addresses: addresses.join(', ') })}
+      {t('host.alsoAt', { addresses: alternateJoinUrls(addresses, joinUrl).join(', ') })}
     </ThemedText>
   );
 }
@@ -155,10 +183,8 @@ function WifiJoin({ state }: { state: HostState }) {
             {state.wired ? t('host.wiredScan') : state.wifiNetwork ? t('host.wifiScanNamed') : t('host.wifiScan')}
           </ThemedText>
           <QRCode value={state.serverUrl} />
-          <ThemedText type="code" style={styles.manual}>
-            {typedAddress(state.serverUrl)}
-          </ThemedText>
-          <AlsoAt addresses={state.addresses} />
+          <JoinLink url={state.serverUrl} />
+          <AlsoAt addresses={state.addresses} joinUrl={state.serverUrl} />
         </>
       ) : state.status === 'starting' ? (
         <ThemedText type="small" themeColor="textSecondary" style={styles.pending}>
@@ -169,7 +195,7 @@ function WifiJoin({ state }: { state: HostState }) {
           <ThemedText type="small" themeColor="textSecondary" style={[styles.manual, styles.pending]}>
             {t('host.wifiNone')}
           </ThemedText>
-          <AlsoAt addresses={state.addresses} />
+          <AlsoAt addresses={state.addresses} joinUrl={state.manualFragment ?? ''} />
         </>
       )}
       <ThemedText type="small" themeColor="textSecondary" style={styles.manual}>
@@ -221,10 +247,8 @@ function HotspotJoin({ state }: { state: HostState }) {
         {state.serverUrl ? (
           <>
             <QRCode value={state.serverUrl} />
-            <ThemedText type="code" style={styles.manual}>
-              {typedAddress(state.serverUrl)}
-            </ThemedText>
-            <AlsoAt addresses={state.addresses} />
+            <JoinLink url={state.serverUrl} />
+            <AlsoAt addresses={state.addresses} joinUrl={state.serverUrl} />
           </>
         ) : state.hotspotAddress === 'searching' ? (
           <ThemedText type="small" themeColor="textSecondary" style={styles.pending}>

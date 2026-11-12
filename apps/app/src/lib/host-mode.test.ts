@@ -198,6 +198,7 @@ describe('deriveWifiJoinDisplay', () => {
       wired: false,
       connectedClients: 2,
       checked: true,
+      fragment: '#k=abc',
     });
   });
 
@@ -210,7 +211,7 @@ describe('deriveWifiJoinDisplay', () => {
         connectedClients: [],
         fragment: '',
       }),
-    ).toEqual({ serverUrl: 'http://10.1.2.3:3000', addresses: [], ssid: undefined, wired: true, connectedClients: 0, checked: true });
+    ).toEqual({ serverUrl: 'http://10.1.2.3:3000', addresses: [], ssid: undefined, wired: true, connectedClients: 0, checked: true, fragment: '' });
     // A wired-named interface counts as wired without the native flag too.
     expect(
       deriveWifiJoinDisplay({
@@ -243,7 +244,14 @@ describe('deriveWifiJoinDisplay', () => {
 });
 
 describe('toWifiPanelState', () => {
-  const base = { addresses: [], connectedClients: 0, wired: false };
+  const base = { addresses: [], connectedClients: 0, wired: false, fragment: '' };
+
+  it('keeps the key fragment for the "also at" addresses, even off Wi-Fi', () => {
+    expect(toWifiPanelState({ ...base, fragment: '#k=abc', serverUrl: undefined, ssid: undefined, checked: true })).toMatchObject({
+      status: 'stopped',
+      manualFragment: '#k=abc',
+    });
+  });
 
   it('names a wired connection', () => {
     expect(toWifiPanelState({ ...base, serverUrl: 'http://10.1.2.3:3000', ssid: undefined, wired: true, checked: true })).toEqual({

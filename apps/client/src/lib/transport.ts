@@ -585,6 +585,18 @@ function launcherHostKey(): string | undefined {
  * retry paths (`reHandshake`, and `loadConfig`'s resume recovery) force a fresh handshake to recover.
  */
 export async function ensureSession(mode: TransportEncryption, configHostKey?: string): Promise<void> {
+  const before = getImageTransportMode();
+  const pending = ensureTransportSession(mode, configHostKey);
+  const during = getImageTransportMode();
+  if (during !== before) notifyImageTransportChanged();
+  try {
+    await pending;
+  } finally {
+    if (getImageTransportMode() !== during) notifyImageTransportChanged();
+  }
+}
+
+async function ensureTransportSession(mode: TransportEncryption, configHostKey?: string): Promise<void> {
   // Inside the Android host's own WebView the launcher-provided key is trusted directly (`launcherHostKey`):
   // adopt it before the `#k=` is read, so the launcher's own fragment is a quiet confirmation rather than a
   // "different key" prompt on every boot of an ephemeral-key node.
@@ -1191,6 +1203,27 @@ export function isTunnelActive(): boolean {
   return !!session && lastParams?.mode === "required";
 }
 
+/** A QR pin requires a tunnel even before a handshake finishes on an Optional node. */
+export function getImageTransportMode(): "direct" | "pending" | "tunnel" {
+  if (isTunnelActive() && sessionQrVerified && !isHostKeyPinBroken()) return "tunnel";
+  return lastParams?.mode === "required" || getCachedHostPublicKey() !== undefined ? "pending" : "direct";
+}
+
+const imageTransportListeners = new Set<() => void>();
+
+export function subscribeImageTransportChanged(listener: () => void): () => void {
+  imageTransportListeners.add(listener);
+  const unsubscribeSession = subscribeSessionReplaced(listener);
+  return () => {
+    imageTransportListeners.delete(listener);
+    unsubscribeSession();
+  };
+}
+
+function notifyImageTransportChanged(): void {
+  for (const listener of imageTransportListeners) listener();
+}
+
 /** Bounded cache of tunnelled image object URLs (`path → blob: URL`), so an avatar that appears in
  * dozens of rows is fetched once. Evicting (or resetting) revokes the URL to release the blob. */
 const imageObjectUrls = new Map<string, string>();
@@ -1237,7 +1270,8 @@ const IMAGE_URL_CACHE_MAX = 200;
  * Resolve an image path to a render-ready `src`. With the tunnel active (required mode) the raw
  * endpoint refuses a direct `<img>` GET, so the bytes are fetched through the tunnel (coming back
  * sealed) and handed back as a cached `blob:` object URL. Otherwise returns the plain same-origin URL
- * unchanged. Concurrent callers for the same path share a single in-flight fetch.
+ * unchanged only if the client does not require a tunnel. Concurrent callers for the same path share
+ * a single in-flight fetch.
  *
  * FAILS CLOSED (docs/20 §11): when the tunnel is active and the fetch fails, it returns an empty string
  * — NEVER the raw `apiUrl(path)`. Falling back to the raw URL would make the browser issue a direct,
@@ -1245,9 +1279,9 @@ const IMAGE_URL_CACHE_MAX = 200;
  * relying on plaintext bytes), defeating the tunnel. A missing image beats a downgraded one.
  */
 export async function encryptedImageUrl(path: string): Promise<string> {
-  if (!isTunnelActive()) {
-    return apiUrl(path);
-  }
+  const mode = getImageTransportMode();
+  if (mode === "direct") return apiUrl(path);
+  if (mode === "pending") return "";
   const cached = imageObjectUrls.get(path);
   if (cached) {
     return cached;

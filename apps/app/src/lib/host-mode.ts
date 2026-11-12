@@ -130,6 +130,8 @@ export type WifiJoinDisplay = {
   connectedClients: number;
   /** Whether the native station state has been read at least once since the screen opened. */
   checked: boolean;
+  /** The transport `#k=` fragment, so the "also at" addresses carry the key even with no join URL. */
+  fragment: string;
 };
 
 /** Everything the Wi-Fi-mode panel shows, from the native station read and the launcher's lists. */
@@ -155,6 +157,7 @@ export function deriveWifiJoinDisplay(opts: {
     wired,
     connectedClients: new Set(connectedClients).size,
     checked: station !== undefined,
+    fragment,
   };
 }
 
@@ -164,7 +167,7 @@ export function deriveWifiJoinDisplay(opts: {
  * network.
  */
 export function toWifiPanelState(display: WifiJoinDisplay): HostState {
-  const { serverUrl, addresses, ssid, wired, connectedClients, checked } = display;
+  const { serverUrl, addresses, ssid, wired, connectedClients, checked, fragment } = display;
   const status: HostState['status'] = serverUrl ? 'running' : checked ? 'stopped' : 'starting';
   return {
     mode: 'wifi',
@@ -172,6 +175,7 @@ export function toWifiPanelState(display: WifiJoinDisplay): HostState {
     serverUrl,
     addresses,
     connectedClients,
+    ...(fragment ? { manualFragment: fragment } : {}),
     ...(ssid ? { wifiNetwork: ssid } : {}),
     ...(wired ? { wired: true } : {}),
   };

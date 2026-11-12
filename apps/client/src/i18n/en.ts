@@ -278,6 +278,8 @@ export const en = {
   "admin.llmTestUnauthorized": "The service refused the key.",
   "admin.llmTestBadResponse": "The service answered, but not in a way LOAM understands. Check the address.",
   "admin.llmTestNotAllowed": "A hardened network can only use a service on this computer or the local network.",
+  "admin.llmTestUnencrypted": "This network only reaches a service on another computer over HTTPS. Use an https:// address.",
+  "admin.llmRefusedOff": "Members can't use the assistant until this is changed.",
   "admin.llmModel": "Model",
   "admin.llmModelHint": "The model's name as the service knows it. Test the connection to pick from a list.",
   "admin.llmModelPick": "Start typing to pick from the service's list.",
@@ -288,6 +290,7 @@ export const en = {
   "admin.llmOnDeviceModel": "On-device model name",
   "admin.llmOnDeviceNote": "Runs a small model on the phone itself. Works only on the Android host with a model file added in the host app's Assistant screen (never shipped); does nothing elsewhere.",
   "error.llm_cloud_not_allowed": "A hardened network can't use an online chat service. Pick a service on this computer or the local network, or change the security profile.",
+  "error.llm_unencrypted_not_allowed": "This network only sends messages to an assistant on another computer over HTTPS. Use an https:// address, or turn the assistant off.",
   // The assistant's DM: where its answers come from (NetworkConfig.assistantDestination, docs/06).
   "assistant.runsOnDevice": "Runs on the host's phone",
   "assistant.runsOnHost": "Runs on the host's computer",

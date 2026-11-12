@@ -110,9 +110,11 @@ export function fragmentHasInvite(fragment: string): boolean {
 }
 
 /**
- * The address to print beside a join QR: the URL without its fragment. The key and invite code (`#k=…&i=…`)
- * only work scanned, and nobody can type them anyway.
+ * The host's other addresses as full join URLs carrying the same fragment as `joinUrl`, for the "also at"
+ * line. Android hosts require encryption, so the alternate links must carry the key too.
  */
-export function typedAddress(url: string): string {
-  return url.split('#')[0]!;
+export function alternateJoinUrls(addresses: string[], joinUrl: string): string[] {
+  const hash = joinUrl.indexOf('#');
+  const fragment = hash === -1 ? '' : joinUrl.slice(hash);
+  return addresses.map((address) => `http://${address}:${SERVER_PORT}${fragment}`);
 }

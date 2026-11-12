@@ -599,7 +599,7 @@ export const LlmModelsResponseSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), models: z.array(z.string().min(1).max(LLM_MODEL_MAX_LENGTH)).max(500) }),
   z.object({
     ok: z.literal(false),
-    code: z.enum(["llm_unreachable", "llm_unauthorized", "llm_bad_response", "llm_not_allowed"]),
+    code: z.enum(["llm_unreachable", "llm_unauthorized", "llm_bad_response", "llm_not_allowed", "llm_unencrypted"]),
   }),
 ]);
 export type LlmModelsResponse = z.infer<typeof LlmModelsResponseSchema>;
@@ -750,7 +750,17 @@ export const LoamConfigSchema = z.object({
   node: NodeIdentityConfigSchema,
   identity: IdentityConfigSchema,
   features: FeatureFlagsSchema,
-  llm: z.object({ ollama: OllamaConfigSchema, openai: OpenAiCompatibleConfigSchema, onDevice: OnDeviceLlmConfigSchema }),
+  llm: z.object({
+    ollama: OllamaConfigSchema,
+    openai: OpenAiCompatibleConfigSchema,
+    onDevice: OnDeviceLlmConfigSchema,
+    /**
+     * Read-only, like `apiKeySet`: on the config the admin API returns, why the enabled backend is kept off on
+     * this network (a hardened network and an online service; an Android-hosted network and plain HTTP to
+     * another machine). Never stored, and dropped from an update.
+     */
+    refusal: z.enum(["llm_cloud_not_allowed", "llm_unencrypted_not_allowed"]).optional(),
+  }),
   admin: AdminConfigSchema,
   killSwitch: KillSwitchConfigSchema,
   retention: RetentionConfigSchema,
@@ -1663,6 +1673,7 @@ export const SERVER_ERROR_CODES = [
   "message_removed",
   "assistant_busy",
   "llm_cloud_not_allowed",
+  "llm_unencrypted_not_allowed",
   "invalid_llm_models_request",
   "internal_error",
   "dm_unavailable",

@@ -6,6 +6,24 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 
 ## [Unreleased]
 
+### Security
+- **Every network the Android app hosts now requires encryption.** Whatever the network's security profile,
+  a phone-hosted network accepts only encrypted connections, so everything members post or receive is
+  encrypted, pictures and files included. (The web app itself and the public network settings it starts
+  from still load unencrypted, as on every LOAM network: docs/08.) Someone who opens the address without
+  the code is asked to scan it; the share screen now prints the whole join link, key included, with a
+  button to share or copy it, for a laptop or a phone that can't scan. The key in the code is public, not a
+  password: who may join is still the network's join setting. Members who joined a phone-hosted network
+  by typing its address get a new identity after the upgrade, once they scan the code: their old one was
+  tied to an unencrypted sign-in cookie. Syncing with networks linked by a code was already sealed both
+  ways; a peer added by hand could fall back to unencrypted sync on a Community network, and now can't.
+  The desktop app and `npx loamnet` are unchanged. (docs/08)
+- **On a network the Android app hosts, an assistant on another computer must use HTTPS.** Saving an `http://`
+  Ollama or chat-service address that isn't on the phone itself is refused (`llm_unencrypted_not_allowed`),
+  the Test button won't send the key to one, and no redirect is followed. A network that already has one
+  starts with the assistant off; the admin's Assistant settings say why, and every other setting still
+  saves. (docs/06)
+
 ### Fixed
 - **The Mac app now carries Electron's licence files** (`LICENSE.electron.txt` and `LICENSES.chromium.html`,
   in the bundle's Resources), as the Windows and Linux builds already did.

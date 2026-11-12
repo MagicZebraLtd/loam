@@ -166,16 +166,19 @@ the QR, and the address it gives when linking networks), and that address doesn'
 
 **The code is the whole invitation.** People connect to the same Wi-Fi or hotspot, scan the code, and
 LOAM opens in their browser. Nothing to install, no account, and the code carries the network's
-encryption key, so once the page has loaded, everything between their phone and the host is encrypted,
-pictures and files included. (The page itself and a public bootstrap request come over plain HTTP before
-the encrypted session starts: see [docs/08](08-transport-security.md).) Someone who types the address instead gets much less: see **Connections** in
-[§4](#4-shaping-the-network).
+encryption key. The page and public bootstrap load over plain HTTP. Once the secure session is established,
+it encrypts messages, pictures and files (see [docs/08](08-transport-security.md)). Someone who types only
+the address gets less protection: see **Connections** in [§4](#4-shaping-the-network).
 
 - **From the host phone:** **Invite people** in the host menu shows the codes. On Hotspot there are two, the hotspot's
-  Wi-Fi first and then LOAM; on Wi-Fi there's one. The address is printed beside it for anyone who'd
-  rather type. **Display mode** shows the codes full screen, as large as the screen allows, keeps the
+  Wi-Fi first and then LOAM; on Wi-Fi there's one. A network the phone hosts always requires encryption,
+  so the address on its own only shows a "scan the code" screen. Under the code is the whole join link,
+  key included, and **Share or copy the link** hands it to a laptop or a phone that can't scan.
+  **Display mode** shows the codes full screen, as large as the screen allows, keeps the
   screen on and pins LOAM in front; press and hold to leave it. The network keeps running with the
-  screen off either way.
+  screen off either way. After upgrading to the release that made this the rule, anyone who had joined
+  your phone's network by typing its address gets a new identity once they scan: their old name, messages
+  and roles stay with the old identity.
 - **From inside LOAM:** admins and greeters have **Invite someone** in the sidebar, with the code, a
   **Copy link** button and a note on how to join. It includes the encryption key only when that device
   joined by scanning, so a key can't be passed on second-hand.
@@ -206,16 +209,17 @@ until you switch back to **Custom** ([docs/09](09-security-profiles.md)):
 
 (Open and Standard currently set the same things.)
 
-**Connections.** **Optional** encrypts everything for everyone who joins by scanning, pictures and files
-included, and hides which pages they ask for. It still lets in a device that typed the address by hand,
-and that device gets much less: its sign-in cookie travels unencrypted, so anyone listening on the Wi-Fi
-can copy it and read or post as that person, and its pictures and files download unencrypted.
-**Required** refuses those devices and asks them to scan the code. Optional is the default. The web admin
-and the desktop app reach Required only through the Hardened profile (the desktop app shows the current
-setting); the terminal UI's **Settings** screen changes it on its own, as does
-`security.transportEncryption` in `config.json`. Leaving Hardened for Custom keeps Required, and the web
-admin has no control to turn it back to Optional. There is no "off": only a developer debugging mode (`LOAM_DEV_MODE`, never on a
-released app) runs unencrypted, and it shows everyone a red warning ([docs/08](08-transport-security.md)).
+**Connections.** **Optional** encrypts messages, pictures and files for people who scan the code. It also
+allows people to type the address alone. Their pictures, files and sign-in cookie travel unencrypted, so
+someone listening on the Wi-Fi can copy the cookie and read or post as them. **Required** refuses
+unencrypted sessions and asks people to scan the code. A secure session from a scanned code also hides
+API paths after it starts. The connection key does not grant admission; the network's join policy still applies.
+
+Android hosts always use **Required**. On a computer, **Optional** is the default. The web admin and
+desktop app can select **Required** through the Hardened profile. The terminal UI's **Settings** screen
+and `security.transportEncryption` in `config.json` can change it directly. Leaving Hardened for Custom
+keeps **Required**. Only developer mode (`LOAM_DEV_MODE`) runs without transport encryption, and it shows
+everyone a red warning ([docs/08](08-transport-security.md)).
 Neither setting protects against someone on the Wi-Fi who can alter traffic while a phone loads LOAM: the
 page itself arrives over plain HTTP, so they could hand that phone a changed copy (docs/08, threat 4). On an
 open hotspot with strangers, that is the limit to explain to people who need to know it.

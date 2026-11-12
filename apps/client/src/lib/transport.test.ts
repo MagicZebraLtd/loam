@@ -1408,6 +1408,21 @@ describe("transport", () => {
       expect(isTunnelActive()).toBe(true);
     });
 
+    it("tunnels a QR-joined client's pictures on an optional node too: the scanned key pins the join to required", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const { status, json } = handshakeResponseBody(host.secretKey, host.publicKey, init.body as string);
+          return new Response(JSON.stringify(json), { status });
+        }),
+      );
+
+      await ensureSession("optional", host.publicKey);
+      expect(isTunnelActive()).toBe(true);
+    });
+
     it("FAILS CLOSED under the tunnel: a failed image fetch returns '' — never the raw plaintext URL (docs/20)", async () => {
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;

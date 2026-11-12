@@ -128,12 +128,12 @@ export const PRIVACY_POLICY: PolicySection[] = [
         kind: "p",
         text:
           "Normally nothing leaves the host device except the messages delivered to the people on that network, " +
-          "over the local Wi-Fi or hotspot. When you join by scanning the host's code, LOAM encrypts everything " +
-          "between your device and the host: messages, pictures and files, both ways. Someone who types the " +
-          "address instead of scanning gets much less protection, unless the host requires encrypted " +
-          "connections (then they are asked to scan). Their sign-in cookie travels unencrypted, so anyone " +
-          "listening on the Wi-Fi can copy it, then read their messages and send messages as them. Their " +
-          "pictures and files are sent unencrypted too. The encryption does not protect against someone who " +
+          "over the local Wi-Fi or hotspot. Scanning the host's code sets up an encrypted session for messages, " +
+          "pictures and files. Android hosts always require encrypted connections. If the host requires encryption " +
+          "and you type only the address, LOAM asks you to scan the code. If the host allows unencrypted connections, " +
+          "typing only the address sends your sign-in cookie, pictures and files unencrypted. Anyone listening on " +
+          "the Wi-Fi can copy the cookie, then read your messages and send messages as you. The encryption does not " +
+          "protect against someone who " +
           "can alter the network traffic while LOAM loads on your device: they could give your device a changed " +
           "copy of LOAM that reads your messages. Data leaves the host device only if the host turns on one of " +
           "these:",

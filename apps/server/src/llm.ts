@@ -43,6 +43,12 @@ const MODELS_MAX = 500;
 
 /** The message `applyConfigUpdate` refuses with (mapped to `llm_cloud_not_allowed` in errors.ts). */
 export const CLOUD_ASSISTANT_REFUSED = "A cloud assistant is not allowed on a hardened network";
+/** The message `applyConfigUpdate` refuses with when a network that requires encryption is pointed at an
+ * assistant over plain HTTP on another machine (mapped to `llm_unencrypted_not_allowed` in errors.ts). */
+export const UNENCRYPTED_ASSISTANT_REFUSED = "An assistant on another computer must use HTTPS on this network";
+
+/** What the launcher forces on top of the config (`AppOptions`), as the assistant checks need it. */
+export type LlmLauncherPolicy = { requireTransportEncryption?: boolean };
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -88,12 +94,62 @@ type RedirectPolicy = NonNullable<RequestInit["redirect"]>;
  * Checked before a save is persisted and again at boot, so a hand-edited config.json can't route a hardened
  * network's DMs to the internet either.
  */
-export function llmProviderRefusal(config: LoamConfig): string | undefined {
+export function llmProviderRefusal(config: LoamConfig, policy: LlmLauncherPolicy = {}): string | undefined {
   const baseUrl = activeBackendUrl(config.llm);
-  if (config.security.profile === "hardened" && baseUrl !== undefined && !isLocalNetworkUrl(baseUrl)) {
+  if (baseUrl === undefined) {
+    return undefined;
+  }
+  if (config.security.profile === "hardened" && !isLocalNetworkUrl(baseUrl)) {
     return CLOUD_ASSISTANT_REFUSED;
   }
+  if (unencryptedBackendRefused(baseUrl, policy)) {
+    return UNENCRYPTED_ASSISTANT_REFUSED;
+  }
   return undefined;
+}
+
+/**
+ * Whether a network whose launcher requires transport encryption (the Android host) must refuse `baseUrl`:
+ * the assistant gets members' messages, so on such a network they may leave this machine only over HTTPS.
+ * Plain HTTP is allowed to a loopback address, which never leaves the machine. Applies to Ollama and an
+ * OpenAI-compatible service alike, since both answer wherever their address points.
+ */
+export function unencryptedBackendRefused(baseUrl: string, policy: LlmLauncherPolicy): boolean {
+  if (!policy.requireTransportEncryption) {
+    return false;
+  }
+  let protocol: string;
+  try {
+    protocol = new URL(baseUrl).protocol;
+  } catch {
+    return true;
+  }
+  return protocol !== "https:" && !isLoopbackLiteral(backendHostname(baseUrl));
+}
+
+/**
+ * Whether `host` (as `backendHostname` gives it) is this machine by its spelling alone: `localhost`, 127/8,
+ * `::1` or an IPv4-mapped 127/8. Unlike `classifyBackendUrl`, not a `*.localhost` name: Node's `fetch` and
+ * Android's resolver look such a name up in DNS like any other (only `localhost` is in the hosts file), so
+ * it can answer from another machine.
+ */
+function isLoopbackLiteral(host: string): boolean {
+  return (
+    host === "localhost" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    // URL parsing spells an IPv4-mapped loopback (`[::ffff:127.0.0.1]`) in hex (`::ffff:7f00:1`).
+    /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
+  );
+}
+
+/**
+ * The active network backend as a save changes it: provider and address. Two configs with the same key send
+ * members' messages to the same place, so a save that keeps an already-refused key changes nothing about
+ * where they could go.
+ */
+export function activeBackendKey(llm: LoamConfig["llm"]): string {
+  return `${activeLlmProvider(llm)} ${activeBackendUrl(llm) ?? ""}`;
 }
 
 /** The address the active network-backed assistant answers from; undefined for the on-device model or off. */
@@ -114,8 +170,10 @@ export function activeBackendUrl(llm: LoamConfig["llm"]): string | undefined {
  * locality check passed. Everywhere else `fetch`'s default (follow) stands, so a service behind a redirecting
  * proxy keeps working.
  */
-export function backendRedirectPolicy(config: LoamConfig): RedirectPolicy {
-  return config.security.profile === "hardened" ? "error" : "follow";
+export function backendRedirectPolicy(config: LoamConfig, policy: LlmLauncherPolicy = {}): RedirectPolicy {
+  // A redirect could take a hardened network's messages to the internet, or an encrypted network's from
+  // HTTPS down to plain HTTP, so neither follows one.
+  return config.security.profile === "hardened" || policy.requireTransportEncryption ? "error" : "follow";
 }
 
 /**
@@ -160,7 +218,14 @@ function backendEndpoint(baseUrl: string): string {
  */
 export function classifyBackendUrl(baseUrl: string): AssistantDestination {
   const host = backendHostname(baseUrl);
-  if (host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "::1") {
+  // URL parsing spells an IPv4-mapped loopback (`[::ffff:127.0.0.1]`) in hex (`::ffff:7f00:1`).
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
+  ) {
     return { kind: "host" };
   }
   return isLocalNetworkUrl(baseUrl) ? { kind: "lan" } : { kind: "online", host };
@@ -296,7 +361,7 @@ export function createLlmLayer(rt: Runtime) {
   /** The backend that answers (`activeLlmProvider`), or `off` when none is enabled or the enabled one is
    * refused on this network (`llmProviderRefusal`). */
   function activeProvider(): LlmProvider {
-    return llmProviderRefusal(rt.appConfig) ? "off" : activeLlmProvider(rt.appConfig.llm);
+    return llmProviderRefusal(rt.appConfig, rt.options) ? "off" : activeLlmProvider(rt.appConfig.llm);
   }
 
   /** Whether any LLM backend is active: Ollama, an OpenAI-compatible service or the on-device model. The
@@ -394,10 +459,12 @@ export function createLlmLayer(rt: Runtime) {
    * @returns The bot `User` after creation or update, or `undefined` when no backend is enabled.
    */
   function ensureBotUser(): User | undefined {
-    const refusal = llmProviderRefusal(rt.appConfig);
+    const refusal = llmProviderRefusal(rt.appConfig, rt.options);
 
     if (refusal && activeLlmProvider(rt.appConfig.llm) !== "off") {
-      // A save can't persist this (applyConfigUpdate refuses it); a hand-edited config.json can.
+      // A save can't introduce this (applyConfigUpdate refuses it, though it keeps one a network already had,
+      // such as an Android host upgraded with a LAN Ollama over plain HTTP); a hand-edited config.json can.
+      // The admin screen says why (`llm.refusal` on the redacted config).
       // The hostname only: an address may carry a path or credentials, and the log outlives the setting.
       const url = activeBackendUrl(rt.appConfig.llm);
       rt.log.warn(`LLM assistant disabled: ${refusal.toLowerCase()} (${url === undefined ? "no address" : backendHostname(url)})`);
@@ -552,7 +619,7 @@ export function createLlmLayer(rt: Runtime) {
       { "content-type": "application/json" },
       { model, stream: true, messages },
       "Ollama",
-      backendRedirectPolicy(rt.appConfig),
+      backendRedirectPolicy(rt.appConfig, rt.options),
     );
 
     for await (const line of lines) {
@@ -592,7 +659,7 @@ export function createLlmLayer(rt: Runtime) {
       openAiHeaders(apiKey),
       { model, stream: true, messages },
       "Chat service",
-      backendRedirectPolicy(rt.appConfig),
+      backendRedirectPolicy(rt.appConfig, rt.options),
     );
 
     for await (const line of lines) {
@@ -750,6 +817,10 @@ export function createLlmLayer(rt: Runtime) {
     if (security.profile === "hardened" && !isLocalNetworkUrl(baseUrl)) {
       return { ok: false, code: "llm_not_allowed" };
     }
+    // And a network that requires encryption never sends the key (or, later, the messages) over plain HTTP.
+    if (unencryptedBackendRefused(baseUrl, rt.options)) {
+      return { ok: false, code: "llm_unencrypted" };
+    }
 
     const url = joinUrl(baseUrl, request.provider === "ollama" ? "/api/tags" : "/models");
     const controller = new AbortController();
@@ -761,7 +832,7 @@ export function createLlmLayer(rt: Runtime) {
         method: "GET",
         headers: openAiHeaders(apiKey),
         signal: controller.signal,
-        redirect: backendRedirectPolicy(rt.appConfig),
+        redirect: backendRedirectPolicy(rt.appConfig, rt.options),
       });
     } catch (error) {
       clearTimeout(timeout);

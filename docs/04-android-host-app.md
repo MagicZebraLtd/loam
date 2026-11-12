@@ -223,6 +223,18 @@ wired adapter's (`WifiJoinDisplay.wired`), the status pill reads "Hosting on a w
 names the connection as wired instead of showing a Wi-Fi name. "N devices connected" works in both modes
 and remains the proof that the path works.
 
+**Joining needs an encrypted connection.** Every network the app hosts requires transport encryption
+(main.js sets `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1`; docs/08), so a browser that opens the bare address
+gets the web client's "scan the join QR" screen. This guarantees encryption, not admission: the host key is
+public, and who may join is the network's join setting. The share screen therefore never prints a bare
+address: under each QR it prints the whole join link, `#k=…` fragment (and invite code) included,
+selectable, with a "Share or copy the link" button (React Native's `Share`, whose sheet includes Copy) for a
+laptop or a phone that can't scan; the "also at" line writes each other address the same way
+(`alternateJoinUrls`), as the manual Gateway route already did. Display mode shows the codes with no
+link under them (too long to type off a poster). A member who had joined by typing the address before this
+was enforced gets a new identity once they scan: the old one lived in a sign-in cookie, which a sealed
+session never accepts (docs/20).
+
 **Client isolation.** Guest, hotel, café and campus networks often stop devices from reaching each other,
 so a joiner there gets a connection error even with a correct address. The Wi-Fi card says so in one
 line and points to Hotspot, which doesn't depend on the network's policy.

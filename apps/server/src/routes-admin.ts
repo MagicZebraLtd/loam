@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 
 import type { AppContext } from "./app-context.js";
 import { mergeConfig } from "./config.js";
-import { llmProviderRefusal } from "./llm.js";
+import { activeBackendKey, llmProviderRefusal } from "./llm.js";
 import { errorBody } from "./errors.js";
 import { makeAdminSetupCode } from "./identity.js";
 import type { KillSwitchResult } from "./kill-switch.js";
@@ -342,10 +342,18 @@ export function applyConfigUpdate(
     return { ok: false, status: 400, error: "Invalid config values" };
   }
 
-  // A hardened network never sends its members' messages to a cloud service (docs/09): refuse the save,
-  // with a code the admin screen words, rather than persist a backend `ensureBotUser` would then skip.
-  const refusal = llmProviderRefusal(next);
-  if (refusal) {
+  // A hardened network never sends its members' messages to a cloud service (docs/09), and a network whose
+  // launcher requires encryption never sends them over plain HTTP to another machine: refuse the save, with
+  // a code the admin screen words, rather than persist a backend `ensureBotUser` would then skip. A save
+  // that leaves an already-refused backend exactly as it was is let through: that backend stays off (the
+  // admin screen says why, from `redactedConfig`'s `llm.refusal`), and refusing it would block every other
+  // setting on a network that upgraded with one (an Android host with a LAN Ollama over plain HTTP).
+  const refusal = llmProviderRefusal(next, ctx.options);
+  const unchanged =
+    refusal !== undefined &&
+    llmProviderRefusal(ctx.appConfig, ctx.options) === refusal &&
+    activeBackendKey(ctx.appConfig.llm) === activeBackendKey(next.llm);
+  if (refusal && !unchanged) {
     return { ok: false, status: 400, error: refusal };
   }
 
