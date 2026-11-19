@@ -16,14 +16,14 @@
     "@loam/display-name": "workspace:*",
     "@loam/qr": "workspace:*",
     "@loam/schema": "workspace:*",
-    "dompurify": "^3.4.17",
+    "dompurify": "^3.4.18",
     "preact": "catalog:",
     "preact-iso": "^2.12.2",
     "snarkdown": "^2.0.0"
   },
   "devDependencies": {
     "@preact/preset-vite": "catalog:",
-    "preact-render-to-string": "^6.8.2",
+    "preact-render-to-string": "^6.8.3",
     "@types/node": "catalog:",
     "fake-indexeddb": "^6.2.8",
     "jsdom": "catalog:",
