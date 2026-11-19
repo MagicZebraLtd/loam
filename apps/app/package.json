@@ -25,7 +25,7 @@
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.3",
     "expo-system-ui": "~57.0.4",
-    "js-sha256": "^1.0.0",
+    "js-sha256": "^1.1.0",
     "llama.rn": "^0.12.6",
     "react": "19.2.3",
     "react-native": "0.86.3",
