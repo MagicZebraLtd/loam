@@ -135,8 +135,10 @@ export function mergeConfig(base: LoamConfig, update: LoamConfigUpdate): LoamCon
   const systemPrompt = merged.llm.ollama.systemPrompt?.trim();
   merged.llm.ollama.systemPrompt = systemPrompt || undefined;
   // The chat service's API key is a bearer secret the node must present, so it is stored in the clear like
-  // `sync.token`. An empty string clears it; an update that leaves it out keeps it (the spread above). The
-  // read-only `apiKeySet` a client may echo back from the redacted config is never stored.
+  // `sync.token`. An empty string clears it; an update that leaves it out keeps it (the spread above), except
+  // that an admin save moving the address to another origin drops it (`applyConfigUpdate`; not done here, so
+  // the boot-time layering never drops a key). The read-only `apiKeySet` a client may echo back from the
+  // redacted config is never stored.
   // (`?? base` so an in-process caller passing `apiKey: undefined` as a literal keeps the key, like JSON that
   // leaves it out; only "" clears.)
   const apiKey = (update.llm?.openai?.apiKey ?? base.llm.openai.apiKey)?.trim();

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { User } from "@loam/schema";
 
 import { buildApp, type LoamApp } from "./app.js";
+import { assistantRevision } from "./test-support/app-harness.js";
 import type { AppOptions, OnDeviceChatHook } from "./types.js";
 
 /**
@@ -167,12 +168,13 @@ describe("a moderator abort of an on-device reply holds the assistant slot until
     const app = await boot(tempDataDir({ llm: { onDevice: { enabled: true, model: "phone" } } }));
     const admin = await newSession(app);
     const user = await newSession(app);
+    const revision = await assistantRevision(app);
     const dm = () =>
       app.server.inject({
         method: "POST",
         url: "/api/messages",
         headers: { cookie: user.cookie },
-        payload: { type: "dm", recipientUserId: botId, body: "hi" },
+        payload: { type: "dm", recipientUserId: botId, body: "hi", assistantDestinationRevision: revision },
       });
 
     expect((await dm()).statusCode).toBe(201);
@@ -181,6 +183,14 @@ describe("a moderator abort of an on-device reply holds the assistant slot until
     const reply = () => app.store.loadMessages().find((message) => message.authorId === botId);
     expect(await waitUntil(() => reply() !== undefined)).toBe(true);
 
+    // The admin isn't in this DM, so they act on it once the member reports it.
+    const report = await app.server.inject({
+      method: "POST",
+      url: "/api/reports",
+      headers: { cookie: user.cookie },
+      payload: { targetType: "message", targetId: reply()?.id, reason: "other" },
+    });
+    expect(report.statusCode).toBe(201);
     const removed = await app.server.inject({
       method: "POST",
       url: `/api/moderation/messages/${reply()?.id}/remove`,

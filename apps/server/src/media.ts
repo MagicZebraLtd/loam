@@ -1,7 +1,9 @@
 // Avatar/attachment file naming, size caps, and magic-byte checks.
 import { randomUUID } from "node:crypto";
 
-import type { AvatarImageMimeType, MessageAttachment } from "@loam/schema";
+import type { AttachmentFileMimeType, AvatarImageMimeType, MessageAttachment } from "@loam/schema";
+
+import { stripControlAndFormatCharacters } from "./identity.js";
 
 /**
  * Generates a new unique avatar image identifier.
@@ -34,12 +36,13 @@ export function isImageAttachmentMime(mimeType: string | undefined): mimeType is
 
 /**
  * Sanitise a user-supplied attachment filename before it goes into a `Content-Disposition` header (and the
- * client's escaped display): strip path separators, quotes, and control chars (header-injection / traversal
+ * client's escaped display): remove control and format characters (bidi overrides and isolates can make
+ * `cv\u202Efdp.exe` read as `cvexe.pdf`), replace path separators and quotes (header-injection / traversal
  * vectors), bound the length, drop any unpaired surrogate (a lone half of a UTF-16 pair is not encodable,
  * so `encodeURIComponent` would throw on it), and fall back to `file` if nothing usable remains.
  */
 export function sanitizeAttachmentName(name: string | undefined): string {
-  const cleaned = (name ?? "")
+  const cleaned = stripControlAndFormatCharacters(name ?? "")
     // eslint-disable-next-line no-control-regex
     .replace(/["\\/\u0000-\u001f]/g, "_")
     .trim()
@@ -217,4 +220,43 @@ export function avatarImageHasExpectedSignature(buffer: Buffer, mimeType: Avatar
   }
 
   return buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP";
+}
+
+/**
+ * The file-name extensions each download-only attachment type may carry, the canonical one first. A stored
+ * name must end with one of them, so a file declared `text/plain` can't download as `update.apk`.
+ */
+const ATTACHMENT_FILE_EXTENSIONS: Record<AttachmentFileMimeType, readonly string[]> = {
+  "application/pdf": ["pdf"],
+  "text/plain": ["txt", "log", "text"],
+  "text/csv": ["csv"],
+  "text/markdown": ["md", "markdown"],
+  "application/json": ["json"],
+  "application/zip": ["zip"],
+  "application/msword": ["doc"],
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ["docx"],
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ["xlsx"],
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ["pptx"],
+};
+
+/**
+ * The name a download-only attachment is stored and downloaded under: `sanitizeAttachmentName`, then made to
+ * end with an extension that fits `mimeType`. When the last extension (compared without case) isn't one the
+ * type accepts, the canonical one is appended (`update.apk` as text/plain becomes `update.apk.txt`), cutting
+ * the name first if needed so it stays within 255 characters.
+ */
+export function attachmentStoredName(name: string | undefined, mimeType: AttachmentFileMimeType): string {
+  const cleaned = sanitizeAttachmentName(name);
+  const accepted = ATTACHMENT_FILE_EXTENSIONS[mimeType];
+  const dot = cleaned.lastIndexOf(".");
+  const extension = dot >= 0 ? cleaned.slice(dot + 1).toLowerCase() : "";
+
+  if (accepted.includes(extension)) {
+    return cleaned;
+  }
+
+  const suffix = `.${accepted[0] ?? "bin"}`;
+  // The cut can split a surrogate pair: a high surrogate left at the end is replaced, as in the sanitiser.
+  const base = cleaned.slice(0, 255 - suffix.length).replace(/[\uD800-\uDBFF]$/, "_");
+  return `${base}${suffix}`;
 }

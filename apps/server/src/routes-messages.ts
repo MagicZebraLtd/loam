@@ -140,7 +140,26 @@ export function registerMessageRoutes(ctx: AppContext): void {
       return reply.code(400).send(errorBody("Invalid message request"));
     }
 
-    const authorId = ctx.getSessionUserId(request, reply);
+    // Resolve the caller to a user record before anything can answer: a cookie minted here must never be
+    // left naming nobody (a socket on it would be in no roster and no approval queue). A banned or pending
+    // caller is told so before the assistant checks below, which would otherwise answer first.
+    const currentUser = ctx.ensureSessionUser(ctx.getSessionUserId(request, reply));
+    const accessError = ctx.participationError(currentUser);
+
+    if (accessError) {
+      return reply.code(403).send(errorBody(accessError));
+    }
+
+    const authorId = currentUser.id;
+
+    // A DM to the assistant names the destination its sender was shown (docs/06). One written for a
+    // destination that has since changed is refused before anything is created or sent anywhere: the app
+    // shows the new destination, and its acknowledgement for an online service, before the member resends.
+    const presentedRevision = body.data.type === "dm" ? body.data.assistantDestinationRevision : undefined;
+
+    if (body.data.type === "dm" && ctx.llm.assistantDestinationStale(body.data.recipientUserId, authorId, presentedRevision)) {
+      return reply.code(409).send(errorBody("The assistant now answers from somewhere else; check where, then send again"));
+    }
 
     // A DM to the assistant starts a streamed LLM reply; refuse up front (nothing created) when this
     // user already has one streaming or the node-wide bound is reached, instead of queueing unboundedly.
@@ -169,7 +188,7 @@ export function registerMessageRoutes(ctx: AppContext): void {
     }
 
     ctx.broadcast({ type: "messageCreated", message: result.message });
-    void ctx.llm.createAssistantResponse(result.message).catch((error: unknown) => ctx.server.log.error(error));
+    void ctx.llm.createAssistantResponse(result.message, presentedRevision).catch((error: unknown) => ctx.server.log.error(error));
     return reply.code(201).send(result);
   });
 
@@ -187,11 +206,6 @@ export function registerMessageRoutes(ctx: AppContext): void {
       return reply.code(404).send(errorBody("Message does not exist"));
     }
 
-    // Don't delete a message that's still streaming: its in-flight writer would re-persist it.
-    if (target.meta?.streaming) {
-      return reply.code(409).send(errorBody("This message is still being written"));
-    }
-
     // Non-admins must still be allowed to write in the target's conversation *now* (not timed out,
     // still in the audience, not archived); admins keep the trusted-host moderation override.
     // `isDelete` relaxes only the feature-SHUTDOWN checks — removing content is cleanup.
@@ -202,6 +216,12 @@ export function registerMessageRoutes(ctx: AppContext): void {
 
     if (mutationError) {
       return reply.code(mutationError.code).send(errorBody(mutationError.error));
+    }
+
+    // Don't delete a message that's still streaming: its in-flight writer would re-persist it. Checked after
+    // the audience check above, so this answer never tells an outsider the message exists.
+    if (target.meta?.streaming) {
+      return reply.code(409).send(errorBody("This message is still being written"));
     }
 
     const deletionSet = ctx.collectDeletionSet(target);

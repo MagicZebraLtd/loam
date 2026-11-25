@@ -4,10 +4,11 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { MeshBroadcastRequestSchema, type MeshContact, MeshIdentityCardSchema, MeshInboundRequestSchema, type MeshInboundResponse, MeshSendRequestSchema, type SealedMessage, SyncAttachmentRequestSchema, type SyncLinkCodeResponse, SyncLinkRequestSchema, type SyncLinkResponse, SyncMessagesRequestSchema, type SyncStatusReport } from "@loam/schema";
+import { MeshBroadcastRequestSchema, type MeshContact, MeshIdentityCardSchema, MeshInboundRequestSchema, type MeshInboundResponse, MeshSendRequestSchema, type SealedMessage, SyncAttachmentRequestSchema, type SyncLinkCodeResponse, SyncLinkRequestSchema, type SyncLinkResponse, SyncMessagesRequestSchema, type SyncStatusReport, type User } from "@loam/schema";
 import type { AppContext } from "./app-context.js";
 import { mergeConfig } from "./config.js";
 import { errorBody } from "./errors.js";
+import { avatarNamesImage } from "./identity.js";
 import { commitAdminConfig } from "./routes-admin.js";
 import { peerUrlFor } from "./sync-links.js";
 import { attachmentFileName, parseAttachmentFileName } from "./media.js";
@@ -40,6 +41,24 @@ function adminSyncReport(ctx: AppContext): SyncStatusReport {
 
 /** Register the node-to-node sync endpoints and the opportunistic-mesh endpoints (cards, contacts, send, bridge, admin sync). */
 export function registerSyncMeshRoutes(ctx: AppContext): void {
+  /**
+   * An author record as the sync export hands it to a peer: the public record without `banned` or `pending`.
+   * The local roster hides banned and queued people altogether, so neither belongs on a record a peer (or
+   * anyone on the LAN, when no `sync.token` is set) can read. Both are always deleted, not only when true,
+   * so whether the property is there says nothing either. An uploaded picture is left off too: its file
+   * never syncs, so the peer would only learn a local image id it cannot fetch (the peer shows the
+   * generated avatar for the id instead).
+   */
+  function syncExportUser(user: User): User {
+    const clone = ctx.publicUser(user);
+    delete clone.banned;
+    delete clone.pending;
+    if (avatarNamesImage(clone.avatar)) {
+      delete clone.avatar;
+    }
+    return clone;
+  }
+
   // GET for a plaintext (`off`-mode) peer; POST for a sealed peer, which carries the `{ s, b, tok }`
   // envelope so the sync token is sealed and the request proves session-key possession (docs/08). The
   // handler ignores the (empty) POST body — it's the sealed envelope that matters. Registered as two
@@ -87,7 +106,7 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
       // Sanitize author records before they cross to a peer: a peer operator has no more business
       // enumerating who holds authority here than a joiner does (`publicUser` strips roles +
       // shadowBanned), and an import strips authority regardless.
-      const users = ctx.data.users.filter((user) => authorIds.has(user.id)).map(ctx.publicUser);
+      const users = ctx.data.users.filter((user) => authorIds.has(user.id)).map(syncExportUser);
       return { messages, users };
     },
   );
@@ -239,6 +258,13 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
       return reply.code(403).send(errorBody(meshTimeoutError));
     }
 
+    // Mail is published content like a post, so it waits for the member rules too (createMessage's rule).
+    const meshRulesError = ctx.rulesError(currentUser);
+
+    if (meshRulesError) {
+      return reply.code(403).send(errorBody(meshRulesError));
+    }
+
     if (!ctx.appConfig.mesh.enabled) {
       return reply.code(404).send(errorBody("Not found"));
     }
@@ -301,6 +327,12 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
 
       if (broadcastTimeoutError) {
         return reply.code(403).send(errorBody(broadcastTimeoutError));
+      }
+
+      const broadcastRulesError = ctx.rulesError(currentUser);
+
+      if (broadcastRulesError) {
+        return reply.code(403).send(errorBody(broadcastRulesError));
       }
 
       if (!ctx.appConfig.mesh.enabled) {
@@ -485,8 +517,14 @@ export function registerSyncMeshRoutes(ctx: AppContext): void {
       // A node is its address plus its key: a lost answer is retried by the same pair, never by another.
       const binding = `${url} ${body.data.transportKey ?? ""}`;
       const state = ctx.linkCodes.check(body.data.code, binding);
+      // A repeat is a retry of a lost answer, so it is answered only while that link still stands: once an
+      // admin has removed the peer or turned sync off, the spent code hands over nothing (the current
+      // token included) and is refused like any other used code.
+      const stillLinked =
+        ctx.appConfig.sync.enabled &&
+        ctx.appConfig.sync.peers.some((peer) => peer.url === url && (peer.transportKey ?? "") === (body.data.transportKey ?? ""));
 
-      if (state === "invalid") {
+      if (state === "invalid" || (state === "repeat" && !stillLinked)) {
         return reply.code(403).send(errorBody("This link code has expired or was already used"));
       }
 

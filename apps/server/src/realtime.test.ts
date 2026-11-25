@@ -379,11 +379,14 @@ describe("presence fan-out (review F-003)", () => {
 describe("stalled sockets (review F-003)", () => {
   it("terminates a socket whose unsent frames pile up instead of sending it more", async () => {
     const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    // A real user record: a socket whose user has none is sent nothing at all.
+    const config = await app.server.inject({ method: "GET", url: "/api/config" });
+    const userId = (config.json() as { currentUser: { id: string } }).currentUser.id;
     const send = vi.fn();
     const terminate = vi.fn();
     const stalled = {
       socket: { OPEN: 1, readyState: 1, send, close: vi.fn(), terminate, bufferedAmount: 8 * 1024 * 1024, on: vi.fn() },
-      userId: "user.stalled",
+      userId,
     };
     app.sockets.add(stalled);
     expect(app.host.updateConfig({ node: { name: "Renamed" } }).ok).toBe(true);

@@ -186,6 +186,42 @@ describe("POST /api/sync/link", () => {
     expect((await link(existing, { code, port: 3457 })).status).toBe(403);
   });
 
+  it.skipIf(!LAN_ADDRESS)("answers a repeat only while that peer is still linked and sync is on", async () => {
+    const asker = { port: 3456, transportKey: "a".repeat(43), name: "Hilltop" };
+    const save = (app: LoamApp, cookie: string, sync: Record<string, unknown>) =>
+      app.server.inject({ method: "PATCH", url: "/api/admin/config", headers: { cookie }, payload: { sync } });
+
+    // Removed: the admin drops the peer and sets a new token.
+    const removed = await lanNode({ node: { name: "Riverside" }, sync: { enabled: false, peers: [], token: "mesh-secret-0123456789" } });
+    const removedCookie = await sessionCookie(removed.app);
+    const removedCode = await mintCode(removed.app, removedCookie);
+    expect((await link(removed, { code: removedCode, ...asker })).status).toBe(200);
+    // Still linked: the repeat is answered.
+    const kept = await link(removed, { code: removedCode, ...asker });
+    expect(kept.status).toBe(200);
+    expect(JSON.parse(kept.text)).toEqual({ name: "Riverside", token: "mesh-secret-0123456789" });
+    const refused = await link(removed, { code: removedCode, port: 3457 });
+    expect(refused.status).toBe(403);
+    expect((await save(removed.app, removedCookie, { peers: [], token: "a-new-mesh-secret-9876543210" })).statusCode).toBe(200);
+    const afterRemoval = await link(removed, { code: removedCode, ...asker });
+    expect({ status: afterRemoval.status, body: JSON.parse(afterRemoval.text) as unknown }).toEqual({
+      status: refused.status,
+      body: JSON.parse(refused.text) as unknown,
+    });
+
+    // Sync off: the peer is still listed, but the node no longer syncs.
+    const paused = await lanNode({ node: { name: "Riverside" }, sync: { enabled: false, peers: [], token: "mesh-secret-0123456789" } });
+    const pausedCookie = await sessionCookie(paused.app);
+    const pausedCode = await mintCode(paused.app, pausedCookie);
+    expect((await link(paused, { code: pausedCode, ...asker })).status).toBe(200);
+    expect((await save(paused.app, pausedCookie, { enabled: false })).statusCode).toBe(200);
+    const afterPause = await link(paused, { code: pausedCode, ...asker });
+    expect({ status: afterPause.status, body: JSON.parse(afterPause.text) as unknown }).toEqual({
+      status: refused.status,
+      body: JSON.parse(refused.text) as unknown,
+    });
+  });
+
   it.skipIf(!LAN_ADDRESS)("mints a mesh token on a first link when the node has none, so its sync routes stop being open", async () => {
     const existing = await lanNode({ node: { name: "Riverside" } });
     const cookie = await sessionCookie(existing.app);

@@ -12,6 +12,13 @@ export const claimAttemptLimit = 5;
 /** How many times `claimAttemptLimit` a whole IPv6 /64 may spend on claim / panic guesses per window. */
 export const subnetAttemptFactor = 8;
 
+/**
+ * How many times `AppOptions.maxNewIdentitiesPerWindow` a whole IPv6 /64 may mint per window. A SLAAC LAN
+ * is one /64 that all its devices share, so this leaves room for many real people joining at once; without
+ * it, cycling addresses inside the subnet would buy an unlimited number of identities.
+ */
+export const subnetIdentityFactor = 8;
+
 export const claimAttemptWindowMs = 5 * 60_000;
 
 // Default for `AppOptions.tombstoneHorizonMs` (docs/15 #7): how long a tombstone blocks re-import

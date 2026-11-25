@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp, type LoamApp } from "./app.js";
+import { makeUser } from "./identity.js";
 import {
   cleanups,
   type InjectResponse,
@@ -450,8 +451,8 @@ describe("private channels", () => {
     // ...or remove anyone else (the permission gate answers before owner-protection).
     expect((await removeMember(app, member.cookie, channel.id, owner.userId)).statusCode).toBe(403);
 
-    // An admin may manage membership without being a member.
-    expect((await addMember(app, admin.cookie, channel.id, other.userId)).statusCode).toBe(200);
+    // An admin manages membership without being a member, but can't grow the roster from outside it.
+    expect((await addMember(app, admin.cookie, channel.id, other.userId)).statusCode).toBe(403);
 
     // A member may leave (remove themselves).
     expect((await removeMember(app, member.cookie, channel.id, member.userId)).statusCode).toBe(200);
@@ -576,6 +577,47 @@ describe("private channels", () => {
       payload: { banned: true },
     });
     expect((await transfer(app, owner.cookie, channel.id, outsider.userId)).statusCode).toBe(400);
+  });
+
+  it("answers an invite or a transfer to a mesh sender, a pending or a banned person exactly like one to an unknown id", async () => {
+    const { app, dataDir } = await makeApp();
+    const admin = await newSession(app);
+    const owner = await newSession(app);
+    const banned = await newSession(app);
+    const meshId = "mesh.0123456789abcdef0123456789abcdef";
+    const pendingId = "user.0123456789abcdef";
+    app.store.upsertUser(makeUser(meshId));
+    app.store.upsertUser(makeUser(pendingId, false, true));
+    const next = await reopenApp(app, dataDir);
+    expect(next.store.loadUsers().map((user) => user.id)).toEqual(expect.arrayContaining([meshId, pendingId]));
+    expect(
+      (
+        await next.server.inject({
+          method: "PATCH",
+          url: `/api/moderation/users/${banned.userId}`,
+          headers: { cookie: admin.cookie },
+          payload: { banned: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const channel = await createPrivateChannel(next, owner.cookie);
+
+    const answer = async (response: Promise<InjectResponse>) => {
+      const settled = await response;
+      return { status: settled.statusCode, body: settled.json() as unknown };
+    };
+    const unknownInvite = await answer(addMember(next, owner.cookie, channel.id, "user.ffffffffffffffff"));
+    const unknownTransfer = await answer(transfer(next, owner.cookie, channel.id, "user.ffffffffffffffff"));
+    expect(unknownInvite).toMatchObject({ status: 400, body: { code: "user_not_found" } });
+    expect(unknownTransfer).toEqual(unknownInvite);
+
+    for (const targetId of [meshId, pendingId, banned.userId]) {
+      expect(await answer(addMember(next, owner.cookie, channel.id, targetId))).toEqual(unknownInvite);
+      expect(await answer(transfer(next, owner.cookie, channel.id, targetId))).toEqual(unknownTransfer);
+    }
+    const stored = next.store.loadChannels().find((entry) => entry.id === channel.id);
+    expect(stored?.ownerUserId).toBe(owner.userId);
+    expect(stored?.memberUserIds).toEqual([owner.userId]);
   });
 
   it("keeps the previous owner in the roster when transferring to an existing member", async () => {

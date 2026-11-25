@@ -58,7 +58,7 @@ declare module "fastify" {
 }
 
 /** Keys each table keeps before evicting the least recently used (the plugin's default). */
-const DEFAULT_MAX_ENTRIES = 5000;
+export const DEFAULT_MAX_ENTRIES = 5000;
 
 const TIME_UNITS_MS: Record<string, number> = { second: 1000, minute: 60_000, hour: 3_600_000 };
 
@@ -179,6 +179,28 @@ export class FixedWindowCounter {
       this.windows.delete(this.windows.keys().next().value!);
     }
     return { count: entry.count, ttl: entry.startedAt + windowMs - now };
+  }
+
+  /**
+   * The count inside `key`'s current window, without counting a request or touching the LRU order; 0 when
+   * the key has no window or its window has ended.
+   */
+  peek(key: string, windowMs: number, now = Date.now()): number {
+    const entry = this.windows.get(key);
+    return entry && entry.startedAt + windowMs > now ? entry.count : 0;
+  }
+
+  /**
+   * Drop every key whose window of `windowMs` has ended by `now`. Changes no outcome: a pruned key and an
+   * expired one both start a new window on their next hit. For tables that see few hits, where waiting for
+   * LRU eviction would keep dead keys around for a long time.
+   */
+  prune(windowMs: number, now = Date.now()): void {
+    for (const [key, entry] of this.windows) {
+      if (entry.startedAt + windowMs <= now) {
+        this.windows.delete(key);
+      }
+    }
   }
 
   get size(): number {

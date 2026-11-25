@@ -43,16 +43,21 @@ describe("message authorization", () => {
       ).statusCode,
     ).toBe(200);
 
-    for (const recipientUserId of ["mesh.0123456789abcdef0123456789abcdef", botId]) {
-      const dm = await reopened.server.inject({
+    const dmTo = (recipientUserId: string) =>
+      reopened.server.inject({
         method: "POST",
         url: "/api/messages",
         headers: { cookie: admin.cookie },
         payload: { type: "dm", recipientUserId, body: "anyone there?" },
       });
-      expect(dm.statusCode).toBe(403);
-      expect(dm.json()).toMatchObject({ code: "dm_unavailable" });
-    }
+    const bot = await dmTo(botId);
+    expect(bot.statusCode).toBe(403);
+    expect(bot.json()).toMatchObject({ code: "dm_unavailable" });
+    // A mesh sender that never mailed the admin isn't theirs to see: it answers like an unknown recipient
+    // (member-safety.test.ts covers one that did).
+    const mesh = await dmTo("mesh.0123456789abcdef0123456789abcdef");
+    expect(mesh.statusCode).toBe(400);
+    expect(mesh.json()).toMatchObject({ code: "recipient_not_found" });
     expect(reopened.store.loadMessages().filter((message) => message.type === "dm")).toEqual([]);
   });
 
@@ -78,7 +83,7 @@ describe("message authorization", () => {
       payload: { type: "reaction", targetMessageId: dmId, reaction: "👀" },
     });
     expect(outsider.statusCode).toBe(400);
-    expect((outsider.json() as { error: string }).error).toMatch(/Cannot react/);
+    expect((outsider.json() as { error: string }).error).toBe("Target message does not exist");
 
     const participant = await app.server.inject({
       method: "POST",
@@ -299,6 +304,31 @@ describe("message deletion API", () => {
     expect(deleted.statusCode).toBe(200);
     expect((deleted.json() as { deletedIds: string[] }).deletedIds.sort()).toEqual([replyId, "msg_legacynested00"].sort());
     expect(remainingIds(reopened)).toEqual([rootId]);
+  });
+
+  it("answers a reply naming a post in another channel exactly like one naming a missing post", async () => {
+    const app = await makeApp();
+    await newSession(app);
+    const owner = await newSession(app);
+    const member = await newSession(app);
+    const created = await app.server.inject({
+      method: "POST",
+      url: "/api/channels",
+      headers: { cookie: owner.cookie },
+      payload: { name: "crew", visibility: "private" },
+    });
+    expect(created.statusCode).toBe(201);
+    const privateId = (created.json() as { id: string }).id;
+    const privatePostId = await postId(app, owner.cookie, { type: "channelPost", channelId: privateId, body: "inside" });
+    const publicPostId = await postId(app, owner.cookie, { type: "channelPost", channelId: "announcements", body: "news" });
+
+    const replyWith = (parentMessageId: string) =>
+      postMessage(app, member.cookie, { type: "channelReply", channelId: "general", parentMessageId, body: "probe" });
+    const answers = await Promise.all([replyWith(privatePostId), replyWith(publicPostId), replyWith("msg_doesnotexist00")]);
+    const shapes = answers.map((response) => ({ status: response.statusCode, body: response.json() as unknown }));
+    expect(shapes[2]).toMatchObject({ status: 400, body: { code: "parent_not_found", error: "Parent message does not exist" } });
+    expect(shapes[0]).toEqual(shapes[2]);
+    expect(shapes[1]).toEqual(shapes[2]);
   });
 
   it("lets an author delete their own message", async () => {

@@ -64,21 +64,39 @@ export function loamLogController(requestLogging = true): LogController {
 }
 
 /**
- * The logged form of a request: Fastify's default `req` serializer minus the query string (search terms,
- * `?enc=` WebSocket session ids…) — and, for an internal tunnel re-dispatch (should one ever be logged, e.g.
- * a 5xx error line), no path at all.
+ * The path a request log line shows: the matched route's pattern (`/api/dms/:userId`), never the concrete
+ * path, whose parameters name conversations and people (`/api/dms/user.0123…`, `/dm/user.0123…`) and whose
+ * line, beside the caller's address, outlives an Emergency Reset. A page or file served by the client build
+ * (`GET /*`) is `[page]`; a request no route matched is `[unmatched]`; an internal tunnel re-dispatch (should
+ * one ever be logged, e.g. a 5xx error line) is `[tunnelled]`.
+ */
+function loggedPath(request: { headers?: Record<string, unknown>; routeOptions?: { url?: string } }): string {
+  if (isInternalDispatchForLogging(request)) {
+    return "[tunnelled]";
+  }
+  const route = request.routeOptions?.url;
+  if (route === undefined || route === "") {
+    return "[unmatched]";
+  }
+  return route === "/*" ? "[page]" : route;
+}
+
+/**
+ * The logged form of a request: Fastify's default `req` serializer (which receives the Fastify request,
+ * routed already) with the route's pattern for its path (`loggedPath`), so neither a parameter nor a query
+ * string (search terms, `?enc=` WebSocket session ids…) is logged.
  */
 export function loggedRequest(request: {
   method?: string;
-  url?: string;
   host?: string;
   ip?: string;
   headers?: Record<string, unknown>;
   socket?: { remotePort?: number };
+  routeOptions?: { url?: string };
 }): Record<string, unknown> {
   return {
     method: request.method,
-    url: isInternalDispatchForLogging(request) ? "[tunnelled]" : (request.url ?? "").split("?", 1)[0],
+    url: loggedPath(request),
     // A `Host` is logged only when it's one of the names every node serves (an IP literal, localhost, a
     // `.local` name); anything else (a configured join hostname, or the arbitrary name a misdirected
     // request carried) is a placeholder, so a refused hostname never reaches the log.
@@ -86,6 +104,21 @@ export function loggedRequest(request: {
     remoteAddress: request.ip,
     remotePort: request.socket?.remotePort,
   };
+}
+
+/**
+ * The app shell's `connect-src`: its own origin, plus WebSockets to the authority the page was loaded from
+ * (`ws://<host> wss://<host>`, the `Host` header with its port and IPv6 brackets) and nowhere else, so the
+ * page can't open a socket to another host. `'self'` alone is not relied on for sockets: browsers that
+ * predate CSP Level 3 don't count a `ws:` or `wss:` URL as `'self'`, and the client's socket would be
+ * refused. A `Host` the allowlist refuses, or one with any character outside letters, digits, `.`, `-`,
+ * `:` and brackets, gets `'self'` alone, so nothing a request carries can add a source or a directive.
+ */
+export function connectSources(host: string | undefined, joinHost: () => string | undefined): string {
+  if (host === undefined || !/^[A-Za-z0-9.\-:[\]]+$/.test(host) || !hostNameAllowed(hostHeaderName(host), joinHost)) {
+    return "connect-src 'self'";
+  }
+  return `connect-src 'self' ws://${host} wss://${host}`;
 }
 
 /**
@@ -666,17 +699,53 @@ export function createTransportServer(ctx: AppContext) {
   };
 }
 
+/**
+ * The associated data of a reply to a request that asked for a bound response with `r: 2` (docs/08
+ * "Response binding"): method, url, sequence and status as one JSON array behind a fixed label. A bare
+ * `METHOD url` aad can never start with `loam.`, and JSON keeps the four fields apart, so no request target
+ * can make the node seal one form that opens as another.
+ */
+function boundResponseAad(method: string, url: string, seq: number, status: number): string {
+  return `loam.transport.response.v2 ${JSON.stringify([method, url, seq, status])}`;
+}
+
+/**
+ * The associated data of a refusal sent before the request's sequence was authenticated, for a current
+ * client (`encStatus2`): method, url and status, labelled apart from {@link boundResponseAad}.
+ */
+function refusalResponseAad(method: string, url: string, status: number): string {
+  return `loam.transport.refusal.v2 ${JSON.stringify([method, url, status])}`;
+}
+
+/**
+ * Parse sealed JSON (a request envelope, which carries the tunnel descriptor and the inner body) as strictly
+ * as Fastify parses a plain JSON body: a `__proto__` key, or a `constructor` key holding an object with a
+ * `prototype` key, at any depth, is refused. Throws on those as on malformed JSON, so the caller answers both
+ * with the same 400.
+ */
+function parseSealedJson(text: string): unknown {
+  return JSON.parse(text, (key: string, value: unknown) => {
+    if (key === "__proto__") {
+      throw new SyntaxError("Refused a __proto__ key");
+    }
+    if (key === "constructor" && value !== null && typeof value === "object" && Object.hasOwn(value, "prototype")) {
+      throw new SyntaxError("Refused a constructor.prototype key");
+    }
+    return value;
+  });
+}
+
 /** Add the global transport hooks (decrypt/encrypt/enforce, security headers) and the global rate limiter. */
 export async function registerTransportHooks(ctx: AppContext): Promise<void> {
-  // Direct sealed requests whose authenticated envelope asked for a sequence-bound response (`r: 1`, docs/08
-  // "Response binding"): onSend seals their response under `${METHOD} ${url}#${s}` rather than the bare
-  // route aad, so a captured response can't be replayed as the answer to a later request on the same route.
-  // WeakSet → GC'd with the request.
-  const responseBoundRequests = new WeakSet<FastifyRequest>();
+  // Direct sealed requests whose authenticated envelope asked for a bound response, by the form they asked
+  // for (docs/08 "Response binding"): `2` gets `boundResponseAad`, `1` (a tab left open across the update)
+  // `${METHOD} ${url}#${s}#${status}`. Either way a captured response can't be replayed as the answer to a
+  // later request on the same route. WeakMap → GC'd with the request.
+  const responseBoundRequests = new WeakMap<FastifyRequest, 1 | 2>();
 
   /**
    * Run a sealed `{ s, r? }` envelope through the session's replay window and record it on the request:
-   * its sequence for the handlers and response binding, and whether it asked for a bound response.
+   * its sequence for the handlers and response binding, and which bound response it asked for, if any.
    * False when the sequence is missing, replayed or out of the window.
    */
   function acceptEnvelopeSequence(request: FastifyRequest, envelope: { s?: unknown; r?: unknown }): boolean {
@@ -685,8 +754,8 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
       return false;
     }
     ctx.transportRequestSeq.set(request, envelope.s);
-    if (envelope.r === 1) {
-      responseBoundRequests.add(request);
+    if (envelope.r === 1 || envelope.r === 2) {
+      responseBoundRequests.set(request, envelope.r);
     }
     return true;
   }
@@ -703,6 +772,22 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
   // visible on the wire (and images are served in clear); in `required` mode — or for any `bound`
   // session — content goes through the path-hiding tunnel (`/api/transport/tunnel`), images included,
   // so only "a tunnel request happened" + ciphertext size/timing remain. All inert when the mode is `off`.
+  // The wipe generation (`ctx.wipeGeneration`, bumped as each Emergency Reset starts) each request was
+  // admitted under. WeakMap → GC'd with the request.
+  const admittedWipeGeneration = new WeakMap<FastifyRequest, number>();
+  // The reset gate again, just before the handler runs. `onRequest` sees only the headers: a request admitted
+  // before a reset whose body arrives during or after it would otherwise reach its handler and write into the
+  // fresh store (a message, a pre-reset user brought back). Refused while the gate is up, and whenever a reset
+  // has started since the request was admitted. Internal tunnel re-dispatches pass through here too. The
+  // liveness probe stays exempt, as in the gate.
+  ctx.server.addHook("preHandler", async (request, reply) => {
+    if (request.routeOptions?.url === "/api/health") {
+      return;
+    }
+    if (ctx.awaitingWipeRestart || admittedWipeGeneration.get(request) !== ctx.wipeGeneration) {
+      return reply.code(503).send(errorBody("This node is restarting after a kill switch reset."));
+    }
+  });
   ctx.server.addHook("onRequest", async (request, reply) => {
     // The kill switch's 503 gate: while a wipe is in flight, after it has handed off to the launcher for
     // a restart, or after it failed closed, this process must not serve anything from its in-memory
@@ -712,11 +797,21 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
     if (ctx.awaitingWipeRestart && request.routeOptions?.url !== "/api/health") {
       return reply.code(503).send(errorBody("This node is restarting after a kill switch reset."));
     }
+    // Which reset this request was admitted under, for the `preHandler` check registered above.
+    admittedWipeGeneration.set(request, ctx.wipeGeneration);
     // An internal tunnel re-dispatch runs plaintext inside the process — never enforce/decrypt it
     // (its response is sealed by the outer tunnel request instead). Checked before anything else so
     // it holds in every mode.
     if (ctx.isInternalTunnelRequest(request)) {
       return; // trusted internal re-dispatch — its x-loam-internal/x-loam-user headers are legitimate
+    }
+    // A request target with a `#` in it (review 2026-11-18). The router ignores the `#` and what follows, but
+    // `request.url` keeps it, and a direct reply is sealed under an aad built from `request.url`: so
+    // `POST /api/session/resume#1#401` reached the resume route and had its refusal sealed under a string
+    // that is the bound form of a 401 to a real resume. A browser never sends a fragment, so refuse it
+    // unsealed, before the session is looked up.
+    if (request.url.includes("#")) {
+      return reply.code(400).send(errorBody("Invalid request"));
     }
     // Host allowlist: a request addressed to a name this node doesn't serve is refused
     // before anything else happens (no identity is minted, no content is read). On an internet-connected LAN
@@ -799,10 +894,11 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
       // The sealed plaintext is a `{ s: <seq>, b?: <body> }` envelope (docs/08): `s` is a per-session
       // monotonic sequence for replay protection, `b` the actual request body (omitted for a bodyless
       // mutation). `s` lives INSIDE the AEAD, so it's authenticated — an attacker can't renumber a
-      // replay to dodge the window without breaking the tag.
+      // replay to dodge the window without breaking the tag. Parsed as strictly as a plain JSON body
+      // (`parseSealedJson`), since `b` becomes `request.body`.
       let envelope: { s?: unknown; r?: unknown; b?: unknown; tok?: unknown };
       try {
-        envelope = JSON.parse(opened) as { s?: unknown; r?: unknown; b?: unknown; tok?: unknown };
+        envelope = parseSealedJson(opened) as { s?: unknown; r?: unknown; b?: unknown; tok?: unknown };
       } catch {
         return reply.code(400).send(errorBody("Malformed encrypted request"));
       }
@@ -829,7 +925,7 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
       const openedSeq = openTransport(key, sealedSeq, `${request.method} ${request.url}`);
       let envelope: { s?: unknown; r?: unknown } | undefined;
       try {
-        envelope = openedSeq === null ? undefined : (JSON.parse(openedSeq) as { s?: unknown; r?: unknown });
+        envelope = openedSeq === null ? undefined : (parseSealedJson(openedSeq) as { s?: unknown; r?: unknown });
       } catch {
         envelope = undefined;
       }
@@ -882,23 +978,38 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
    * client that asked) which status it carries, so the outer status, which is outside the AEAD, can't be
    * relabelled:
    *
-   * - a request whose envelope asked (`r: 1`, the browser client in `optional` mode): `METHOD url#seq#status`;
+   * - a request whose envelope asked with `r: 2` (the browser client, resume included): `boundResponseAad`;
+   * - one that asked with `r: 1` (a tab left open across the update): `METHOD url#seq#status`;
    * - a direct-sealed sync request (every one carries a `{ s }` envelope; peers since 0.6.0 open this):
    *   `METHOD url#seq`;
    * - any other request with an authenticated sequence (an older client, the tunnel, whose descriptor
-   *   carries its own binding, resume/logout with their own `{ s, m, p }`): the bare `METHOD url`;
+   *   carries its own binding, logout): the bare `METHOD url`;
    * - a request with no authenticated sequence (refused before it was read: a 429, a 400 or 409 for a bad
-   *   envelope; or a bare GET from an older client): sealed twice, `enc` under the bare aad for older
-   *   clients and `encStatus` under `METHOD url!status` for current ones, which never open `enc`. Whether
-   *   the client asked isn't known yet at that point, so both go out.
+   *   envelope; or a bare GET from an older client): sealed three times, `enc` under the bare aad for older
+   *   clients, `encStatus` under `METHOD url!status` for the clients that ask with `r: 1`, and `encStatus2`
+   *   under `refusalResponseAad` for current ones, which open nothing else. Whether or how the client asked
+   *   isn't known yet at that point, so all three go out.
    */
-  function sealResponse(request: FastifyRequest, key: string, payload: string, status: number): { enc: string; encStatus?: string } {
+  function sealResponse(
+    request: FastifyRequest,
+    key: string,
+    payload: string,
+    status: number,
+  ): { enc: string; encStatus?: string; encStatus2?: string } {
     const aad = `${request.method} ${request.url}`;
     const seq = ctx.transportRequestSeq.get(request);
     if (seq === undefined) {
-      return { enc: sealTransport(key, payload, aad), encStatus: sealTransport(key, payload, `${aad}!${status}`) };
+      return {
+        enc: sealTransport(key, payload, aad),
+        encStatus: sealTransport(key, payload, `${aad}!${status}`),
+        encStatus2: sealTransport(key, payload, refusalResponseAad(request.method, request.url, status)),
+      };
     }
-    if (responseBoundRequests.has(request)) {
+    const asked = responseBoundRequests.get(request);
+    if (asked === 2) {
+      return { enc: sealTransport(key, payload, boundResponseAad(request.method, request.url, seq, status)) };
+    }
+    if (asked === 1) {
       return { enc: sealTransport(key, payload, `${aad}#${seq}#${status}`) };
     }
     const routeUrl = request.routeOptions?.url;
@@ -928,7 +1039,7 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
           // Inline styles: the client injects generated SVG (avatars, QR) with style attributes.
           "style-src 'self' 'unsafe-inline'",
           "img-src 'self' data: blob:",
-          "connect-src 'self' ws: wss:",
+          connectSources(request.headers.host, () => ctx.currentJoinHost()),
           "object-src 'none'",
           "base-uri 'self'",
           "form-action 'self'",

@@ -47,6 +47,7 @@ describe("contentTypeFor", () => {
 describe("serving the client build (buildApp)", () => {
   let base: string;
   let app: LoamApp;
+  const logs: string[] = [];
 
   beforeAll(async () => {
     base = mkdtempSync(join(tmpdir(), "loam-static-"));
@@ -57,7 +58,7 @@ describe("serving the client build (buildApp)", () => {
     writeFileSync(join(dist, "manifest.webmanifest"), "{}");
     writeFileSync(join(dist, ".env"), "SECRET=dotfile");
     writeFileSync(join(base, "secret.txt"), "outside the root");
-    app = await buildApp({ requireRulesAcceptance: false, dataDir: join(base, "data"), clientDistDir: dist, logStream: { write() {} } });
+    app = await buildApp({ requireRulesAcceptance: false, dataDir: join(base, "data"), clientDistDir: dist, logStream: { write: (line) => void logs.push(line) } });
   });
 
   afterAll(async () => {
@@ -83,6 +84,17 @@ describe("serving the client build (buildApp)", () => {
       expect(response.body, url).toBe(SHELL);
       expect(response.headers["content-security-policy"], url).toContain("default-src 'self'");
     }
+  });
+
+  it("logs a page or file it serves as [page], never its path", async () => {
+    logs.length = 0;
+    for (const url of ["/dm/user.0123456789abcdef", "/assets/index-abc.js"]) {
+      expect((await app.server.inject({ method: "GET", url })).statusCode, url).toBe(200);
+    }
+    const text = logs.join("");
+    expect(text).toContain('"url":"[page]"');
+    expect(text).not.toContain("0123456789abcdef");
+    expect(text).not.toContain("index-abc");
   });
 
   it("keeps unknown /api/ paths a JSON 404", async () => {

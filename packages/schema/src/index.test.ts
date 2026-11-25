@@ -17,6 +17,7 @@ import {
   ModerationUpdateRequestSchema,
   NetworkConfigSchema,
   OPENAI_COMPATIBLE_PRESETS,
+  sameUrlOrigin,
   SearchQuerySchema,
   SecurityConfigSchema,
   securityProfilePreset,
@@ -528,6 +529,21 @@ describe("schema refinements", () => {
         }),
       ).toThrow();
     });
+
+    it("carries a DM's assistantDestinationRevision on the request only: the stored message drops it", () => {
+      const request = MessageCreateRequestSchema.parse({
+        type: "dm",
+        recipientUserId: "llm.ollama.gemma4",
+        body: "hi",
+        assistantDestinationRevision: "a".repeat(32),
+      });
+      expect(request).toMatchObject({ assistantDestinationRevision: "a".repeat(32) });
+      expect(() =>
+        MessageCreateRequestSchema.parse({ type: "dm", recipientUserId: "user.1", body: "hi", assistantDestinationRevision: "a".repeat(65) }),
+      ).toThrow();
+      const stored = MessageSchema.parse({ ...request, id: "msg_1", authorId: "user.2", createdAt: 1 });
+      expect(stored).not.toHaveProperty("assistantDestinationRevision");
+    });
   });
 
   describe("SyncAttachmentResponseSchema.data (standard base64)", () => {
@@ -657,12 +673,15 @@ describe("LLM backends", () => {
       "http://[fe80::1]/",
       "http://[fd12:3456::1]:8080/v1",
       "http://my-laptop.local:1234/v1",
-      "http://studio.localhost/v1",
+      "http://LOCALHOST:11434",
       "http://nas/v1",
     ]) {
       expect(isLocalNetworkUrl(url), url).toBe(true);
     }
     for (const url of [
+      // Looked up through the system resolver like any other name, so it can be another machine.
+      "http://studio.localhost/v1",
+      "http://ollama.localhost:11434",
       "https://openrouter.ai/api/v1",
       "https://api.openai.com/v1",
       "http://8.8.8.8/v1",
@@ -675,6 +694,29 @@ describe("LLM backends", () => {
       "not a url",
     ]) {
       expect(isLocalNetworkUrl(url), url).toBe(false);
+    }
+  });
+
+  it("sameUrlOrigin: scheme, host and port decide; path, case, a written-out default port and a trailing slash don't", () => {
+    for (const [a, b] of [
+      ["https://openrouter.ai/api/v1", "https://openrouter.ai:443/other/path"],
+      ["http://127.0.0.1:1234/v1", "http://127.0.0.1:1234"],
+      ["https://OpenRouter.AI/api/v1/", "https://openrouter.ai/api/v1"],
+      ["HTTPS://openrouter.ai/api/v1", "https://openrouter.ai/api/v1?x=1"],
+      ["http://example.com:80/v1", "http://example.com/v1"],
+    ]) {
+      expect(sameUrlOrigin(a, b), `${a} ~ ${b}`).toBe(true);
+    }
+    for (const [a, b] of [
+      ["http://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"],
+      ["http://127.0.0.1:1234/v1", "http://127.0.0.1:1235/v1"],
+      ["https://openrouter.ai/api/v1", "https://api.openai.com/v1"],
+      ["https://openrouter.ai/api/v1", "https://evil.openrouter.ai/api/v1"],
+      ["not a url", "not a url"],
+      ["https://openrouter.ai/api/v1", "not a url"],
+      ["file:///etc/passwd", "file:///etc/passwd"],
+    ]) {
+      expect(sameUrlOrigin(a, b), `${a} !~ ${b}`).toBe(false);
     }
   });
 

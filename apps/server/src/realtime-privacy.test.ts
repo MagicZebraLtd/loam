@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { LoamApp } from "./app.js";
 import {
+  assistantRevision,
   cleanups,
   type InjectResponse,
   makeApp,
@@ -144,6 +145,27 @@ describe("websocket privacy filtering", () => {
     expect(healthy.socket.readyState).toBe(WebSocket.OPEN);
   });
 
+  it("closes the sockets of a session that is ended, and leaves other people's open", async () => {
+    const app = await makeApp();
+    const ending = await newSession(app);
+    const other = await newSession(app);
+    const baseUrl = await listen(app);
+
+    const endingSocket = await connect(baseUrl, ending.cookie);
+    const otherSocket = await connect(baseUrl, other.cookie);
+
+    const ended = await app.server.inject({ method: "POST", url: "/api/session/end", headers: { cookie: ending.cookie } });
+    expect(ended.statusCode).toBe(200);
+
+    let closed = false;
+    void endingSocket.closed.then(() => {
+      closed = true;
+    });
+    expect(await waitFor(() => closed)).toBe(true);
+    await settle();
+    expect(otherSocket.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
   it("limits a pending user's feed to node notices and their own approval", async () => {
     const app = await makeApp({ access: { joinPolicy: "approval" } });
     const admin = await newSession(app);
@@ -212,7 +234,7 @@ describe("websocket privacy filtering", () => {
       method: "POST",
       url: "/api/messages",
       headers: { cookie: user.cookie },
-      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi" },
+      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: await assistantRevision(app) },
     });
     expect(dm.statusCode).toBe(201);
 
@@ -251,7 +273,7 @@ describe("websocket privacy filtering", () => {
       method: "POST",
       url: "/api/messages",
       headers: { cookie: user.cookie },
-      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi" },
+      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: await assistantRevision(app) },
     });
 
     // The DM participant seeing the stream complete proves the round finished, making the

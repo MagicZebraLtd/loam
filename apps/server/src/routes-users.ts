@@ -2,11 +2,12 @@
 // upload/serve, registered over the shared AppContext.
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { AttachmentUploadRequestSchema, MEMBER_RULES_VERSION, RulesAcceptRequestSchema, AvatarImageUploadRequestSchema, InviteRedeemRequestSchema, MODERATION_TIMEOUT_MAX_MS, type Message, type MessageAttachment, MessageRemoveRequestSchema, MessageSchema, ModerationUpdateRequestSchema, type Report, type ModerationReport, REPORTED_MESSAGE_BODY_MAX_LENGTH, ReportCreateRequestSchema, ReportResolveRequestSchema, ReportSchema, type ReportedMessage, RolesUpdateRequestSchema, TypingRequestSchema, type User, type UserBlockList, UserSchema, UserUpdateRequestSchema } from "@loam/schema";
+import { AttachmentUploadRequestSchema, MEMBER_RULES_VERSION, RulesAcceptRequestSchema, AvatarImageUploadRequestSchema, InviteRedeemRequestSchema, MODERATION_TIMEOUT_MAX_MS, type Message, type MessageAttachment, MessageRemoveRequestSchema, MessageSchema, ModerationUpdateRequestSchema, type Report, type ModerationReport, REPORTED_MESSAGE_BODY_MAX_LENGTH, ReportCreateRequestSchema, ReportResolveRequestSchema, ReportSchema, type ReportedMessage, RolesUpdateRequestSchema, TypingRequestSchema, type User, type UserBlockList, UserSchema, type UserUpdateRequest, UserUpdateRequestSchema } from "@loam/schema";
 import type { AppContext } from "./app-context.js";
 import { errorBody } from "./errors.js";
 import { newMessageId } from "./ids.js";
-import { attachmentContentDisposition, attachmentFileMaxBytes, attachmentFileName, attachmentMaxBytes, avatarImageHasExpectedSignature, isAvatarImageId, isImageAttachmentMime, newAttachmentId, newAvatarImageId, parseAttachmentFileName, parseAvatarImageId, sanitizeAttachmentName } from "./media.js";
+import { activeAssistantName, avatarSeedImpersonates, displayNameComparisonForm, displayNameTakenByOther } from "./identity.js";
+import { attachmentContentDisposition, attachmentFileMaxBytes, attachmentFileName, attachmentMaxBytes, attachmentStoredName, avatarImageHasExpectedSignature, isImageAttachmentMime, newAttachmentId, newAvatarImageId, parseAttachmentFileName, parseAvatarImageId } from "./media.js";
 
 /** The most still-open reports one person may have filed; past it, new reports wait for the queue to clear. */
 export const OPEN_REPORTS_PER_REPORTER_MAX = 20;
@@ -72,7 +73,7 @@ export function registerUserRoutes(ctx: AppContext): void {
     }
 
     // Only the upload route mints image avatars; a profile edit may not point at any image file.
-    const avatarError = ctx.clientAvatarUpdateError(user, body.data.avatar);
+    const avatarError = ctx.clientAvatarUpdateError(user, body.data.avatar) ?? impersonationError(ctx, user, body.data);
 
     if (avatarError) {
       return reply.code(400).send(errorBody(avatarError));
@@ -178,7 +179,6 @@ export function registerUserRoutes(ctx: AppContext): void {
     }
 
     const user = uploader;
-    const previousAvatar = user.avatar;
     const imageId = newAvatarImageId();
     const imagePath = ctx.avatarImagePath(imageId, body.data.mimeType);
     // An Emergency Reset can land while the file write is in flight. `user` was captured BEFORE the
@@ -192,15 +192,17 @@ export function registerUserRoutes(ctx: AppContext): void {
     }
 
     const generation = ctx.wipeGeneration;
-    await mkdir(ctx.avatarsDir, { recursive: true });
-    await writeFile(imagePath, image);
+    // Private to the node's OS user, like the database (store-lifecycle.ts `restrictMediaDirPermissions`).
+    await mkdir(ctx.avatarsDir, { recursive: true, mode: 0o700 });
+    await writeFile(imagePath, image, { mode: 0o600 });
 
     if (ctx.wipeGeneration !== generation) {
       await rm(imagePath, { force: true }).catch((error: unknown) => ctx.server.log.warn(error));
       return reply.code(409).send(errorBody("This LOAM node was reset"));
     }
 
-    const updated = ctx.applyUserUpdate(user, {
+    // Keeps only the latest image per user: `applyUserUpdate` deletes the replaced file.
+    return ctx.applyUserUpdate(user, {
       avatar: {
         kind: "image",
         imageId,
@@ -208,21 +210,6 @@ export function registerUserRoutes(ctx: AppContext): void {
         uploadedAt: Date.now(),
       },
     });
-
-    // Keep only the latest image per user — remove the replaced file (best effort). Only ever a genuine
-    // server-minted avatar id: the id becomes a path under avatars/, so anything else is never touched.
-    if (
-      previousAvatar?.kind === "image" &&
-      previousAvatar.imageId &&
-      isAvatarImageId(previousAvatar.imageId) &&
-      previousAvatar.mimeType
-    ) {
-      await rm(ctx.avatarImagePath(previousAvatar.imageId, previousAvatar.mimeType), { force: true }).catch(
-        (error: unknown) => ctx.server.log.warn(error),
-      );
-    }
-
-    return updated;
   });
 
   ctx.server.patch<{ Params: { userId: string } }>("/api/users/:userId", async (request, reply) => {
@@ -247,12 +234,14 @@ export function registerUserRoutes(ctx: AppContext): void {
 
     const user = ctx.data.users.find((candidate) => candidate.id === request.params.userId);
 
-    if (!user) {
+    // A mesh sender's display record answers like an unknown user (it is on no shared roster).
+    if (!user || ctx.isMeshSentinelUser(user.id)) {
       return reply.code(404).send(errorBody("User does not exist"));
     }
 
-    // Same rule as the self-edit: an admin edit can't aim a user's avatar at an arbitrary image file.
-    const avatarError = ctx.clientAvatarUpdateError(user, body.data.avatar);
+    // Same rules as the self-edit: an admin edit can't aim a user's avatar at an arbitrary image file, nor
+    // give them someone else's name or look.
+    const avatarError = ctx.clientAvatarUpdateError(user, body.data.avatar) ?? impersonationError(ctx, user, body.data);
 
     if (avatarError) {
       return reply.code(400).send(errorBody(avatarError));
@@ -278,8 +267,9 @@ export function registerUserRoutes(ctx: AppContext): void {
 
     const user = ctx.data.users.find((candidate) => candidate.id === request.params.userId);
 
-    // Roles are for people: the assistant bot and system records answer like an unknown user.
-    if (!user || user.type !== "human") {
+    // Roles are for people: the assistant bot, system records and mesh sender records answer like an
+    // unknown user.
+    if (!user || user.type !== "human" || ctx.isMeshSentinelUser(user.id)) {
       return reply.code(404).send(errorBody("User does not exist"));
     }
 
@@ -324,8 +314,9 @@ export function registerUserRoutes(ctx: AppContext): void {
 
     const user = ctx.data.users.find((candidate) => candidate.id === request.params.userId);
 
-    // Moderation is for people: the assistant bot and system records answer like an unknown user.
-    if (!user || user.type !== "human") {
+    // Moderation is for people: the assistant bot, system records and mesh sender records answer like an
+    // unknown user.
+    if (!user || user.type !== "human" || ctx.isMeshSentinelUser(user.id)) {
       return reply.code(404).send(errorBody("User does not exist"));
     }
 
@@ -376,7 +367,8 @@ export function registerUserRoutes(ctx: AppContext): void {
       return reply.code(403).send(errorBody("Moderator access required"));
     }
 
-    return ctx.data.users.filter((user) => user.type === "human");
+    // Mesh sender records are left out: each is visible only to the people it mailed (`visibleUsers`).
+    return ctx.data.users.filter((user) => user.type === "human" && !ctx.isMeshSentinelUser(user.id));
   });
 
   // File a member abuse report (docs/26). Private by design: never broadcast, never in the message stream,
@@ -404,7 +396,12 @@ export function registerUserRoutes(ctx: AppContext): void {
       if (targetType === "user") {
         const target = ctx.data.users.find((candidate) => candidate.id === targetId);
 
-        if (!target || target.type !== "human") {
+        // A mesh sender the reporter can't see (it never mailed them) answers like an unknown user.
+        if (
+          !target ||
+          target.type !== "human" ||
+          (ctx.isMeshSentinelUser(target.id) && !ctx.meshSenderVisibleTo(target.id, currentUser.id))
+        ) {
           return reply.code(404).send(errorBody("Report target does not exist"));
         }
       } else {
@@ -511,6 +508,12 @@ export function registerUserRoutes(ctx: AppContext): void {
 
       if (existing.status === "escalated" && !currentUser.isAdmin) {
         return reply.code(403).send(errorBody("Admin access required"));
+      }
+
+      // A resolved report stays as it was resolved: rewriting it would let any moderator overwrite another's
+      // (or an admin's) decision, and a fresh `resolvedAt` would keep it from ever expiring.
+      if (existing.status === "resolved") {
+        return existing;
       }
 
       if (body.data.resolution === "escalated") {
@@ -645,8 +648,16 @@ export function registerUserRoutes(ctx: AppContext): void {
       }
 
       const message = ctx.data.messages.find((candidate) => candidate.id === request.params.messageId);
+      // Only what the moderator can read (a public message, or one whose audience includes them) or what a
+      // report in their queue points at. Anything else, a direct message between two other people say,
+      // answers like an id that doesn't exist and is left alone.
+      const audience = message ? ctx.messageAudienceUserIds(message) : undefined;
 
-      if (!message || !("body" in message)) {
+      if (
+        !message ||
+        !("body" in message) ||
+        (audience !== undefined && !audience.has(currentUser.id) && !reportVisibleTo(ctx, currentUser, message.id))
+      ) {
         return reply.code(404).send(errorBody("Message does not exist"));
       }
 
@@ -753,7 +764,8 @@ export function registerUserRoutes(ctx: AppContext): void {
 
     const user = ctx.data.users.find((candidate) => candidate.id === request.params.userId);
 
-    if (!user) {
+    // A mesh sender record answers like an unknown user: approving it would broadcast it to everyone.
+    if (!user || ctx.isMeshSentinelUser(user.id)) {
       return reply.code(404).send(errorBody("User does not exist"));
     }
 
@@ -762,11 +774,14 @@ export function registerUserRoutes(ctx: AppContext): void {
 
   // Redeem an invite code from the host's screen (invites.ts): a pending newcomer is admitted at once. The
   // code is the whole credential (it proves the person saw the host phone's screen in the last 10 to 20
-  // minutes), so it is checked in constant time and the route is rate-limited like the admin claim. A
-  // banned user can't use one: a ban stays a ban.
+  // minutes), so it is checked in constant time and the route is rate-limited like the admin claim, per
+  // address: on an IPv6 LAN every phone shares one /64, and counting the /64 let one device's bad attempts
+  // lock everyone's valid code out for the window. Per address still keeps guessing out of reach (the code
+  // is 128 bits of HMAC), and cookie-less requests from cycled addresses stay under the new-identity
+  // budget's /64 bound. A banned user can't use one: a ban stays a ban.
   ctx.server.post(
     "/api/access/redeem",
-    { config: { rateLimit: { max: 10, timeWindow: "1 minute", allowList: () => false } } },
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute", allowList: () => false, perAddress: true } } },
     async (request, reply) => {
       const body = InviteRedeemRequestSchema.safeParse(request.body);
 
@@ -800,7 +815,7 @@ export function registerUserRoutes(ctx: AppContext): void {
 
     const user = ctx.data.users.find((candidate) => candidate.id === request.params.userId);
 
-    if (!user) {
+    if (!user || ctx.isMeshSentinelUser(user.id)) {
       return reply.code(404).send(errorBody("User does not exist"));
     }
 
@@ -903,7 +918,8 @@ export function registerUserRoutes(ctx: AppContext): void {
         mimeType: body.data.mimeType,
         ...(isImage && body.data.width !== undefined ? { width: body.data.width } : {}),
         ...(isImage && body.data.height !== undefined ? { height: body.data.height } : {}),
-        ...(isImage ? {} : { name: sanitizeAttachmentName(body.data.name) }),
+        // A file's name is cleaned and made to end with an extension that fits its declared type.
+        ...(isImageAttachmentMime(body.data.mimeType) ? {} : { name: attachmentStoredName(body.data.name, body.data.mimeType) }),
       };
       const filePath = join(ctx.attachmentsDir, attachmentFileName(attachment));
       // Same Emergency Reset guard as the avatar upload: never leave a file (or an owner entry for a
@@ -913,8 +929,10 @@ export function registerUserRoutes(ctx: AppContext): void {
       }
 
       const generation = ctx.wipeGeneration;
-      await mkdir(ctx.attachmentsDir, { recursive: true });
-      await writeFile(filePath, bytes);
+      // Private to the node's OS user: files from DMs and private channels land here, and a file name is
+      // the capability `GET /api/attachments/:fileName` serves it on.
+      await mkdir(ctx.attachmentsDir, { recursive: true, mode: 0o700 });
+      await writeFile(filePath, bytes, { mode: 0o600 });
 
       if (ctx.wipeGeneration !== generation) {
         await rm(filePath, { force: true }).catch((error: unknown) => ctx.server.log.warn(error));
@@ -1008,10 +1026,15 @@ export function registerUserRoutes(ctx: AppContext): void {
           owningMessage && "attachments" in owningMessage
             ? owningMessage.attachments?.find((entry) => entry.id === attachment.id)
             : undefined;
-        // RFC 6266 `filename=` + `filename*=` from the sanitised stored name; never throws (media.ts).
+        // RFC 6266 `filename=` + `filename*=` from the sanitised stored name; never throws (media.ts). The
+        // extension rule is applied again here, for a record stored before it or copied from a peer.
+        const downloadName =
+          record?.mimeType && !isImageAttachmentMime(record.mimeType)
+            ? attachmentStoredName(record.name, record.mimeType)
+            : record?.name;
         return reply
           .type("application/octet-stream")
-          .header("content-disposition", attachmentContentDisposition(record?.name))
+          .header("content-disposition", attachmentContentDisposition(downloadName))
           .send(fileBytes);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -1036,7 +1059,8 @@ export function promoteUser(
 ): { ok: true; user: User } | { ok: false; status: 400 | 404; error: string } {
   const user = ctx.data.users.find((candidate) => candidate.id === userId);
 
-  if (!user) {
+  // A mesh sender's display record answers like an unknown user (it is on no shared roster).
+  if (!user || ctx.isMeshSentinelUser(user.id)) {
     return { ok: false, status: 404, error: "User does not exist" };
   }
 
@@ -1063,6 +1087,42 @@ export function promoteUser(
   Object.assign(user, next);
   ctx.broadcast({ type: "userUpserted", user });
   return { ok: true, user };
+}
+
+/**
+ * Why a profile edit of `subject` (by themselves, or by an admin) would let them pass as someone else, or
+ * undefined. A generated avatar is drawn from its seed, so a copied name plus a copied seed made an
+ * identical person on every screen.
+ *  - A new name may not match another record's name (any type or state) or, while an assistant is
+ *    configured, the assistant's, compared in `displayNameComparisonForm` (case, hidden characters and
+ *    spacing don't count). Keeping one's current name is always allowed; a name that is nothing but hidden
+ *    characters is refused as an invalid update.
+ *  - A new seed may not be another record's id or current seed, nor start with an id prefix the node mints,
+ *    unless it is the subject's own id. The seed they already have is always allowed (the app sends it back
+ *    with every profile save), so two people who chose the same word before this rule can still save.
+ */
+function impersonationError(ctx: AppContext, subject: User, update: UserUpdateRequest): string | undefined {
+  const { displayName } = update;
+
+  if (displayName !== undefined && displayName !== subject.displayName) {
+    const wanted = displayNameComparisonForm(displayName);
+
+    if (!wanted) {
+      return "Invalid user update request";
+    }
+
+    if (displayNameTakenByOther(displayName, subject.id, ctx.data.users, activeAssistantName(ctx.appConfig.llm))) {
+      return "Someone here already uses that name";
+    }
+  }
+
+  const seed = update.avatar?.seed;
+
+  if (seed !== undefined && seed !== subject.avatar?.seed && avatarSeedImpersonates(seed, subject.id, ctx.data.users)) {
+    return "Invalid user update request";
+  }
+
+  return undefined;
 }
 
 /** Tell every connected moderator and admin that the report queue changed (no content, just "refresh"). */

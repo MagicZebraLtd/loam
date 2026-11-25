@@ -335,3 +335,58 @@ describe("peer timestamps are clamped to this node's clock", () => {
     expect(heldIds(app).has("peer_future")).toBe(false);
   });
 });
+
+describe("imports obey the content flags and drop moderation state", () => {
+  it("refuses a post that carries a location while location sharing is off", async () => {
+    const peer = await recordsPeer(() => [
+      post("peer_plain", "no location"),
+      post("peer_located", "here I am", { location: { label: "The old bridge", lat: 51.5, lng: -0.1 } }),
+    ]);
+    const { app } = await makeApp(syncConfig(peer.url));
+    const { cookie } = await newSession(app);
+    expect(await syncRound(app, cookie)).toBeUndefined();
+    const held = heldIds(app);
+    expect(held.has("peer_plain")).toBe(true);
+    expect(held.has("peer_located")).toBe(false);
+  });
+
+  it("refuses a post that carries attachments while attachments are off", async () => {
+    const attachment = { id: "att_0123456789abcdef", mimeType: "image/png", width: 1, height: 1 };
+    const peer = await recordsPeer(() => [post("peer_plain", "no picture"), post("peer_pictured", "a picture", { attachments: [attachment] })]);
+    const { app } = await makeApp(syncConfig(peer.url, { features: { enableAttachments: false } }));
+    const { cookie } = await newSession(app);
+    expect(await syncRound(app, cookie)).toBeUndefined();
+    const held = heldIds(app);
+    expect(held.has("peer_plain")).toBe(true);
+    expect(held.has("peer_pictured")).toBe(false);
+  });
+
+  it("imports a new author without the timeout a peer set on them", async () => {
+    const timedOut = { ...PEER_AUTHOR, timeoutUntil: Date.now() + 3_600_000 };
+    const peer = await recordsPeer(() => [post("peer_post", "said while muted there")], () => [timedOut]);
+    const { app } = await makeApp(syncConfig(peer.url));
+    const { cookie } = await newSession(app);
+    expect(await syncRound(app, cookie)).toBeUndefined();
+    expect(heldIds(app).has("peer_post")).toBe(true);
+    const imported = app.store.loadUsers().find((user) => user.id === PEER_AUTHOR.id);
+    expect(imported).toBeDefined();
+    expect(imported).not.toHaveProperty("timeoutUntil");
+  });
+
+  it("refuses a reaction whose target is itself a reaction", async () => {
+    const peer = await recordsPeer(() => [
+      post("peer_post", "react to me"),
+      { id: "peer_reaction", type: "reaction", authorId: PEER_AUTHOR.id, targetMessageId: "peer_post", reaction: "👍", createdAt: 1_001 },
+      { id: "peer_reaction_on_reaction", type: "reaction", authorId: PEER_AUTHOR.id, targetMessageId: "peer_reaction", reaction: "👍", createdAt: 1_002 },
+    ]);
+    const { app } = await makeApp(syncConfig(peer.url));
+    const { cookie } = await newSession(app);
+    // Two rounds: in the first the inner reaction may not have landed yet, so the outer one is only early.
+    expect(await syncRound(app, cookie)).toBeUndefined();
+    expect(await syncRound(app, cookie)).toBeUndefined();
+    const held = heldIds(app);
+    expect(held.has("peer_post")).toBe(true);
+    expect(held.has("peer_reaction")).toBe(true);
+    expect(held.has("peer_reaction_on_reaction")).toBe(false);
+  });
+});

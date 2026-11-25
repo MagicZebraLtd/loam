@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createConnection, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +18,7 @@ import {
   reopenApp,
   teardownApps,
 } from "./test-support/app-harness.js";
-import { mkdirGate, resetFsFaults, wipeMarkerWriteFailure } from "./test-support/fs-faults.js";
+import { mkdirGate, resetFsFaults, rmGate, wipeMarkerWriteFailure } from "./test-support/fs-faults.js";
 
 // `node:fs` fault-injection seams (inert unless a test arms one): see test-support/fs-faults.ts.
 vi.mock("node:fs", async (importOriginal) =>
@@ -27,6 +27,22 @@ vi.mock("node:fs", async (importOriginal) =>
 vi.mock("node:fs/promises", async (importOriginal) =>
   (await import("./test-support/fs-faults.js")).faultyFsPromises(await importOriginal()),
 );
+// Counts the panic route's scrypt checks, and can hold one's answer back until a test releases it (`holds`,
+// taken one per check, in order); otherwise the real function.
+const secretChecks = vi.hoisted(() => ({ count: 0, holds: [] as (Promise<void> | undefined)[] }));
+vi.mock("./secrets.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./secrets.js")>();
+  return {
+    ...original,
+    verifySecretAsync: async (candidate: string, stored: string) => {
+      secretChecks.count += 1;
+      const hold = secretChecks.holds.shift();
+      const matches = await original.verifySecretAsync(candidate, stored);
+      await hold;
+      return matches;
+    },
+  };
+});
 
 afterEach(async () => {
   resetFsFaults();
@@ -404,6 +420,45 @@ describe("kill switch", () => {
     expect(bodiesInMainFileAlone("after.db")).not.toContain("ROLLED_BACK_BY_A_POWER_CUT");
   });
 
+  it("leaves no pre-reset host key in the checkpointed plaintext file, so a power cut after the reset cannot bring the old join QR back", async () => {
+    const { app, dataDir } = await makeApp({ killSwitch: { enabled: true } });
+    const admin = await newSession(app);
+    /** The host key the node advertises right now. */
+    async function advertisedKey(): Promise<unknown> {
+      const bootstrap = (await app.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as {
+        networkConfig: { transportPublicKey?: unknown };
+      };
+      return bootstrap.networkConfig.transportPublicKey;
+    }
+    const before = await advertisedKey();
+    expect(typeof before).toBe("string");
+    // The stored key reaches loam.db itself, as it does on a node that has run for a while.
+    app.store.checkpoint();
+
+    // Copy loam.db alone the moment the reset's checkpoint returns: that is what a power cut leaves once the
+    // reset is done, since every later write (the key rotation among them) sits in the unsynced WAL.
+    const copy = join(mkdtempSync(join(tmpdir(), "loam-wipe-key-")), "after-checkpoint.db");
+    cleanups.push(() => rmSync(join(copy, ".."), { recursive: true, force: true }));
+    const store = app.store;
+    const checkpoint = store.checkpoint.bind(store);
+    vi.spyOn(store, "checkpoint").mockImplementation(() => {
+      checkpoint();
+      copyFileSync(join(dataDir, "loam.db"), copy);
+    });
+
+    expect((await postKillSwitch(app, admin.cookie)).statusCode).toBe(200);
+    expect(existsSync(copy)).toBe(true);
+    const survivor = openStore(copy);
+    try {
+      expect(survivor.getConfigValue("transportIdentity")).toBeUndefined();
+    } finally {
+      survivor.close();
+    }
+    const after = await advertisedKey();
+    expect(typeof after).toBe("string");
+    expect(after).not.toBe(before);
+  });
+
   it("stays locked with its journal on disk when the plaintext wipe cannot be made durable", async () => {
     const { app, dataDir } = await makeApp({ killSwitch: { enabled: true } });
     const admin = await newSession(app);
@@ -542,6 +597,148 @@ describe("kill switch", () => {
   });
 });
 
+describe("a request admitted before a reset cannot write after it", () => {
+  /**
+   * Open a raw connection and send a JSON request's headers only, then wait until the server has taken them
+   * in (its `onRequest` hooks run as soon as the headers arrive, before any body). `sendBody` sends the rest;
+   * `status` resolves with the response's status code.
+   */
+  async function sendHeadersOnly(
+    app: LoamApp,
+    baseUrl: string,
+    method: string,
+    path: string,
+    cookie: string,
+    payload: unknown,
+  ): Promise<{ sendBody(): void; status: Promise<number> }> {
+    const { port } = new URL(baseUrl);
+    const body = JSON.stringify(payload);
+    const socket = createConnection({ host: "127.0.0.1", port: Number(port) });
+    cleanups.push(() => {
+      socket.destroy();
+    });
+    let received = "";
+    const status = new Promise<number>((resolve, reject) => {
+      socket.on("data", (chunk) => {
+        received += chunk.toString("utf8");
+        const match = /^HTTP\/1\.1 (\d{3})/.exec(received);
+        if (match) {
+          resolve(Number(match[1]));
+        }
+      });
+      socket.on("error", reject);
+      socket.on("close", () => reject(new Error(`connection closed without a status line: ${received}`)));
+    });
+    const headersIn = new Promise<void>((resolve) => app.server.server.once("request", () => resolve()));
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+    socket.write(
+      `${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nCookie: ${cookie}\r\n` +
+        `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n`,
+    );
+    await headersIn;
+    // Let the async onRequest hooks finish with the headers before anything else happens.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { sendBody: () => socket.write(body), status };
+  }
+
+  /**
+   * Start a reset and hold it at its first await (the media delete), with the 503 gate up, so the body of a
+   * request admitted before it can arrive while it is under way. Returns the release and the reset's reply.
+   */
+  async function startHeldReset(app: LoamApp, adminCookie: string): Promise<{ release(): void; done: Promise<number> }> {
+    let release!: () => void;
+    rmGate.promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      rmGate.entered = resolve;
+    });
+    const done = app.server
+      .inject({ method: "POST", url: "/api/admin/kill-switch", headers: { cookie: adminCookie }, payload: { confirm: "wipe" } })
+      .then((response) => response.statusCode);
+    await entered;
+    return {
+      release: () => {
+        rmGate.promise = undefined;
+        release();
+      },
+      done,
+    };
+  }
+
+  const stores = [
+    { name: "a plaintext store", opts: {} },
+    { name: "an ephemeral encrypted store", opts: { ephemeralDbKey: true, dbEncryptionMode: "ephemeral" as const } },
+  ];
+
+  for (const { name, opts } of stores) {
+    it(`refuses a message whose body arrives during the reset, and stores nothing, on ${name}`, async () => {
+      const { app } = await makeApp({ killSwitch: { enabled: true } }, opts);
+      const admin = await newSession(app);
+      const member = await newSession(app);
+      const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+
+      const split = await sendHeadersOnly(app, baseUrl, "POST", "/api/messages", member.cookie, {
+        type: "channelPost",
+        channelId: "general",
+        body: "WRITTEN_ACROSS_THE_RESET",
+      });
+      const reset = await startHeldReset(app, admin.cookie);
+      split.sendBody();
+      const status = await split.status;
+      reset.release();
+      expect(await reset.done).toBe(200);
+
+      expect(status).toBe(503);
+      const bodies = app.store.loadMessages().map((message) => ("body" in message ? message.body : ""));
+      expect(bodies).not.toContain("WRITTEN_ACROSS_THE_RESET");
+      const stranger = await newSession(app);
+      const visible = await app.server.inject({ method: "GET", url: "/api/messages/general", headers: { cookie: stranger.cookie } });
+      expect(visible.body).not.toContain("WRITTEN_ACROSS_THE_RESET");
+    });
+
+    it(`refuses a profile edit whose body arrives during the reset, and brings back no pre-reset user, on ${name}`, async () => {
+      const { app } = await makeApp({ killSwitch: { enabled: true }, identity: { allowUserDisplayNameEdit: true } }, opts);
+      const admin = await newSession(app);
+      const member = await newSession(app);
+      const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+
+      const split = await sendHeadersOnly(app, baseUrl, "PATCH", "/api/users/me", member.cookie, {
+        displayName: "Back From Before",
+      });
+      const reset = await startHeldReset(app, admin.cookie);
+      split.sendBody();
+      const status = await split.status;
+      reset.release();
+      expect(await reset.done).toBe(200);
+
+      expect(status).toBe(503);
+      const users = app.store.loadUsers();
+      expect(users.map((user) => user.id)).not.toContain(member.userId);
+      expect(users.map((user) => user.displayName)).not.toContain("Back From Before");
+    });
+  }
+
+  it("refuses a message whose body arrives after the reset has finished, since it was admitted before it", async () => {
+    const { app } = await makeApp({ killSwitch: { enabled: true } });
+    const admin = await newSession(app);
+    const member = await newSession(app);
+    const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+
+    const split = await sendHeadersOnly(app, baseUrl, "POST", "/api/messages", member.cookie, {
+      type: "channelPost",
+      channelId: "general",
+      body: "WRITTEN_AFTER_THE_RESET",
+    });
+    expect((await app.server.inject({ method: "POST", url: "/api/admin/kill-switch", headers: { cookie: admin.cookie }, payload: { confirm: "wipe" } })).statusCode).toBe(200);
+    split.sendBody();
+
+    expect(await split.status).toBe(503);
+    const bodies = app.store.loadMessages().map((message) => ("body" in message ? message.body : ""));
+    expect(bodies).not.toContain("WRITTEN_AFTER_THE_RESET");
+  });
+});
+
 describe("emergency reset from the host device", () => {
   it("wipes the node through the in-process hook, even with the remote kill switch disabled", async () => {
     const app = await makeApp({ killSwitch: { enabled: false } });
@@ -617,6 +814,21 @@ describe("emergency reset from the host device", () => {
     wipeMarkerWriteFailure.armed = false;
     expect(await app.emergencyReset()).toEqual({ complete: false, keyClearRequested: false, journaled: true });
     expect(await app.host.emergencyReset()).toEqual({ complete: false, journaled: true });
+  });
+
+  it("reports no journal for a wipe that fails after its journal was cleared", async () => {
+    const { app, dataDir } = await makeApp({ killSwitch: { enabled: false } });
+    const journal = join(dataDir, ".loam-wipe-phase");
+    const setConfigValue = app.store.setConfigValue.bind(app.store);
+    // The new transport key is written once more after the journal is gone: fail that write.
+    app.store.setConfigValue = (key, value) => {
+      if (key === "transportIdentity" && !existsSync(journal)) {
+        throw new Error("disk full");
+      }
+      setConfigValue(key, value);
+    };
+    expect(await app.emergencyReset()).toEqual({ complete: false, keyClearRequested: false, journaled: false });
+    expect(existsSync(journal)).toBe(false);
   });
 });
 
@@ -695,6 +907,60 @@ describe("panic endpoint", () => {
     // and the node is NOT wiped.
     expect((await panic(app, "panic-token-0123456789")).statusCode).toBe(404);
     expect(app.store.loadMessages().length).toBe(1);
+  });
+
+  it("answers wrong tokens alike with or without a token set, and checks none once the attempt limit is spent", async () => {
+    const nodes = {
+      armed: await makeApp({ killSwitch: { enabled: true, panicToken: "panic-token-0123456789" } }),
+      tokenless: await makeApp({ killSwitch: { enabled: true } }),
+      off: await makeApp(),
+    };
+    const results: Record<string, { statuses: number[]; checks: number; entries: number }> = {};
+    for (const [name, app] of Object.entries(nodes)) {
+      secretChecks.count = 0;
+      const statuses: number[] = [];
+      // One past the attempt limit (5), inside the route limit (10 a minute).
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        statuses.push((await panic(app, `wrong-${attempt}`)).statusCode);
+      }
+      results[name] = { statuses, checks: secretChecks.count, entries: app.rateLimiterEntryCounts().panic };
+    }
+    const expected = { statuses: [404, 404, 404, 404, 404, 404], checks: 5, entries: 1 };
+    expect(results).toEqual({ armed: expected, tokenless: expected, off: expected });
+  });
+
+  it("runs one reset for two valid tokens a moment apart, even when the first finishes inside the second's check", async () => {
+    const app = await makeApp({ killSwitch: { enabled: true, panicToken: "panic-token-0123456789" } });
+    const resets = vi.fn();
+    (globalThis as { __loamHostReset?: () => void }).__loamHostReset = resets;
+    cleanups.push(() => {
+      delete (globalThis as { __loamHostReset?: () => void }).__loamHostReset;
+    });
+    let release = () => {};
+    secretChecks.holds = [undefined, new Promise<void>((resolve) => (release = resolve))];
+
+    const first = panic(app, "panic-token-0123456789");
+    const second = panic(app, "panic-token-0123456789");
+    expect((await first).statusCode).toBe(200);
+    expect(resets).toHaveBeenCalledTimes(1);
+
+    // Written after the reset: a second reset would take it too.
+    const member = await newSession(app);
+    const posted = await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { cookie: member.cookie },
+      payload: { type: "channelPost", channelId: "general", body: "after the reset" },
+    });
+    expect(posted.statusCode).toBe(201);
+
+    release();
+    const late = await second;
+    expect(late.statusCode).toBe(200);
+    expect(late.json()).toEqual({ ok: true });
+    expect(resets).toHaveBeenCalledTimes(1);
+    expect(app.store.loadMessages().map((message) => ("body" in message ? message.body : ""))).toEqual(["after the reset"]);
+    secretChecks.holds = [];
   });
 
   it("counts wrong tokens per address: a neighbour on the same IPv6 /64 can't lock the operator's real token out", async () => {

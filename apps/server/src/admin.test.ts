@@ -251,6 +251,55 @@ describe("host-device admin bootstrap", () => {
     expect((adminConfig.json() as { admin: { bootstrap: string } }).admin.bootstrap).toBe("firstUser");
     expect((await claim(second.cookie, "guess")).statusCode).toBe(403);
   });
+
+  it("hostDevice: the host token counts only from loopback; from a LAN address it is a wrong secret", async () => {
+    // The host phone's notifications go to whoever presented the token (`hostDeviceUserId`): a DM to that
+    // person reaches this hook, so an empty list proves the LAN claim did not make them the host's person.
+    const hooked = globalThis as { __loamNotifyHost?: (notice: unknown) => void };
+    const notices: unknown[] = [];
+    hooked.__loamNotifyHost = (notice) => void notices.push(notice);
+    try {
+      const app = await makeApp(undefined, { hostToken: HOST_TOKEN });
+      const leaked = await newSession(app);
+      const member = await newSession(app);
+      const fromLan = () =>
+        app.server.inject({
+          method: "POST",
+          url: "/api/admin/claim",
+          headers: { cookie: leaked.cookie },
+          payload: { secret: HOST_TOKEN },
+          remoteAddress: "192.168.1.50",
+        });
+      const dmToLeaked = () =>
+        app.server.inject({
+          method: "POST",
+          url: "/api/messages",
+          headers: { cookie: member.cookie },
+          payload: { type: "dm", recipientUserId: leaked.userId, body: "hello" },
+        });
+
+      // Five LAN claims with the right token are five failed attempts, and the sixth is over the budget.
+      for (let i = 0; i < 5; i += 1) {
+        const refused = await fromLan();
+        expect(refused.statusCode).toBe(403);
+        expect((refused.json() as { error: string }).error).toBe("Invalid admin secret");
+      }
+      expect((await fromLan()).statusCode).toBe(429);
+      const config = await app.server.inject({ method: "GET", url: "/api/config", headers: { cookie: leaked.cookie } });
+      expect((config.json() as { currentUser: { isAdmin: boolean } }).currentUser.isAdmin).toBe(false);
+      expect((await dmToLeaked()).statusCode).toBe(201);
+      expect(notices).toEqual([]);
+
+      // The same claim from loopback, the host's own window, works as before.
+      const promoted = await claim(app, leaked.cookie, HOST_TOKEN);
+      expect(promoted.statusCode).toBe(200);
+      expect((promoted.json() as { isAdmin: boolean }).isAdmin).toBe(true);
+      expect((await dmToLeaked()).statusCode).toBe(201);
+      expect(notices).toHaveLength(1);
+    } finally {
+      delete hooked.__loamNotifyHost;
+    }
+  });
 });
 
 describe("host-device admin bootstrap: the claim budget and setup codes", () => {
@@ -305,6 +354,24 @@ describe("host-device admin bootstrap: the claim budget and setup codes", () => 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("refuses a spent /64 before counting the address, so new addresses in it add nothing to the limiter", async () => {
+    const app = await makeApp(undefined, { hostToken: HOST_TOKEN });
+    const guesser = await newSession(app);
+    const from = (remoteAddress: string, secret: string) =>
+      app.server.inject({ method: "POST", url: "/api/admin/claim", headers: { cookie: guesser.cookie }, payload: { secret }, remoteAddress });
+    // Eight addresses spend five guesses each: the /64's forty.
+    for (let host = 1; host <= 8; host += 1) {
+      for (let guess = 0; guess < 5; guess += 1) {
+        expect((await from(`2001:db8:7:8::${host}`, `guess-${host}-${guess}`)).statusCode).toBe(403);
+      }
+    }
+    const before = app.rateLimiterEntryCounts().claim;
+    for (let host = 9; host < 29; host += 1) {
+      expect((await from(`2001:db8:7:8::${host}`, `guess-${host}`)).statusCode).toBe(429);
+    }
+    expect(app.rateLimiterEntryCounts().claim).toBe(before);
   });
 
   it("hostDevice CONFIGURED on a node with no launcher token behaves like `none` and never touches the limiter", async () => {

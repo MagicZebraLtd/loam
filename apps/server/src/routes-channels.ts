@@ -1,7 +1,7 @@
 // Channels: listing, history, members, join requests, ownership transfer, create/update/delete, and the
 // admin channel view, registered over the shared AppContext.
 
-import { ChannelCreateRequestSchema, ChannelMemberAddRequestSchema, ChannelSchema, ChannelTransferRequestSchema, ChannelUpdateRequestSchema } from "@loam/schema";
+import { ChannelCreateRequestSchema, ChannelMemberAddRequestSchema, ChannelSchema, ChannelTransferRequestSchema, ChannelUpdateRequestSchema, type User } from "@loam/schema";
 import type { AppContext } from "./app-context.js";
 import { errorBody } from "./errors.js";
 
@@ -12,6 +12,19 @@ import { errorBody } from "./errors.js";
  */
 function blockedEitherWay(ctx: AppContext, actorId: string, targetId: string): boolean {
   return actorId !== targetId && (ctx.store.isUserBlocked(actorId, targetId) || ctx.store.isUserBlocked(targetId, actorId));
+}
+
+/**
+ * The person `userId` names, when they can be added to a private channel (invited, or handed it): a human
+ * who is neither a mesh sender's record, nor waiting for approval, nor banned. Everyone else is answered as
+ * an unknown id, so an invite can't be used to learn that a mesh sender, a queued or a banned person exists.
+ */
+function addableChannelMember(ctx: AppContext, userId: string): User | undefined {
+  const target = ctx.data.users.find((user) => user.id === userId);
+  if (!target || target.type !== "human" || ctx.isMeshSentinelUser(target.id) || target.pending || target.banned) {
+    return undefined;
+  }
+  return target;
 }
 
 /** Register the channel routes: listing, history, members, join requests, transfer, create/update/delete, admin view. */
@@ -106,6 +119,12 @@ export function registerChannelRoutes(ctx: AppContext): void {
       return reply.code(403).send(errorBody("Only the channel owner or an admin can invite members"));
     }
 
+    // An admin manages a private channel without being in its audience: they can't add anyone, themselves
+    // included, unless they are already in it, or an invite would open the whole history to them.
+    if (!ctx.channelMemberIds(channel).has(currentUser.id)) {
+      return reply.code(403).send(errorBody("Only people in this channel can add someone to it"));
+    }
+
     // A moderator timeout is a write block: creating channels, rewriting channel metadata, and
     // growing rosters are all publishing/coordination surfaces. Access-REDUCING
     // actions (leave, remove) stay available; admins are never timeout-able in practice.
@@ -128,14 +147,10 @@ export function registerChannelRoutes(ctx: AppContext): void {
       return reply.code(400).send(errorBody("Invalid member request"));
     }
 
-    const target = ctx.data.users.find((user) => user.id === body.data.userId);
+    const target = addableChannelMember(ctx, body.data.userId);
 
-    if (!target || target.type !== "human") {
+    if (!target) {
       return reply.code(400).send(errorBody("User does not exist"));
-    }
-
-    if (target.banned) {
-      return reply.code(400).send(errorBody("That user has been removed from this node"));
     }
 
     const members = ctx.channelMemberIds(channel);
@@ -280,6 +295,12 @@ export function registerChannelRoutes(ctx: AppContext): void {
         return reply.code(403).send(errorBody("Only the channel owner or an admin can approve join requests"));
       }
 
+      // Approving grows the roster like an invite, so the same rule: only someone already in the channel.
+      // Refused before the request is touched, so it stays in the queue for the owner.
+      if (channel.visibility === "private" && !ctx.channelMemberIds(channel).has(currentUser.id)) {
+        return reply.code(403).send(errorBody("Only people in this channel can add someone to it"));
+      }
+
       // A moderator timeout is a write block: creating channels, rewriting channel metadata, and
       // growing rosters are all publishing/coordination surfaces. Access-REDUCING
       // actions (leave, remove) stay available; admins are never timeout-able in practice.
@@ -392,18 +413,24 @@ export function registerChannelRoutes(ctx: AppContext): void {
       return reply.code(400).send(errorBody("Invalid transfer request"));
     }
 
-    const target = ctx.data.users.find((user) => user.id === body.data.userId);
+    const target = addableChannelMember(ctx, body.data.userId);
 
-    if (!target || target.type !== "human") {
+    if (!target) {
       return reply.code(400).send(errorBody("User does not exist"));
-    }
-
-    if (target.banned) {
-      return reply.code(400).send(errorBody("That user has been removed from this node"));
     }
 
     if (channel.ownerUserId === target.id) {
       return channel;
+    }
+
+    // Handing a private channel to someone outside it adds them to the roster: like an invite, only someone
+    // already in the channel may do that. A non-member admin can still pass it to an existing member.
+    if (channel.visibility === "private") {
+      const roster = ctx.channelMemberIds(channel);
+
+      if (!roster.has(currentUser.id) && !roster.has(target.id)) {
+        return reply.code(403).send(errorBody("Only people in this channel can add someone to it"));
+      }
     }
 
     // Generic answer (both directions), so the blocked party isn't told about the block.

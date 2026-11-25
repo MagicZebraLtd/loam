@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DISPLAY_NAME_CACHE_LIMIT,
+  displayNameCacheSize,
   englishWordPack,
   generateDisplayName,
   getDisplayNameParts,
@@ -40,5 +42,19 @@ describe("generateDisplayName", () => {
     } as const;
 
     expect(generateDisplayName("seed", customPack)).toMatch(/^(uno|dos)\.(tres|cuatro)\.(cinco|seis)$/);
+  });
+});
+
+describe("the name cache", () => {
+  it("stays bounded however many ids are named, and the same id keeps its name across an emptying", () => {
+    const pack = { adjectives: ["red", "blue"], materials: ["clay", "slate"], creatures: ["fox", "owl"] } as const;
+    const before = generateDisplayName("user.0000000000000000", pack);
+
+    for (let index = 1; index <= DISPLAY_NAME_CACHE_LIMIT * 2 + 10; index += 1) {
+      generateDisplayName(`user.${index.toString(16).padStart(16, "0")}`, pack);
+      expect(displayNameCacheSize(pack)).toBeLessThanOrEqual(DISPLAY_NAME_CACHE_LIMIT);
+    }
+
+    expect(generateDisplayName("user.0000000000000000", pack)).toBe(before);
   });
 });

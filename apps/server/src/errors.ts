@@ -196,7 +196,6 @@ export const ERROR_CODES: Record<string, ServerErrorCode> = {
   "Only the channel owner or an admin can invite members": "member_invite_forbidden",
   "Only the channel owner or an admin can remove members": "member_remove_forbidden",
   "Only the channel owner or an admin can transfer ownership": "channel_transfer_forbidden",
-  "Parent message belongs to a different channel": "parent_wrong_channel",
   "Parent message does not exist": "parent_not_found",
   "Private channels are disabled on this LOAM node": "private_channels_disabled",
   "Provide a search query (?q=)": "search_query_required",
@@ -235,6 +234,7 @@ export const ERROR_CODES: Record<string, ServerErrorCode> = {
   "Only admins can post in this channel": "channel_admins_post_only",
   "This message was removed by a moderator": "message_removed",
   "The assistant is busy; try again shortly": "assistant_busy",
+  "The assistant now answers from somewhere else; check where, then send again": "assistant_destination_changed",
   "A cloud assistant is not allowed on a hardened network": "llm_cloud_not_allowed",
   "An assistant on another computer must use HTTPS on this network": "llm_unencrypted_not_allowed",
   "Invalid LLM models request": "invalid_llm_models_request",
@@ -246,10 +246,14 @@ export const ERROR_CODES: Record<string, ServerErrorCode> = {
   // An invite or ownership transfer across a block (either direction). Generic like `dm_unavailable`: it
   // doesn't state the reason.
   "This person isn't available for this channel": "channel_member_unavailable",
+  // Someone outside a private channel (a node admin who manages it) adding a person to its roster.
+  "Only people in this channel can add someone to it": "channel_members_only",
   // The member rules (the Welcome screen): not agreed yet, an outdated version, and "Try another" after agreeing.
   "Agree to the network's rules before posting": "rules_not_accepted",
   "These rules have changed. Reload to read the current ones": "rules_version_mismatch",
   "A new name is only available before you first join in": "reroll_not_allowed",
+  // A profile edit that would copy another person's (or the assistant's) name.
+  "Someone here already uses that name": "display_name_taken",
   // The generic 5xx body (see the app's error handler) — internal detail is logged, never returned.
   "Internal server error": "internal_error",
   // A request whose `Host` names something this node doesn't serve (DNS rebinding): 421.

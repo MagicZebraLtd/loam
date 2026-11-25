@@ -279,3 +279,49 @@ describe("request logs never reveal tunnelled paths or query strings", () => {
     expect(text).not.toContain("DIRECT_QUERY_SECRET");
   });
 });
+
+describe("request logs name the route, never the conversation", () => {
+  it("logs a DM page and a DM history request without the user id in either", async () => {
+    const logs: string[] = [];
+    const { app } = await makeApp(undefined, { logger: true, logStream: { write: (line) => void logs.push(line) } });
+    const { cookie } = await newSession(app);
+    for (const url of ["/dm/user.0123456789abcdef", "/api/dms/user.0123456789abcdef"]) {
+      await app.server.inject({ method: "GET", url, headers: { cookie } });
+    }
+    // Nor does any other way of asking for them: another method, an unparseable path, a refused body.
+    await app.server.inject({ method: "DELETE", url: "/dm/user.0123456789abcdef", headers: { cookie } });
+    await app.server.inject({ method: "GET", url: "/api/dms/user.0123456789abcdef%E0%A4%A", headers: { cookie } });
+    await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { cookie, "content-type": "application/json" },
+      payload: '{"recipientUserId": user.0123456789abcdef',
+    });
+    const text = logs.join("");
+    expect(text).not.toContain("0123456789abcdef");
+    // The matched route's pattern stands in for the path; a page no route matched is a placeholder.
+    expect(text).toContain('"url":"/api/dms/:userId"');
+    expect(text).toContain('"url":"[unmatched]"');
+  });
+});
+
+describe("the app shell's connect-src", () => {
+  /** The `connect-src` directive the app shell is served with for a request carrying `host`. */
+  async function connectSrc(host: string): Promise<string | undefined> {
+    const { app } = await makeApp();
+    const response = await app.server.inject({ method: "GET", url: "/", headers: { host } });
+    expect(response.statusCode).toBe(200);
+    return String(response.headers["content-security-policy"])
+      .split("; ")
+      .find((directive) => directive.startsWith("connect-src"));
+  }
+
+  it("lets the page open sockets only to the address it was loaded from", async () => {
+    expect(await connectSrc("192.168.1.5:3000")).toBe("connect-src 'self' ws://192.168.1.5:3000 wss://192.168.1.5:3000");
+    expect(await connectSrc("[fd00::1]:3000")).toBe("connect-src 'self' ws://[fd00::1]:3000 wss://[fd00::1]:3000");
+  });
+
+  it("falls back to 'self' alone for a Host with any other character in it", async () => {
+    expect(await connectSrc("my_node.local:3000")).toBe("connect-src 'self'");
+  });
+});

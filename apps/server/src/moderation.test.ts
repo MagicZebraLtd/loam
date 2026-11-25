@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { REPORTED_MESSAGE_BODY_MAX_LENGTH, ReportedMessageSchema } from "@loam/schema";
+import { REPORTED_MESSAGE_BODY_MAX_LENGTH, ReportedMessageSchema, type Report } from "@loam/schema";
 
 import type { LoamApp } from "./app.js";
 import { OPEN_REPORTS_PER_REPORTER_MAX, reportedMessageBody } from "./routes-users.js";
@@ -624,6 +624,35 @@ describe("member reports + timeout + honest tombstone", () => {
     expect((await fromFreshAddress({ targetType: "message", targetId: extra, reason: "spam" })).statusCode).toBe(201);
   });
 
+  it("leaves a resolved report as it was resolved when anyone resolves it again", async () => {
+    const app = await makeApp();
+    const admin = await newSession(app);
+    const author = await newSession(app);
+    const reporter = await newSession(app);
+    const mod = await newSession(app);
+    const roles = await app.server.inject({
+      method: "PATCH",
+      url: `/api/admin/users/${mod.userId}/roles`,
+      headers: { cookie: admin.cookie },
+      payload: { roles: ["moderator"] },
+    });
+    expect(roles.statusCode).toBe(200);
+    const msgId = ((await postChannel(app, author.cookie, "general", "hmm")).json() as { message: { id: string } }).message.id;
+    const { id } = (await fileReport(app, reporter.cookie, { targetType: "message", targetId: msgId, reason: "spam" })).json() as { id: string };
+    const resolve = (cookie: string, payload: Record<string, unknown>) =>
+      app.server.inject({ method: "POST", url: `/api/moderation/reports/${id}/resolve`, headers: { cookie }, payload });
+
+    expect((await resolve(admin.cookie, { resolution: "dismissed", note: "nothing wrong" })).statusCode).toBe(200);
+    const stored = app.store.getReport(id);
+    expect(stored).toMatchObject({ status: "resolved", resolution: "dismissed", resolvedByUserId: admin.userId });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const again = await resolve(mod.cookie, { resolution: "message_removed", note: "overruled" });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual(stored);
+    expect(app.store.getReport(id)).toEqual(stored);
+  });
+
   it("serves a reported message's private attachment to a moderator outside the conversation only while the report is in their queue", async () => {
     const app = await makeApp();
     const admin = await newSession(app);
@@ -1006,5 +1035,67 @@ describe("moderator-removed messages and timeouts", () => {
 
     expect((await moderate({ timeoutUntil: null })).statusCode).toBe(200);
     expect(timeoutUntil()).toBe(0);
+  });
+});
+
+describe("resolved reports expire", () => {
+  const MINUTE = 60_000;
+  const DAY = 24 * 60 * MINUTE;
+
+  /** A report filed `filedAgo` ms ago, resolved `resolvedAgo` ms ago (or still `status` when not resolved). */
+  function report(id: string, status: Report["status"], filedAgo: number, resolvedAgo?: number): Report {
+    const now = Date.now();
+    return {
+      id,
+      targetType: "message",
+      targetId: "msg_reported",
+      reporterUserId: "user.reporter",
+      reason: "spam",
+      note: "the reporter's own words",
+      createdAt: now - filedAgo,
+      status,
+      ...(resolvedAgo === undefined
+        ? {}
+        : { resolution: "dismissed" as const, resolutionNote: "the moderator's note", resolvedByUserId: "user.mod", resolvedAt: now - resolvedAgo }),
+    };
+  }
+
+  /** Boot a node whose reaper tick the test runs by hand (fake intervals), with these reports stored. */
+  async function nodeWithReports(config: unknown, reports: Report[]): Promise<LoamApp> {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const app = await makeApp(config);
+    for (const stored of reports) {
+      app.store.upsertReport(stored);
+    }
+    vi.advanceTimersByTime(30_000);
+    return app;
+  }
+
+  it("deletes a report resolved longer ago than the node's retention, and keeps one resolved more recently", async () => {
+    const app = await nodeWithReports({ retention: { messageTtlMs: 60 * MINUTE } }, [
+      report("rpt_00000000000000a1", "resolved", 2 * 60 * MINUTE, 61 * MINUTE),
+      report("rpt_00000000000000a2", "resolved", 2 * 60 * MINUTE, 59 * MINUTE),
+    ]);
+    expect(app.store.getReport("rpt_00000000000000a1")).toBeUndefined();
+    expect(app.store.getReport("rpt_00000000000000a2")?.status).toBe("resolved");
+  });
+
+  it("keeps resolved reports for 30 days when the node keeps messages for ever", async () => {
+    const app = await nodeWithReports({}, [
+      report("rpt_00000000000000b1", "resolved", 40 * DAY, 30 * DAY + MINUTE),
+      report("rpt_00000000000000b2", "resolved", 40 * DAY, 30 * DAY - MINUTE),
+    ]);
+    expect(app.store.getReport("rpt_00000000000000b1")).toBeUndefined();
+    expect(app.store.getReport("rpt_00000000000000b2")?.status).toBe("resolved");
+  });
+
+  it("never touches an open or escalated report, however old", async () => {
+    const app = await nodeWithReports({ retention: { messageTtlMs: 60 * MINUTE } }, [
+      report("rpt_00000000000000c1", "open", 400 * DAY),
+      report("rpt_00000000000000c2", "escalated", 400 * DAY),
+    ]);
+    expect(app.store.getReport("rpt_00000000000000c1")?.status).toBe("open");
+    expect(app.store.getReport("rpt_00000000000000c2")?.status).toBe("escalated");
+    expect(app.store.countOpenReports()).toBe(2);
   });
 });

@@ -1,8 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 import type { Channel, Message, Report, User } from "@loam/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -473,6 +476,27 @@ describe("reports", () => {
   function makeReport(id: string, targetId: string, reporterUserId: string, status: Report["status"] = "open"): Report {
     return { id, targetType: "message", targetId, reporterUserId, reason: "spam", createdAt: 1_704_067_200_000, status };
   }
+
+  it("lists only resolved reports with their resolution time, and deletes one by id", () => {
+    const store = openStore(":memory:");
+    try {
+      store.upsertReport({ ...makeReport("rpt_00000000000000e1", "msg_1", "user.rep", "resolved"), resolvedAt: 1_704_067_300_000 });
+      // A resolved row without `resolvedAt` falls back to its filing time.
+      store.upsertReport(makeReport("rpt_00000000000000e2", "msg_1", "user.rep", "resolved"));
+      store.upsertReport(makeReport("rpt_00000000000000e3", "msg_1", "user.other"));
+
+      expect(store.loadResolvedReportTimes().sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+        { id: "rpt_00000000000000e1", resolvedAt: 1_704_067_300_000 },
+        { id: "rpt_00000000000000e2", resolvedAt: 1_704_067_200_000 },
+      ]);
+      store.deleteReport("rpt_00000000000000e1");
+      expect(store.getReport("rpt_00000000000000e1")).toBeUndefined();
+      expect(store.getReport("rpt_00000000000000e2")?.status).toBe("resolved");
+      expect(store.countOpenReports("user.other")).toBe(1);
+    } finally {
+      store.close();
+    }
+  });
 
   it("finds the open reports about one target and counts open ones per reporter and node-wide", () => {
     const store = openStore(":memory:");
@@ -957,4 +981,84 @@ describe("encrypted store — plaintext-on-disk guard", () => {
     // The fake really did write plaintext — the guard, not some other failure, is what refused it.
     expect(readFileSync(dbPath).subarray(0, 15).toString("ascii")).toBe("SQLite format 3");
   });
+});
+
+describe("temporary storage stays in memory", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "loam-temp-store-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Watch a driver's `exec` to catch the connection `openStore` makes, then read `PRAGMA temp_store` back on it. */
+  function tempStoreOf(prototype: { exec(sql: string): unknown }, open: () => LoamStore): unknown {
+    const exec = vi.spyOn(prototype, "exec");
+    const store = open();
+    try {
+      const connection = exec.mock.contexts[0] as { prepare(sql: string): { get(): Record<string, unknown> | undefined } };
+      return connection.prepare("PRAGMA temp_store").get()?.temp_store;
+    } finally {
+      store.close();
+    }
+  }
+
+  it("sets temp_store to MEMORY on the plain node:sqlite driver", () => {
+    expect(tempStoreOf(DatabaseSync.prototype, () => openStore(join(dir, "loam.db")))).toBe(2);
+  });
+
+  it("sets temp_store to MEMORY on the encrypted driver", () => {
+    const Database = createRequire(import.meta.url)("better-sqlite3-multiple-ciphers") as {
+      prototype: { exec(sql: string): unknown };
+    };
+    expect(tempStoreOf(Database.prototype, () => openStore(join(dir, "loam.db"), { encryptionKey: "k" }))).toBe(2);
+  });
+
+  // The cipher does not encrypt SQLite's temporary files, and the encrypted driver is built to keep them on
+  // disk: a message load large enough for its sort to spill wrote whole rows, in the clear, to the OS temp
+  // directory. SQLite reads SQLITE_TMPDIR once per process, so the load runs in a child process of its own.
+  // The spill file is unlinked as soon as it is opened, so the test watches the directory's mtime as well.
+  it("writes nothing to the temp directory while an encrypted store loads about 18 MB of messages", () => {
+    const spillDir = join(dir, "spill");
+    mkdirSync(spillDir);
+    const script = join(dir, "load.mjs");
+    writeFileSync(
+      script,
+      [
+        `import { readdirSync, statSync } from "node:fs";`,
+        `const { openStore } = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "db.ts")).href)});`,
+        `const store = openStore(${JSON.stringify(join(dir, "loam.db"))}, { encryptionKey: "k" });`,
+        `const body = "x".repeat(4000);`,
+        `store.transaction(() => {`,
+        `  for (let i = 0; i < 4600; i++) {`,
+        `    store.insertMessage({ id: "msg_" + i, type: "channelPost", channelId: "general", authorId: "user.a", body, createdAt: 2000000000000 - i });`,
+        `  }`,
+        `});`,
+        `const before = statSync(process.env.SQLITE_TMPDIR).mtimeMs;`,
+        `const loaded = store.loadMessages().length;`,
+        `const after = statSync(process.env.SQLITE_TMPDIR).mtimeMs;`,
+        `store.close();`,
+        `console.log(JSON.stringify({ loaded, touched: after !== before, entries: readdirSync(process.env.SQLITE_TMPDIR) }));`,
+      ].join("\n"),
+    );
+    const run = spawnSync(process.execPath, ["--import", "tsx", script], {
+      cwd: join(import.meta.dirname, ".."),
+      env: { ...process.env, SQLITE_TMPDIR: spillDir },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    if (run.status !== 0 && /Cannot find module 'better-sqlite3-multiple-ciphers'|Could not locate the bindings file/.test(run.stderr)) {
+      console.warn("Skipping the temp-file spill check: the encrypted SQLite driver is not installed here");
+      return;
+    }
+    expect(run.status, run.stderr).toBe(0);
+    const result = JSON.parse(run.stdout.trim().split("\n").at(-1) ?? "{}") as { loaded: number; touched: boolean; entries: string[] };
+    expect(result.loaded).toBe(4600);
+    expect(result.entries).toEqual([]);
+    expect(result.touched).toBe(false);
+  }, 30_000);
 });

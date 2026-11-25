@@ -180,10 +180,10 @@ describe("Host header parsing and allowlist", () => {
   });
 
   it("the request log keeps an allowed Host and replaces any other with a placeholder", () => {
-    expect(loggedRequest({ method: "GET", url: "/api/bootstrap", host: "192.168.1.5:3000" }).host).toBe("192.168.1.5:3000");
-    expect(loggedRequest({ method: "GET", url: "/api/bootstrap", host: "localhost:3000" }).host).toBe("localhost:3000");
-    expect(loggedRequest({ method: "GET", url: "/api/bootstrap", host: "evil.example.com" }).host).toBe("[hostname]");
-    expect(loggedRequest({ method: "GET", url: "/api/bootstrap" }).host).toBe("[hostname]");
+    expect(loggedRequest({ method: "GET", routeOptions: { url: "/api/bootstrap" }, host: "192.168.1.5:3000" }).host).toBe("192.168.1.5:3000");
+    expect(loggedRequest({ method: "GET", routeOptions: { url: "/api/bootstrap" }, host: "localhost:3000" }).host).toBe("localhost:3000");
+    expect(loggedRequest({ method: "GET", routeOptions: { url: "/api/bootstrap" }, host: "evil.example.com" }).host).toBe("[hostname]");
+    expect(loggedRequest({ method: "GET", routeOptions: { url: "/api/bootstrap" } }).host).toBe("[hostname]");
   });
 });
 

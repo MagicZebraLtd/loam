@@ -53,3 +53,8 @@ auditConfig:
     # it, so it can't be overridden; expo-router only parses the host app's own routes on the phone, never
     # anything a LAN client sends. Goes away with the move to Expo SDK 58 (expo-router 58).
     - GHSA-qr28-fpjm-wq7f
+    # picomatch <=4.0.7: slow matching on a pattern with repeated extglobs; no fixed release exists (the
+    # advisory lists none). Paths: expo > @expo/cli > picomatch, and expo > @expo/cli > @expo/metro-file-map >
+    # jest-worker > jest-util > picomatch (Metro file matching at build time, patterns from Expo's own
+    # config, never from a LAN client).
+    - GHSA-fc5q-39xc-vjpf

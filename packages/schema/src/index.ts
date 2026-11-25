@@ -402,6 +402,12 @@ export const NetworkConfigSchema = z.object({
   enableLLMStreaming: z.boolean(),
   /** Where the assistant's replies come from; present exactly when `enableLLMChat` is true. */
   assistantDestination: AssistantDestinationSchema.optional(),
+  /**
+   * An opaque random tag the node replaces whenever that destination changes; present exactly when
+   * `assistantDestination` is. A DM to the assistant repeats it (`assistantDestinationRevision` on the create request), so the node
+   * can refuse a message written for a destination that has since changed (docs/06).
+   */
+  assistantDestinationRevision: z.string().min(1).max(64).optional(),
   allowUserDisplayNameEdit: z.boolean(),
   allowUserAvatarEdit: z.boolean(),
   allowUserAvatarUpload: z.boolean(),
@@ -556,8 +562,10 @@ export function activeLlmProvider(llm: {
 /**
  * Whether a base URL points at this computer or the local network, so a `hardened` node can keep using
  * a local OpenAI-compatible server (LM Studio, llama.cpp) while cloud services stay refused (docs/09,
- * docs/29 Track 3). Loopback, RFC 1918 and link-local addresses, `.local` and `.localhost` names, and a
- * bare hostname with no dot count as local; anything else (a public name or address) does not.
+ * docs/29 Track 3). Loopback, RFC 1918 and link-local addresses, the name `localhost`, `.local` names, and
+ * a bare hostname with no dot count as local; anything else (a public name or address) does not. A
+ * `*.localhost` name is not local: Node's `fetch` looks it up through the system resolver like any other
+ * name (only `localhost` itself is in the hosts file), so it can answer from another machine.
  */
 export function isLocalNetworkUrl(url: string): boolean {
   let host: string;
@@ -569,7 +577,7 @@ export function isLocalNetworkUrl(url: string): boolean {
   if (host.startsWith("[") && host.endsWith("]")) {
     host = host.slice(1, -1);
   }
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+  if (host === "localhost" || host.endsWith(".local")) {
     return true;
   }
   if (host.includes(":")) {
@@ -584,9 +592,25 @@ export function isLocalNetworkUrl(url: string): boolean {
   return !host.includes(".");
 }
 
+/**
+ * Whether two addresses name the same origin: both parse, with the same scheme, host and port (`URL.origin`,
+ * so a default port written out, letter case, a path or a trailing slash make no difference). The chat
+ * service's saved API key is only ever sent to the origin it was saved with.
+ */
+export function sameUrlOrigin(a: string, b: string): boolean {
+  try {
+    const origin = new URL(a).origin;
+    // `origin` is the string "null" for a scheme without one (`file:`, `data:`): never a match.
+    return origin !== "null" && origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 /** What `POST /api/admin/llm/models` (and the host API's `llmModels`) take: which backend to ask, and the
  * connection to try. A field left out means the saved one, so a Test button works before and after a save;
- * an `apiKey` left out means the stored key. */
+ * an `apiKey` left out means the stored key, and only when `baseUrl` is left out too or has the saved
+ * address's origin (`sameUrlOrigin`). */
 export const LlmModelsRequestSchema = z.object({
   provider: z.enum(["ollama", "openai"]),
   baseUrl: z.url({ protocol: /^https?$/ }).optional(),
@@ -1183,6 +1207,12 @@ export const MessageCreateRequestSchema = z
       body: MessageCreateBodySchema,
       attachments: MessageAttachmentsSchema.optional(),
       location: MessageLocationSchema.optional(),
+      /**
+       * For a DM to the assistant: the `NetworkConfig.assistantDestinationRevision` the sender was shown. The
+       * node refuses the DM when it no longer matches (docs/06); a DM to a person ignores it. Request-only:
+       * `DirectMessageSchema` has no such field, so parsing the stored message drops it.
+       */
+      assistantDestinationRevision: z.string().max(64).optional(),
     }),
     z.object({
       type: z.literal("reaction"),
@@ -1634,7 +1664,6 @@ export const SERVER_ERROR_CODES = [
   "member_invite_forbidden",
   "member_remove_forbidden",
   "channel_transfer_forbidden",
-  "parent_wrong_channel",
   "parent_not_found",
   "private_channels_disabled",
   "search_query_required",
@@ -1672,6 +1701,7 @@ export const SERVER_ERROR_CODES = [
   "channel_admins_post_only",
   "message_removed",
   "assistant_busy",
+  "assistant_destination_changed",
   "llm_cloud_not_allowed",
   "llm_unencrypted_not_allowed",
   "invalid_llm_models_request",
@@ -1680,10 +1710,12 @@ export const SERVER_ERROR_CODES = [
   "dm_blocked_by_you",
   "block_not_allowed",
   "channel_member_unavailable",
+  "channel_members_only",
   "reaction_invalid",
   "rules_not_accepted",
   "rules_version_mismatch",
   "reroll_not_allowed",
+  "display_name_taken",
   "host_not_allowed",
   "channel_delete_admin_required",
   "location_disabled",

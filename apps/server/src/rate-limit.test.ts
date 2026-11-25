@@ -86,6 +86,31 @@ describe("FixedWindowCounter", () => {
     expect(counter.hit("a", 1000, 3).count).toBe(3);
     expect(counter.hit("b", 1000, 3).count).toBe(1);
   });
+
+  it("peeks at a window's count without counting or reordering", () => {
+    const counter = new FixedWindowCounter(2);
+    expect(counter.peek("a", 1000, 0)).toBe(0);
+    counter.hit("a", 1000, 0);
+    counter.hit("a", 1000, 1);
+    counter.hit("b", 1000, 2);
+    expect(counter.peek("a", 1000, 3)).toBe(2);
+    expect(counter.peek("a", 1000, 3)).toBe(2);
+    // "a" is still the least recently used: a peek is not a hit, so the next new key evicts it.
+    counter.hit("c", 1000, 4);
+    expect(counter.peek("a", 1000, 5)).toBe(0);
+    expect(counter.peek("b", 1000, 5)).toBe(1);
+    // An ended window reads as empty.
+    expect(counter.peek("b", 1000, 1002)).toBe(0);
+  });
+
+  it("prunes only the keys whose window has ended", () => {
+    const counter = new FixedWindowCounter();
+    counter.hit("old", 1000, 0);
+    counter.hit("new", 1000, 500);
+    counter.prune(1000, 1000);
+    expect(counter.size).toBe(1);
+    expect(counter.hit("new", 1000, 1200).count).toBe(2);
+  });
 });
 
 describe("registerRateLimit", () => {
