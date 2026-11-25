@@ -452,17 +452,46 @@ export function createRealtime(ctx: AppContext) {
     }
   }
 
-  /** Record a message handed to the host phone's notifications, dropping the oldest past the cap. */
+  /**
+   * Record a message handed to the host phone's notifications, keeping at most `HOST_NOTICE_RECORD_MAX`. The
+   * phone shows one notification per conversation, with the newest notified message's text, so a record a
+   * newer one in its conversation has superseded backs nothing on screen: the oldest such record goes first.
+   * When every record is the newest of its conversation, the oldest goes and its conversation's notification
+   * is taken back with it, so no notification stays on screen that a later delete or edit couldn't reach.
+   */
   function rememberHostNotice(messageId: string, conversation: string, authorId: string): void {
     hostNotices.delete(messageId);
     hostNotices.set(messageId, { conversation, authorId });
     while (hostNotices.size > HOST_NOTICE_RECORD_MAX) {
-      const oldest = hostNotices.keys().next().value;
+      const superseded = oldestSupersededHostNotice();
+      if (superseded !== undefined) {
+        hostNotices.delete(superseded);
+        continue;
+      }
+      const oldest = hostNotices.values().next().value;
       if (oldest === undefined) {
         break;
       }
-      hostNotices.delete(oldest);
+      withdrawHostConversation(oldest.conversation);
     }
+  }
+
+  /**
+   * The oldest remembered message whose conversation has a newer remembered message, or undefined. The
+   * first record met in insertion order for a conversation counted more than once is that conversation's
+   * oldest, so a newer one exists.
+   */
+  function oldestSupersededHostNotice(): string | undefined {
+    const perConversation = new Map<string, number>();
+    for (const { conversation } of hostNotices.values()) {
+      perConversation.set(conversation, (perConversation.get(conversation) ?? 0) + 1);
+    }
+    for (const [messageId, { conversation }] of hostNotices) {
+      if ((perConversation.get(conversation) ?? 0) > 1) {
+        return messageId;
+      }
+    }
+    return undefined;
   }
 
   /**

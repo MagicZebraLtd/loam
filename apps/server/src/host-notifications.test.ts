@@ -402,6 +402,82 @@ describe("taking the host phone's notifications back", () => {
     expect(withdrawals).toEqual([{ messageId: ids[299] }]);
   });
 
+  /** Run a request from one of 50 spread addresses, so the per-address request limiter never trips. */
+  function spread(index: number) {
+    return `10.0.${Math.floor(index / 50) % 250}.${(index % 50) + 1}`;
+  }
+
+  /** Delete `ids` one by one as `cookie`'s person, each from a spread address. */
+  async function removeAll(app: LoamApp, ids: string[], cookie: string): Promise<void> {
+    for (const [index, id] of ids.entries()) {
+      const response = await app.server.inject({ method: "DELETE", url: `/api/messages/${id}`, headers: { cookie }, remoteAddress: spread(index) });
+      expect(response.statusCode).toBe(200);
+    }
+  }
+
+  it("keeps the record behind a conversation's notification while another conversation fills the rest", async () => {
+    const { app, host, member } = await hostedNode();
+    const dm = messageId(await post(app, member.cookie, { type: "dm", recipientUserId: host.userId, body: "still on screen" }));
+    const channelIds: string[] = [];
+    for (let index = 0; index < HOST_NOTICE_RECORD_MAX + 44; index += 1) {
+      const response = await app.server.inject({
+        method: "POST",
+        url: "/api/messages",
+        headers: { cookie: member.cookie },
+        payload: { type: "channelPost", channelId: "general", body: `post ${index}` },
+        remoteAddress: spread(index),
+      });
+      expect(response.statusCode).toBe(201);
+      channelIds.push(messageId(response));
+    }
+    expect(withdrawals).toEqual([]);
+
+    expect((await remove(app, dm, member.cookie)).statusCode).toBe(200);
+    expect(withdrawals).toEqual([{ messageId: dm }]);
+
+    // What is left remembered is the channel's newest posts, one fewer than the cap with the DM's record.
+    withdrawals = [];
+    await removeAll(app, channelIds, member.cookie);
+    expect(withdrawals).toEqual(channelIds.slice(-(HOST_NOTICE_RECORD_MAX - 1)).map((id) => ({ messageId: id })));
+  });
+
+  it("takes back the oldest conversation's notification when more conversations than the cap have one", async () => {
+    const { app, host } = await hostedNode();
+    const extra = 4;
+    const senders: { cookie: string; userId: string }[] = [];
+    const ids: string[] = [];
+    for (let index = 0; index < HOST_NOTICE_RECORD_MAX + extra; index += 1) {
+      const config = await app.server.inject({ method: "GET", url: "/api/config", remoteAddress: spread(index) });
+      const cookie = String(config.headers["set-cookie"]).split(";")[0];
+      const userId = config.json<{ currentUser: { id: string } }>().currentUser.id;
+      senders.push({ cookie, userId });
+      const response = await app.server.inject({
+        method: "POST",
+        url: "/api/messages",
+        headers: { cookie },
+        payload: { type: "dm", recipientUserId: host.userId, body: `hello ${index}` },
+        remoteAddress: spread(index),
+      });
+      expect(response.statusCode).toBe(201);
+      ids.push(messageId(response));
+    }
+    expect(notices).toHaveLength(HOST_NOTICE_RECORD_MAX + extra);
+    expect(withdrawals).toEqual(senders.slice(0, extra).map((sender) => ({ conversation: `dm:${sender.userId}` })));
+
+    // Exactly the cap's worth is remembered: the newest conversations, each withdrawn once on delete.
+    withdrawals = [];
+    for (const [index, id] of ids.entries()) {
+      const response = await app.server.inject({
+        method: "DELETE",
+        url: `/api/messages/${id}`,
+        headers: { cookie: senders[index].cookie },
+        remoteAddress: spread(index),
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    expect(withdrawals).toEqual(ids.slice(extra).map((id) => ({ messageId: id })));
+  });
+
   it("withdraws a private channel's notification when the host's person is removed from it or leaves", async () => {
     const { app, host, member } = await hostedNode();
     const channelId = await privateChannel(app, member.cookie, [host.userId]);

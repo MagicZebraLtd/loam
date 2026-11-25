@@ -136,19 +136,26 @@ const INVISIBLE_IN_COMPARISON = /[\u034F\u115F\u1160\u2800\u3164\uFFA0\uFE00-\uF
 
 /**
  * The form two display names are compared in, so a copy of someone's name with another case, hidden
- * characters or extra spaces counts as the same name: NFKC, then control and format characters and the
- * characters in `INVISIBLE_IN_COMPARISON` removed, whitespace runs collapsed to one space, trimmed,
- * lower-cased. An empty result is a name that shows as blank. `normalize` may do nothing (or throw) on a
- * Node built without ICU, so nothing else here depends on it.
+ * characters or extra spaces counts as the same name: control and format characters and the characters in
+ * `INVISIBLE_IN_COMPARISON` removed, NFKC, the same characters removed again, whitespace runs collapsed to
+ * one space, trimmed, lower-cased. They go before NFKC because a joiner between a letter and its accent
+ * keeps the two from composing, and again after it because NFKC can produce one (U+FFA0 becomes U+3164).
+ * An empty result is a name that shows as blank. `normalize` may do nothing (or throw) on a Node built
+ * without ICU, so nothing else here depends on it.
  */
 export function displayNameComparisonForm(name: string): string {
-  let normalized = name;
+  let normalized = stripInvisibleInComparison(name);
   try {
-    normalized = name.normalize("NFKC");
+    normalized = normalized.normalize("NFKC");
   } catch {
     // No ICU: compare the name as typed.
   }
-  return stripControlAndFormatCharacters(normalized).replace(INVISIBLE_IN_COMPARISON, "").replace(/\s+/g, " ").trim().toLowerCase();
+  return stripInvisibleInComparison(normalized).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** `text` without control and format characters or the characters in `INVISIBLE_IN_COMPARISON`. */
+function stripInvisibleInComparison(text: string): string {
+  return stripControlAndFormatCharacters(text).replace(INVISIBLE_IN_COMPARISON, "");
 }
 
 /** The assistant's display name while a backend is active, else undefined: a person may not take it then. */

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp, type LoamApp } from "./app.js";
 import { defaultLoamConfig } from "./config.js";
@@ -262,6 +262,33 @@ describe("what a backend can make the node hold", () => {
     expect(await waitFor(() => backend.closed() === 1)).toBe(true);
   });
 
+  it("refuses a streamed line longer than the limit that arrives whole with its newline", async () => {
+    // Over a socket a 270 000-character line comes in several reads, the first of which the unterminated
+    // check already catches; a fetch that hands the whole line and its newline over in one read is the
+    // case left. Only the backend's address is answered this way.
+    const backendUrl = "http://127.0.0.1:9";
+    const line = `{"message":{"content":"${"x".repeat(270_000)}"},"done":false}\n{"done":true}\n`;
+    const realFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      if (!String(input instanceof Request ? input.url : input).startsWith(backendUrl)) {
+        return realFetch(input, init);
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(line));
+          controller.close();
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200, headers: { "content-type": "application/x-ndjson" } }));
+    });
+    cleanups.push(() => fetchSpy.mockRestore());
+    const app = await makeApp({ llm: { ollama: { enabled: true, baseUrl: backendUrl, model: "m" } } });
+    const cookie = await adminCookie(app);
+
+    const reply = await askBot(app, cookie, "hi");
+    expect(reply?.body).toBe(ASSISTANT_FAILURE_BODY);
+  });
+
   it("cuts a reply at ASSISTANT_REPLY_MAX_CHARS: keeps what fits plus a note, ends the stream and hangs up on the backend", async () => {
     const chunk = "abcdefghij".repeat(100);
     const backend = startBackend((_req, res) => {
@@ -502,25 +529,78 @@ describe("the saved API key and the address it was saved for", () => {
     expect(storedKey(app)).toBeUndefined();
   });
 
-  it("a config an older version saved keeps its key across a restart, whatever order the address and key were saved in", async () => {
+  /** A data dir whose config.json saves the chat service at `baseUrl` with `KEY`, booted with an admin. */
+  async function bootWithFileKey(baseUrl: string) {
+    const dataDir = dataDirWith({ llm: { openai: { enabled: true, baseUrl, model: "m", apiKey: KEY } } });
+    const app = await boot(dataDir);
+    return { dataDir, app, cookie: await adminCookie(app) };
+  }
+
+  /** Close `app` and boot the same data dir again; the admin's session cookie still holds. */
+  async function restart(app: LoamApp, dataDir: string): Promise<LoamApp> {
+    await app.close();
+    return boot(dataDir);
+  }
+
+  it("a key cleared by a save that moved the address to another origin stays cleared after a restart", async () => {
+    const first = startWorkingBackend();
+    const second = startWorkingBackend();
+    const secondUrl = await second.url;
+    const node = await bootWithFileKey(await first.url);
+
+    expect((await patch(node.app, node.cookie, { llm: { openai: { baseUrl: secondUrl, apiKeySet: true } } })).statusCode).toBe(200);
+    expect((await adminConfig(node.app, node.cookie)).llm.openai.apiKeySet).toBe(false);
+
+    const app = await restart(node.app, node.dataDir);
+    expect((await adminConfig(app, node.cookie)).llm.openai).toMatchObject({ baseUrl: secondUrl, apiKeySet: false });
+    expect((await askBot(app, node.cookie, "hi"))?.body).toBe("reached");
+    expect(second.seen.at(-1)?.authorization).toBeUndefined();
+    expect(JSON.stringify(second.seen)).not.toContain(KEY);
+  });
+
+  it("a path change on the same origin keeps config.json's key after a restart", async () => {
+    const first = startWorkingBackend();
+    const firstUrl = await first.url;
+    const node = await bootWithFileKey(firstUrl);
+
+    expect((await patch(node.app, node.cookie, { llm: { openai: { baseUrl: `${firstUrl}/v1`, apiKeySet: true } } })).statusCode).toBe(200);
+
+    const app = await restart(node.app, node.dataDir);
+    expect((await adminConfig(app, node.cookie)).llm.openai).toMatchObject({ baseUrl: `${firstUrl}/v1`, apiKeySet: true });
+    expect((await askBot(app, node.cookie, "hi"))?.body).toBe("reached");
+    expect(first.seen.at(-1)).toMatchObject({ path: "/v1/chat/completions", authorization: `Bearer ${KEY}` });
+  });
+
+  it("a key saved through the admin API for a new origin survives a restart", async () => {
+    const first = startWorkingBackend();
+    const second = startWorkingBackend();
+    const secondUrl = await second.url;
+    const node = await bootWithFileKey(await first.url);
+
+    expect((await patch(node.app, node.cookie, { llm: { openai: { baseUrl: secondUrl, apiKey: "sk-new-key" } } })).statusCode).toBe(200);
+
+    const app = await restart(node.app, node.dataDir);
+    expect((await adminConfig(app, node.cookie)).llm.openai).toMatchObject({ baseUrl: secondUrl, apiKeySet: true });
+    expect((await askBot(app, node.cookie, "hi"))?.body).toBe("reached");
+    expect(second.seen.at(-1)?.authorization).toBe("Bearer sk-new-key");
+  });
+
+  it("a stored address never takes config.json's key to another origin; a key stored with the address is kept", async () => {
     const fileBackend = startWorkingBackend();
     const savedBackend = startWorkingBackend();
     const fileUrl = await fileBackend.url;
     const savedUrl = await savedBackend.url;
 
-    // The key comes from config.json, the address from an admin edit persisted in the DB without the key.
+    // The key comes from config.json, the address on another origin from an admin edit persisted without it.
     const fromFile = dataDirWith({ llm: { openai: { enabled: true, baseUrl: fileUrl, model: "m", apiKey: KEY } } });
     let app = await boot(fromFile);
     app.store.setConfigValue("config", JSON.stringify({ llm: { openai: { enabled: true, baseUrl: savedUrl, model: "m" } } }));
     await app.close();
     app = await boot(fromFile);
     let cookie = await adminCookie(app);
-    expect((await adminConfig(app, cookie)).llm.openai).toMatchObject({ baseUrl: savedUrl, apiKeySet: true });
+    expect((await adminConfig(app, cookie)).llm.openai).toMatchObject({ baseUrl: savedUrl, apiKeySet: false });
     expect((await askBot(app, cookie, "hi"))?.body).toBe("reached");
-    expect(savedBackend.seen.at(-1)?.authorization).toBe(`Bearer ${KEY}`);
-    // A later save of something else leaves it alone.
-    expect((await patch(app, cookie, { node: { name: "Library" } })).statusCode).toBe(200);
-    expect((await adminConfig(app, cookie)).llm.openai.apiKeySet).toBe(true);
+    expect(savedBackend.seen.at(-1)?.authorization).toBeUndefined();
 
     // A full snapshot an older version wrote after moving the address and keeping the key.
     const snapshot = defaultLoamConfig();

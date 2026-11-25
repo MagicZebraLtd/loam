@@ -116,6 +116,23 @@ describe("names and avatar seeds on profile edits", () => {
     expect(app.store.loadUsers().find((user) => user.id === copier.userId)?.displayName).toBe(heart);
   });
 
+  // A joiner (U+034F, U+200D) between a letter and its accent blocks NFKC composition. Without ICU
+  // `normalize` composes nothing, so the precomposed name differs from these anyway and the test holds
+  // only where the runtime normalises.
+  it.skipIf("e\u0301".normalize("NFKC") !== "\u00E9")("refuses a precomposed name copied with a joiner before the accent", async () => {
+    const app = await makeApp(editable);
+    await newSession(app);
+    const jose = await newSession(app);
+    const copier = await newSession(app);
+    expect((await patch(app, jose.cookie, "/api/users/me", { displayName: "Jos\u00E9" })).statusCode).toBe(200);
+
+    for (const copy of ["Jose\u034F\u0301", "Jose\u200D\u0301"]) {
+      const taken = await patch(app, copier.cookie, "/api/users/me", { displayName: copy });
+      expect(taken.statusCode).toBe(400);
+      expect(taken.json()).toMatchObject({ code: "display_name_taken" });
+    }
+  });
+
   it("lets a member keep their own name and use their own id or a typed word as a seed", async () => {
     const app = await makeApp(editable);
     await newSession(app);

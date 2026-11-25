@@ -73,9 +73,11 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
   state.encryptionEnabled = state.dbKey !== undefined;
 
   const openLoamStore = (): LoamStore => {
+    // Before the open: an open that throws (a database that needs the legacy-key migration, a locked one)
+    // never reaches the lines after it, and the media folders must be private whatever path the boot takes.
+    restrictMediaDirPermissions();
     const store = openStore(dbPath, { encryptionKey: state.dbKey, driver: options.dbDriver });
     restrictDbFilePermissions();
-    restrictMediaDirPermissions();
     return store;
   };
 
@@ -110,8 +112,8 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
    * `GET /api/attachments/:fileName` serves it on, so on a shared computer another account must not list the
    * directory. The writers create both 0700 and every file in them 0600; this tightens directories an older
    * version created with the default mode (0755 under the usual umask). Files already in them keep their
-   * mode: with the directory 0700, no other account can reach them. Runs after every open, beside
-   * {@link restrictDbFilePermissions}, and with the same best effort: a directory that isn't there yet, a
+   * mode: with the directory 0700, no other account can reach them. Runs before every open attempt, with the
+   * same best effort as {@link restrictDbFilePermissions}: a directory that isn't there yet, a
    * filesystem that refuses, or Windows, is left as is. A symlink is left alone too: it is the operator's
    * choice of where media lives.
    */
@@ -353,6 +355,19 @@ export function createStoreLifecycle(deps: StoreLifecycleDeps) {
     } catch (error) {
       log.error(error, "Preserve recovery: could not create the recovery snapshot directory");
       return false;
+    }
+    // `mkdirSync` leaves the mode of a folder that already exists, and an older version made it 0755 before
+    // stopping part-way through the move. Best effort, like `restrictMediaDirPermissions`: a filesystem
+    // without POSIX modes mustn't lock the node, and Windows modes mean nothing.
+    if (process.platform !== "win32") {
+      try {
+        chmodSync(recoveryDir, 0o700);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "ENOTSUP") {
+          log.warn(error, `Could not restrict permissions on ${recoveryDir}`);
+        }
+      }
     }
     // Media directories first (ENOENT-only; abort on unverifiable).
     for (const [name, dir] of [

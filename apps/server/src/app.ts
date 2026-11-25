@@ -15,6 +15,7 @@ import {
   LoamConfigUpdateSchema,
   MessageSchema,
   MEMBER_RULES_VERSION,
+  sameUrlOrigin,
   UserSchema,
   type AdminBootstrapStrategy,
   type AvatarImageMimeType,
@@ -698,7 +699,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       // Heal configs saved before the profile became authoritative (see reconcileLegacyProfile):
       // preserve an explicitly-armed kill switch / approval / TTL by demoting the profile to custom.
       const { update: reconciled, changed } = reconcileLegacyProfile(storedUpdate);
-      config = mergeConfig(config, reconciled);
+      const fileOpenAi = config.llm.openai;
+      config = withoutFileKeyForOtherOrigin(fileOpenAi, mergeConfig(config, reconciled), reconciled);
       if (changed) {
         server.log.warn(
           "Security profile is now authoritative; kept explicit access/retention/kill-switch settings by switching this node's profile to 'custom'.",
@@ -708,6 +710,27 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     }
 
     appConfig = config;
+  }
+
+  /**
+   * The chat service key config.json holds belongs to the address config.json gives with it (`fileOpenAi`,
+   * defaults overlaid by the file). An admin save that moves the address to another origin without a new key
+   * stores a row with that address and no key, so layering the row over the file would pair the file's key
+   * with the new origin: here the key is dropped instead. A key the row carries, or a row that leaves the
+   * address alone or keeps its origin, is layered as usual.
+   */
+  function withoutFileKeyForOtherOrigin(fileOpenAi: LoamConfig["llm"]["openai"], merged: LoamConfig, row: LoamConfigUpdate): LoamConfig {
+    const rowOpenAi = row.llm?.openai;
+    if (
+      rowOpenAi?.baseUrl === undefined ||
+      rowOpenAi.apiKey !== undefined ||
+      merged.llm.openai.apiKey === undefined ||
+      fileOpenAi.baseUrl === merged.llm.openai.baseUrl ||
+      sameUrlOrigin(fileOpenAi.baseUrl, merged.llm.openai.baseUrl)
+    ) {
+      return merged;
+    }
+    return { ...merged, llm: { ...merged.llm, openai: { ...merged.llm.openai, apiKey: undefined } } };
   }
 
   /** Whether any admin identity exists yet (the `firstUser` bootstrap grants admin only while none does). */

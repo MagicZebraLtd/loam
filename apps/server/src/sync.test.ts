@@ -1618,6 +1618,36 @@ describe("imported author records", () => {
     expect(imported?.displayName).toBe(generateDisplayName("user.peerseedcopy1"));
   });
 
+  // Skipped where `normalize` composes nothing (a Node without ICU): there the names differ anyway.
+  it.skipIf("e\u0301".normalize("NFKC") !== "\u00E9")("gives the generated name to an author copying a precomposed name with a joiner before the accent", async () => {
+    let author: Record<string, unknown> = {};
+    const app = await makeApp({ ...editable, sync: { enabled: true, peers: [{ url: await peerServing(() => author) }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    const patched = await app.server.inject({ method: "PATCH", url: "/api/users/me", headers: { cookie: admin.cookie }, payload: { displayName: "Jos\u00E9" } });
+    expect(patched.statusCode).toBe(200);
+    for (const [id, name] of [["user.peerjoiner001", "Jose\u034F\u0301"], ["user.peerjoiner002", "Jose\u200D\u0301"]]) {
+      author = peerAuthor(id, { displayName: name });
+      await runSync(app, admin.cookie);
+      expect(storedUser(app, id)?.displayName).toBe(generateDisplayName(id));
+    }
+  });
+
+  it("gives a blank-named author a free name when a local member has typed its generated name", async () => {
+    let author: Record<string, unknown> = {};
+    const app = await makeApp({ ...editable, sync: { enabled: true, peers: [{ url: await peerServing(() => author) }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    const generated = generateDisplayName("user.peerclash0001");
+    const patched = await app.server.inject({ method: "PATCH", url: "/api/users/me", headers: { cookie: admin.cookie }, payload: { displayName: generated } });
+    expect(patched.statusCode).toBe(200);
+    author = peerAuthor("user.peerclash0001", { displayName: "\u200B" });
+    await runSync(app, admin.cookie);
+
+    const imported = storedUser(app, "user.peerclash0001");
+    expect(imported).toBeDefined();
+    expect(imported?.displayName).not.toBe(generated);
+    expect(imported?.displayName).toBe(`${generated}.0001`);
+  });
+
   it("imports an ordinary peer author with its own name and generated avatar unchanged", async () => {
     const record = peerAuthor("user.peerordinary1", { displayName: "River Otter", avatar: { kind: "generated", seed: "kelp", mode: "pattern" } });
     const app = await makeApp({ sync: { enabled: true, peers: [{ url: await peerServing(() => record) }], intervalMs: 3_600_000 } });

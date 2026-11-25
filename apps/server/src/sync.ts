@@ -16,6 +16,9 @@ import type { Runtime } from "./runtime.js";
  *  lives 10 minutes, so retries are frequent; a refused code is never retried. */
 const LINK_RETRY_MS = 30_000;
 
+/** The longest display name a user record may hold, read from `UserSchema` so the two can't drift apart. */
+const DISPLAY_NAME_MAX_LENGTH = UserSchema.shape.displayName.maxLength ?? 80;
+
 /** How a node describes itself when it links to a peer, and what it does once a link is made. */
 export type SyncLinkHooks = {
   /** This node's port, transport key and name; undefined when it can't be described yet. */
@@ -666,6 +669,22 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
   }
 
   /**
+   * The name an imported author gets in place of a blank or borrowed one: the generated name for `id`, unless
+   * a local person (or the assistant) already uses it, since anyone may type a name shaped like a generated
+   * one. Then the generated name with `.` and the id's last 4 characters, its last 8, or the whole id, the
+   * first that is free and within the display name limit; failing all of those, the id cut to that limit.
+   */
+  function freeGeneratedName(id: string, assistantName: string | undefined): string {
+    const generated = generateDisplayName(id);
+    for (const candidate of [generated, `${generated}.${id.slice(-4)}`, `${generated}.${id.slice(-8)}`, `${generated}.${id}`]) {
+      if (candidate.length <= DISPLAY_NAME_MAX_LENGTH && !displayNameTakenByOther(candidate, id, rt.data.users, assistantName)) {
+        return candidate;
+      }
+    }
+    return id.slice(0, DISPLAY_NAME_MAX_LENGTH);
+  }
+
+  /**
    * Import the author record of a message this node has just ACCEPTED: only the
    * authors of accepted messages, never every user in a peer's payload — a peer could otherwise push tens of
    * thousands of arbitrary user records per batch. Authority and moderation state are stripped — a peer's
@@ -714,10 +733,10 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
         ? undefined
         : user.avatar;
     const strippedName = stripControlAndFormatCharacters(user.displayName);
+    const assistantName = activeAssistantName(rt.appConfig.llm);
     const displayName =
-      !displayNameComparisonForm(strippedName) ||
-      displayNameTakenByOther(strippedName, user.id, rt.data.users, activeAssistantName(rt.appConfig.llm))
-        ? generateDisplayName(user.id)
+      !displayNameComparisonForm(strippedName) || displayNameTakenByOther(strippedName, user.id, rt.data.users, assistantName)
+        ? freeGeneratedName(user.id, assistantName)
         : strippedName;
 
     const sanitized = UserSchema.parse({

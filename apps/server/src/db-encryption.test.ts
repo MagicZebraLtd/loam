@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -6,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -1233,6 +1235,24 @@ describe("encryption at rest + key-discard kill switch", () => {
     expect((await post(boot2, boot2Admin.cookie, "after resumed preserve")).statusCode).toBe(201);
   });
 
+  it.skipIf(process.platform === "win32")("makes a recovery snapshot folder an older version left 0755 private when it resumes the move", async () => {
+    const { app, dataDir } = await makeEncryptedApp({ dbEncryptionKey: "key A", dbEncryptionMode: "persistent" });
+    await session(app);
+    await app.close();
+
+    const recoveryDirName = ".loam-recovery-1700000000000-fedcba";
+    const recoveryDir = join(dataDir, recoveryDirName);
+    mkdirSync(recoveryDir, { recursive: true });
+    chmodSync(recoveryDir, 0o755);
+    writeFileSync(join(dataDir, ".loam-recovery-state"), recoveryDirName);
+
+    const resumed = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false, dbEncryptionKey: "key B", dbEncryptionMode: "persistent" });
+    cleanups.push(() => resumed.close());
+
+    expect(existsSync(join(recoveryDir, "loam.db"))).toBe(true);
+    expect(statSync(recoveryDir).mode & 0o777).toBe(0o700);
+  });
+
   it("a preserve move with an UNVERIFIABLE media dir (non-ENOENT stat) aborts before opening a fresh store — media is never left in the active namespace", async () => {
     const { app, dataDir } = await makeEncryptedApp({ dbEncryptionKey: "key A", dbEncryptionMode: "persistent" });
     await session(app);
@@ -2035,6 +2055,59 @@ describe("encryption at rest + key-discard kill switch", () => {
         expect(readdirSync(dataDir).some((name) => name.includes(".premigration"))).toBe(false);
         await reopened.close();
       });
+    });
+
+    /** A legacy-keyed passphrase DB with `avatars/` and `attachments/` left 0755, as an older version made them. */
+    async function legacyDbWithOpenMediaDirs(legacyKey: string): Promise<{ dataDir: string; mediaDirs: string[] }> {
+      const dataDir = mkdtempSync(join(tmpdir(), "loam-migrate-modes-test-"));
+      cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+      const original = await buildApp({ requireRulesAcceptance: false, dataDir, logger: false, dbEncryptionKey: legacyKey, dbEncryptionMode: "passphrase" });
+      await session(original);
+      await original.close();
+      const mediaDirs = [join(dataDir, "avatars"), join(dataDir, "attachments")];
+      for (const dir of mediaDirs) {
+        mkdirSync(dir, { recursive: true });
+        chmodSync(dir, 0o755);
+      }
+      return { dataDir, mediaDirs };
+    }
+
+    it.skipIf(process.platform === "win32")("makes 0755 media folders private on an open that goes through the migration", async () => {
+      installFakeMigratedHook();
+      const legacyKey = "legacy SHA256(passphrase)-only key";
+      const { dataDir, mediaDirs } = await legacyDbWithOpenMediaDirs(legacyKey);
+
+      const app = await buildApp({ requireRulesAcceptance: false,
+        dataDir,
+        logger: false,
+        dbEncryptionKey: "current SHA256(passphrase + deviceSecret) key",
+        dbEncryptionMigrateFromKey: legacyKey,
+        dbEncryptionMode: "passphrase",
+      });
+      cleanups.push(() => app.close());
+
+      for (const dir of mediaDirs) {
+        expect(statSync(dir).mode & 0o777, dir).toBe(0o700);
+      }
+    });
+
+    it.skipIf(process.platform === "win32")("makes 0755 media folders private on a keyed open that fails", async () => {
+      installFakeMigratedHook();
+      installFakeBootBridge();
+      const { dataDir, mediaDirs } = await legacyDbWithOpenMediaDirs("the real key");
+
+      await expect(
+        buildApp({ requireRulesAcceptance: false,
+          dataDir,
+          logger: false,
+          dbEncryptionKey: "a totally wrong current key",
+          dbEncryptionMigrateFromKey: "a totally wrong legacy key too",
+        }),
+      ).rejects.toThrow(/could not be opened/);
+
+      for (const dir of mediaDirs) {
+        expect(statSync(dir).mode & 0o777, dir).toBe(0o700);
+      }
     });
 
     it("a fresh install (no prior DB) opens cleanly under the current key without ever needing the offered legacy one, and still reports migrated so the launcher stops offering it", async () => {

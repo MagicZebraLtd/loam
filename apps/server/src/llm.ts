@@ -381,6 +381,11 @@ async function* streamLines(url: string, headers: Record<string, string>, body: 
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
+        // A read can hold a whole over-long line with its newline, which the check below never sees.
+        if (line.length > STREAM_LINE_MAX_CHARS) {
+          throw new Error(`${what} sent a line that is too long (over ${STREAM_LINE_MAX_CHARS} characters).`);
+        }
+
         const trimmed = line.trim();
 
         if (trimmed) {

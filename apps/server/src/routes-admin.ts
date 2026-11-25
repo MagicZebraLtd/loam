@@ -384,9 +384,8 @@ export function applyConfigUpdate(
 /**
  * The chat service's saved API key is only ever sent to the origin it was saved for: a save that moves
  * `llm.openai.baseUrl` to another origin (`sameUrlOrigin`) without carrying a new key drops the saved one,
- * so the next DM can't hand it to the new host. A change of path on the same origin keeps it. Applied to
- * admin saves only, never to the boot-time layering of config.json and the DB row (`loadAppConfig`), so a
- * config an older version saved keeps its key across a restart.
+ * so the next DM can't hand it to the new host. A change of path on the same origin keeps it. Boot keeps the
+ * drop: `loadAppConfig` never pairs config.json's key with a stored address on another origin.
  */
 function withoutKeyForNewServiceOrigin(current: LoamConfig, next: LoamConfig, update: LoamConfigUpdate): LoamConfig {
   const before = current.llm.openai.baseUrl;
