@@ -25,6 +25,7 @@ import { LOCALE_LABELS, errorText, t } from "../i18n";
 import type { CatalogKey } from "../i18n/en";
 import { configDelta, isEmptyConfigUpdate, rebaseConfig } from "../lib/admin-config";
 import { fetchJson, REQUEST_TIMEOUT_MS } from "../lib/api";
+import { isPlainClick, useLocation } from "../lib/location";
 import { encryptedFetch } from "../lib/transport";
 import { AddSyncPeerControl } from "./AddSyncPeerControl";
 import { AdminChannelsPanel } from "./AdminChannelsPanel";
@@ -135,10 +136,18 @@ function jumpToSection(key: string): void {
   }
 }
 
-/** The section a `/admin#admin-<key>` address asks for (the desktop and Android hosts open the assistant this way). */
-function sectionFromHash(hash: string): string | undefined {
-  const key = hash.startsWith("#admin-") ? hash.slice("#admin-".length) : "";
-  return adminSections().some(([candidate]) => candidate === key) ? key : undefined;
+/**
+ * The section a `/admin?section=<key>` route asks for (the desktop and Android hosts open the assistant this
+ * way). The route lives in the fragment, whose start-up readers split on `&`: never name a route query
+ * parameter `k`, `a`, `i` or `l` (lib/location.tsx).
+ */
+function sectionFromQuery(section: string | undefined): string | undefined {
+  return adminSections().some(([candidate]) => candidate === section) ? section : undefined;
+}
+
+/** The route that opens the admin page at a section. */
+function sectionRoute(key: string): string {
+  return `/admin?section=${encodeURIComponent(key)}`;
 }
 
 /** `GET /api/admin/config`, checked against the shared schema. */
@@ -233,20 +242,19 @@ export function AdminView({
   const [confirmingWipe, setConfirmingWipe] = useState(false);
   const [firing, setFiring] = useState(false);
   const [fireError, setFireError] = useState<string>();
-  // The sections exist only once the config has loaded, so a `#admin-<key>` in the address is honoured then,
-  // once (a later hash change is the nav's own click).
-  const jumpedToHash = useRef(false);
+  // The sections exist only once the config has loaded, so a `?section=<key>` in the route is honoured then.
+  // It is taken off the route once honoured, so a host asking for the same section again is a new route.
+  const location = useLocation();
+  const requestedSection = sectionFromQuery(location.query.section);
+  const configLoaded = !!adminConfig;
 
   useEffect(() => {
-    if (!adminConfig || jumpedToHash.current) {
+    if (!configLoaded || !requestedSection) {
       return;
     }
-    jumpedToHash.current = true;
-    const key = sectionFromHash(window.location.hash);
-    if (key) {
-      requestAnimationFrame(() => jumpToSection(key));
-    }
-  }, [adminConfig]);
+    location.route(location.path, true);
+    requestAnimationFrame(() => jumpToSection(requestedSection));
+  }, [configLoaded, location, requestedSection]);
 
   /** Take in a newer server copy of the config: the draft keeps the admin's unsaved edits on top of it. */
   // Every background read of the config takes a number; only the newest one started may be adopted, so a slow
@@ -512,9 +520,12 @@ export function AdminView({
               {adminSections().map(([key, label]) => (
                 <a
                   className={key === "danger" ? "admin-nav-link is-danger" : "admin-nav-link"}
-                  href={`#admin-${key}`}
+                  href={`#${sectionRoute(key)}`}
                   key={key}
                   onClick={(event) => {
+                    if (!isPlainClick(event)) {
+                      return;
+                    }
                     event.preventDefault();
                     jumpToSection(key);
                   }}
@@ -866,6 +877,7 @@ export function AdminView({
                   onOllamaChange={setOllama}
                   onOnDeviceChange={setOnDevice}
                   onOpenAiChange={setOpenAi}
+                  savedOpenAiBaseUrl={savedConfig?.llm.openai.baseUrl}
                   saving={saving}
                 />
               </AdminSection>

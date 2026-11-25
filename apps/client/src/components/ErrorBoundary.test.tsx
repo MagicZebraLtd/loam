@@ -1,5 +1,5 @@
 import { render } from "preact";
-import { LocationProvider, useLocation } from "preact-iso";
+import { LocationProvider, useLocation } from "../lib/location";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseRoute } from "../lib/protocol";
@@ -56,7 +56,8 @@ describe("ErrorBoundary (review 2026-09-25)", () => {
     home.click();
     await tick();
 
-    expect(window.location.pathname).toBe("/channels");
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("#/channels");
     expect(container.querySelector(".screen")?.textContent).toBe("/channels");
   });
 

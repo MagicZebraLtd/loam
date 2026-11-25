@@ -33,7 +33,7 @@ export function RulesView({ backHref = "/settings", standalone = false }: { back
           ))}
           {/* Opened from the Welcome screen there's no sidebar to leave by, so offer the way back here too. */}
           {standalone ? (
-            <a className="btn btn-secondary rules-back" href={backHref}>
+            <a className="btn btn-secondary rules-back" href={`#${backHref}`}>
               {t("common.back")}
             </a>
           ) : null}

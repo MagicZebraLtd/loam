@@ -17,11 +17,13 @@ import {
   getSession,
   inviteQrHostKey,
   isHostKeyPinBroken,
+  isSessionQrVerified,
   handleWsFrame,
   isTunnelActive,
   joinKeyPresentAtStartup,
   logoutSecureIdentity,
   mayFallBackToPlaintext,
+  reestablishSession,
   rejectPendingHostKey,
   releaseImageUrl,
   retainImageUrl,
@@ -36,6 +38,7 @@ import {
   UnsealedResponseError,
   wsUrl,
 } from "./transport";
+import { openTunnelRequest, sealedTunnelReply, TUNNEL_REQUEST_AAD, tunnelDescriptorReply, tunnelRefusalAad } from "../test-support/tunnel";
 
 /** Simulates the server side of a handshake for a given host identity: parses the client's hello,
  * runs the real `transportServerAccept`, and returns the JSON body `/api/transport/handshake` sends. */
@@ -50,6 +53,37 @@ function handshakeResponseBody(
     status: 200,
     json: { sessionId: "sess-1", hostEphemeralPublic: accepted.hostEphemeralPublic, hostPublicKey },
   };
+}
+
+/** The aad a node seals its reply to an `r: 2` request under (docs/08 "Response binding"). */
+function responseAad(method: string, url: string, seq: number, status: number): string {
+  return `loam.transport.response.v2 ${JSON.stringify([method, url, seq, status])}`;
+}
+
+/** The aad of a refusal a node sent before it read the request's sequence (`encStatus2`). */
+function refusalAad(method: string, url: string, status: number): string {
+  return `loam.transport.refusal.v2 ${JSON.stringify([method, url, status])}`;
+}
+
+/** Where the module keeps this origin's identity token record, `{ k: hostKey, t: token }`. */
+function tokenRecordKey(): string {
+  return `loam.identityToken.v2.${window.location.origin}`;
+}
+
+/** Where earlier releases kept the bare token for this origin. */
+function legacyTokenKey(): string {
+  return `loam.identityToken.${window.location.origin}`;
+}
+
+/** Store `token` for this origin as issued under `hostKey`, in the module's own format. */
+function seedTokenRecord(hostKey: string, token: string): void {
+  localStorage.setItem(tokenRecordKey(), JSON.stringify({ k: hostKey, t: token }));
+}
+
+/** This origin's stored identity token record, parsed, or null. */
+function storedTokenRecord(): { k: string; t: string } | null {
+  const raw = localStorage.getItem(tokenRecordKey());
+  return raw === null ? null : (JSON.parse(raw) as { k: string; t: string });
 }
 
 describe("transport", () => {
@@ -281,9 +315,9 @@ describe("transport", () => {
         expect(opened).not.toBeNull();
         // The sealed plaintext is the `{ s, r, b }` anti-replay envelope: sequence 1 (first request on a
         // fresh session), asking for a sequence-bound response, carrying the body under `b`.
-        expect(JSON.parse(opened!)).toEqual({ s: 1, r: 1, b: { text: "hello" } });
+        expect(JSON.parse(opened!)).toEqual({ s: 1, r: 2, b: { text: "hello" } });
 
-        const sealedResponse = sealTransport(sessionKeyOnServer!, JSON.stringify({ id: "msg_1" }), `${aad}#1#200`);
+        const sealedResponse = sealTransport(sessionKeyOnServer!, JSON.stringify({ id: "msg_1" }), responseAad(init.method!, url, 1, 200));
         return new Response(JSON.stringify({ enc: sealedResponse }), {
           status: 200,
           headers: { "x-loam-enc": "1" },
@@ -366,7 +400,7 @@ describe("transport", () => {
         const session = getSession();
         expect(session).toBeDefined();
         // Bound to the sequence this retry carried (the latest one on the fresh session).
-        const sealed = sealTransport(session!.key, JSON.stringify({ ok: true }), `GET ${url}#${session!.seq}#200`);
+        const sealed = sealTransport(session!.key, JSON.stringify({ ok: true }), responseAad("GET", url, session!.seq, 200));
         return new Response(JSON.stringify({ enc: sealed }), { status: 200, headers: { "x-loam-enc": "1" } });
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -559,7 +593,7 @@ describe("transport", () => {
       const session = getSession();
       const opened = openTransport(session!.key, wire.enc, "POST /api/admin/sync/run");
       // A bodyless mutation still seals the `{ s, r }` anti-replay envelope (no `b`).
-      expect(JSON.parse(opened!)).toEqual({ s: 1, r: 1 });
+      expect(JSON.parse(opened!)).toEqual({ s: 1, r: 2 });
     });
 
     it("sends a bodyless GET with no body, its sealed envelope in the x-loam-seq header", async () => {
@@ -584,7 +618,7 @@ describe("transport", () => {
 
       expect(capturedBody).toBeUndefined();
       const opened = openTransport(getSession()!.key, capturedSeq!, "GET /api/channels");
-      expect(JSON.parse(opened!)).toEqual({ s: 1, r: 1 });
+      expect(JSON.parse(opened!)).toEqual({ s: 1, r: 2 });
     });
 
     it("refuses a sealed response bound to another sequence: a replayed old answer never passes as a new one", async () => {
@@ -599,7 +633,7 @@ describe("transport", () => {
         const key = getSession()!.key;
         // The first answer is genuine (bound to sequence 1); an on-path attacker keeps it and replays it as
         // the answer to the second request on the same route.
-        captured ??= sealTransport(key, JSON.stringify({ messages: ["old"] }), `GET ${url}#1#200`);
+        captured ??= sealTransport(key, JSON.stringify({ messages: ["old"] }), responseAad("GET", url, 1, 200));
         return new Response(JSON.stringify({ enc: captured }), { status: 200, headers: { "x-loam-enc": "1" } });
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -608,13 +642,13 @@ describe("transport", () => {
       expect(await (await encryptedFetch("GET", "/api/messages/general")).json()).toEqual({ messages: ["old"] });
       // Sequence 2 gets sequence 1's answer: it doesn't open, and neither does the retry on a fresh session.
       await expect(encryptedFetch("GET", "/api/messages/general")).rejects.toThrow("Transport session expired");
-      // A refusal sealed before the server read the sequence (`encStatus`, under `!status`) is only taken
-      // with an error status, so it can't stand in for a success either.
-      const early = sealTransport(getSession()!.key, JSON.stringify({ messages: ["old"] }), "POST /api/messages/general!200");
-      fetchMock.mockImplementation(async () => new Response(JSON.stringify({ enc: "x", encStatus: early }), { status: 200, headers: { "x-loam-enc": "1" } }));
+      // A refusal sealed before the server read the sequence (`encStatus2`, the v2 refusal form) is only
+      // taken with an error status, so it can't stand in for a success either.
+      const early = sealTransport(getSession()!.key, JSON.stringify({ messages: ["old"] }), refusalAad("POST", "/api/messages/general", 200));
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify({ enc: "x", encStatus2: early }), { status: 200, headers: { "x-loam-enc": "1" } }));
       await expect(encryptedFetch("POST", "/api/messages/general", { body: "y" })).rejects.toThrow("Transport session expired");
-      const refusal = sealTransport(getSession()!.key, JSON.stringify({ error: "Too many requests" }), "POST /api/messages/general!429");
-      fetchMock.mockImplementation(async () => new Response(JSON.stringify({ enc: "x", encStatus: refusal }), { status: 429, headers: { "x-loam-enc": "1" } }));
+      const refusal = sealTransport(getSession()!.key, JSON.stringify({ error: "Too many requests" }), refusalAad("POST", "/api/messages/general", 429));
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify({ enc: "x", encStatus2: refusal }), { status: 429, headers: { "x-loam-enc": "1" } }));
       const limited = await encryptedFetch("POST", "/api/messages/general", { body: "z" });
       expect(limited.status).toBe(429);
     });
@@ -634,19 +668,19 @@ describe("transport", () => {
 
       // A genuine 200, bound to its sequence and status, relabelled as a 404 by an on-path attacker.
       respond = (key, url, init) => {
-        const enc = sealTransport(key, JSON.stringify({ id: "msg_1" }), `${init.method} ${url}#${getSession()!.seq}#200`);
+        const enc = sealTransport(key, JSON.stringify({ id: "msg_1" }), responseAad(init.method!, url, getSession()!.seq, 200));
         return new Response(JSON.stringify({ enc }), { status: 404, headers: { "x-loam-enc": "1" } });
       };
       await expect(encryptedFetch("POST", "/api/messages", { body: "x" })).rejects.toThrow("Transport session expired");
 
       // A 200 answered under the bare aad (the server saw no sequence, because the attacker stripped the
-      // GET's x-loam-seq header), relabelled as an error: the bare `enc` is never opened, and `encStatus`
+      // GET's x-loam-seq header), relabelled as an error: the bare `enc` is never opened, and `encStatus2`
       // names the status it was really sent with.
       respond = (key, url, init) => {
         const body = JSON.stringify({ messages: ["secret"] });
         const enc = sealTransport(key, body, `${init.method} ${url}`);
-        const encStatus = sealTransport(key, body, `${init.method} ${url}!200`);
-        return new Response(JSON.stringify({ enc, encStatus }), { status: 500, headers: { "x-loam-enc": "1" } });
+        const encStatus2 = sealTransport(key, body, refusalAad(init.method!, url, 200));
+        return new Response(JSON.stringify({ enc, encStatus2 }), { status: 500, headers: { "x-loam-enc": "1" } });
       };
       await expect(encryptedFetch("POST", "/api/messages", { body: "y" })).rejects.toThrow("Transport session expired");
     });
@@ -706,7 +740,7 @@ describe("transport", () => {
       vi.stubGlobal(
         "fetch",
         optionalNode(host, (url, init) => {
-          const sealed = sealTransport(getSession()!.key, "", `${init.method} ${url}#${getSession()!.seq}#200`);
+          const sealed = sealTransport(getSession()!.key, "", responseAad(init.method!, url, getSession()!.seq, 200));
           return new Response(JSON.stringify({ enc: sealed }), { status: 200, headers: { "x-loam-enc": "1" } });
         }),
       );
@@ -755,23 +789,12 @@ describe("transport", () => {
         expect(url).toBe("/api/transport/tunnel");
         tunnelHits += 1;
         const wire = JSON.parse(init.body as string) as { enc: string };
-        const opened = openTransport(serverKey!, wire.enc, "POST /api/transport/tunnel");
+        const opened = openTransport(serverKey!, wire.enc, TUNNEL_REQUEST_AAD);
         const envelope = JSON.parse(opened!) as { s: number; b: { m: string; p: string; body?: unknown } };
         capturedInner = envelope.b;
         // Reply with a sealed { s, m, p, status, contentType, bodyB64 } descriptor (standard base64, as
         // the server sends). The s/m/p bind the response to the request (docs/20 §9); the client verifies.
-        const descriptor = JSON.stringify({
-          s: envelope.s,
-          m: envelope.b.m,
-          p: envelope.b.p,
-          status: 200,
-          contentType: "application/json",
-          bodyB64: btoa(JSON.stringify({ ok: true, sawPath: envelope.b.p })),
-        });
-        return new Response(
-          JSON.stringify({ enc: sealTransport(serverKey!, descriptor, "POST /api/transport/tunnel") }),
-          { status: 200, headers: { "x-loam-enc": "1" } },
-        );
+        return tunnelDescriptorReply(serverKey!, envelope, { status: 200, bodyB64: btoa(JSON.stringify({ ok: true, sawPath: envelope.b.p })) });
       });
       vi.stubGlobal("fetch", fetchMock);
 
@@ -805,21 +828,10 @@ describe("transport", () => {
         }
         expect(url).toBe("/api/transport/tunnel");
         const wire = JSON.parse(init.body as string) as { enc: string };
-        const opened = openTransport(serverKey!, wire.enc, "POST /api/transport/tunnel");
+        const opened = openTransport(serverKey!, wire.enc, TUNNEL_REQUEST_AAD);
         const envelope = JSON.parse(opened!) as { s: number; b: { m: string; p: string; body?: unknown } };
         capturedInner = envelope.b;
-        const descriptor = JSON.stringify({
-          s: envelope.s,
-          m: envelope.b.m,
-          p: envelope.b.p,
-          status: 201,
-          contentType: "application/json",
-          bodyB64: btoa(JSON.stringify({ id: "msg_1" })),
-        });
-        return new Response(JSON.stringify({ enc: sealTransport(serverKey!, descriptor, "POST /api/transport/tunnel") }), {
-          status: 200,
-          headers: { "x-loam-enc": "1" },
-        });
+        return tunnelDescriptorReply(serverKey!, envelope, { status: 201, bodyB64: btoa(JSON.stringify({ id: "msg_1" })) });
       });
       vi.stubGlobal("fetch", fetchMock);
 
@@ -832,17 +844,20 @@ describe("transport", () => {
       expect(await res.json()).toEqual({ id: "msg_1" });
     });
 
-    it("surfaces a sealed non-descriptor tunnel reply as a 400 Response instead of crashing", async () => {
-      const host = createTransportIdentity();
-      window.location.hash = `#k=${host.publicKey}`;
+    /**
+     * A node for a QR-pinned client that answers handshakes as `host` and hands every tunnel request, with its
+     * envelope and the session key, to `reply`.
+     */
+    function tunnelNode(
+      host: ReturnType<typeof createTransportIdentity>,
+      reply: (envelope: { s: number; r?: unknown; b: { m: string; p: string; body?: unknown } }, sessionKey: string) => Response,
+    ) {
       let serverKey: string | undefined;
-
-      const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      return vi.fn(async (url: string, init: RequestInit) => {
         if (url === "/api/transport/handshake") {
           const accepted = transportServerAccept({
             hostSecret: host.secretKey,
-            clientEphemeralPublic: (JSON.parse(init.body as string) as { clientEphemeralPublic: string })
-              .clientEphemeralPublic,
+            clientEphemeralPublic: (JSON.parse(init.body as string) as { clientEphemeralPublic: string }).clientEphemeralPublic,
           });
           serverKey = accepted.sessionKey;
           return new Response(
@@ -850,16 +865,130 @@ describe("transport", () => {
             { status: 200 },
           );
         }
-        // The tunnel endpoint's own guard reply: a sealed errorBody, NOT a { status, bodyB64 } descriptor.
-        const sealedError = sealTransport(serverKey!, JSON.stringify({ error: { message: "Invalid tunnel target" } }), "POST /api/transport/tunnel");
-        return new Response(JSON.stringify({ enc: sealedError }), { status: 200, headers: { "x-loam-enc": "1" } });
+        expect(url).toBe("/api/transport/tunnel");
+        return reply(openTunnelRequest(serverKey!, init)!, serverKey!);
       });
-      vi.stubGlobal("fetch", fetchMock);
+    }
+
+    it("surfaces a sealed non-descriptor tunnel reply with its own status instead of crashing", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      // The tunnel endpoint's own guard reply: a sealed errorBody, NOT a { status, bodyB64 } descriptor.
+      vi.stubGlobal(
+        "fetch",
+        tunnelNode(host, (envelope, key) => sealedTunnelReply(key, envelope.s, JSON.stringify({ error: { message: "Invalid tunnel target" } }), 400)),
+      );
 
       await ensureSession("required", host.publicKey);
       const res = await encryptedFetch("GET", "/api/whatever");
       expect(res.status).toBe(400); // no throw; readable error Response
       expect(await res.json()).toEqual({ error: { message: "Invalid tunnel target" } });
+    });
+
+    it("asks for a reply bound to its sequence and status (r: 2) in every tunnel envelope", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      const envelopes: unknown[] = [];
+      vi.stubGlobal(
+        "fetch",
+        tunnelNode(host, (envelope, key) => {
+          envelopes.push(envelope.r);
+          return tunnelDescriptorReply(key, envelope, { status: 200, bodyB64: btoa("{}") });
+        }),
+      );
+
+      await ensureSession("required", host.publicKey);
+      await encryptedFetch("GET", "/api/channels");
+      await encryptedFetch("POST", "/api/messages", { body: "hi" });
+      expect(envelopes).toEqual([2, 2]);
+    });
+
+    it("hands a sealed 401 from the tunnel route to the caller as a 401", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      const refusal = { error: "Resume an identity before tunnelling content", code: "session_invalid" };
+      const node = tunnelNode(host, (envelope, key) => sealedTunnelReply(key, envelope.s, JSON.stringify(refusal), 401));
+      vi.stubGlobal("fetch", node);
+
+      await ensureSession("required", host.publicKey);
+      const res = await encryptedFetch("GET", "/api/channels");
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual(refusal);
+      // It opened, so it is the node's own answer: no re-handshake.
+      expect(node.mock.calls.filter(([url]) => url === "/api/transport/handshake")).toHaveLength(1);
+    });
+
+    it("hands a 429 the node sealed before it read the sequence (encStatus2) to the caller as a 429", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      const refusal = { error: "Too many requests", code: "rate_limited" };
+      vi.stubGlobal(
+        "fetch",
+        tunnelNode(host, (_envelope, key) =>
+          new Response(
+            JSON.stringify({
+              enc: sealTransport(key, JSON.stringify(refusal), "POST /api/transport/tunnel"),
+              encStatus2: sealTransport(key, JSON.stringify(refusal), tunnelRefusalAad(429)),
+            }),
+            { status: 429, headers: { "x-loam-enc": "1" } },
+          ),
+        ),
+      );
+
+      await ensureSession("required", host.publicKey);
+      const res = await encryptedFetch("POST", "/api/messages", { body: "hi" });
+      expect(res.status).toBe(429);
+      expect(await res.json()).toEqual(refusal);
+    });
+
+    it("never opens a refusal sealed for one tunnel request as the answer to the next", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      let captured: Response | undefined;
+      vi.stubGlobal(
+        "fetch",
+        tunnelNode(host, (envelope, key) => {
+          if (captured === undefined) {
+            captured = sealedTunnelReply(key, envelope.s, JSON.stringify({ error: "Not allowed", code: "admin_required" }), 403);
+            return captured.clone();
+          }
+          // Someone on the path answers the next request with the first one's sealed refusal.
+          return captured.clone();
+        }),
+      );
+
+      await ensureSession("required", host.publicKey);
+      expect((await encryptedFetch("POST", "/api/messages", { body: "first" })).status).toBe(403);
+      await expect(encryptedFetch("POST", "/api/messages", { body: "second" })).rejects.toThrow("Transport session expired");
+    });
+
+    it("no longer accepts a reply sealed under the bare tunnel aad", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      vi.stubGlobal(
+        "fetch",
+        tunnelNode(host, (envelope, key) => {
+          const descriptor = { s: envelope.s, m: envelope.b.m, p: envelope.b.p, status: 200, contentType: "application/json", bodyB64: btoa("{}") };
+          return new Response(JSON.stringify({ enc: sealTransport(key, JSON.stringify(descriptor), "POST /api/transport/tunnel") }), {
+            status: 200,
+            headers: { "x-loam-enc": "1" },
+          });
+        }),
+      );
+
+      await ensureSession("required", host.publicKey);
+      await expect(encryptedFetch("POST", "/api/messages", { body: "hi" })).rejects.toThrow("Transport session expired");
+    });
+
+    it("opens a tunnelled 204 as an empty 204", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      vi.stubGlobal("fetch", tunnelNode(host, (envelope, key) => tunnelDescriptorReply(key, envelope, { status: 204, bodyB64: "" })));
+
+      await ensureSession("required", host.publicKey);
+      const res = await encryptedFetch("DELETE", "/api/channels/general/join-requests/user.ada");
+      expect(res.status).toBe(204);
+      expect(await res.text()).toBe("");
     });
   });
 
@@ -892,16 +1021,16 @@ describe("transport", () => {
       });
     }
 
-    /** A resume reply sealed the way the server seals an `r: 1` request: under `aad#seq#status`. `seq`
+    /** A resume reply sealed the way the server seals an `r: 2` request: under the v2 response aad. `seq`
      *  defaults to the `s` the body echoes. */
     function sealedReply(serverKey: string, body: unknown, status = 200, seq = (body as { s?: number }).s): Response {
       return new Response(
-        JSON.stringify({ enc: sealTransport(serverKey, JSON.stringify(body), `${RESUME_AAD}#${seq}#${status}`) }),
+        JSON.stringify({ enc: sealTransport(serverKey, JSON.stringify(body), responseAad("POST", "/api/session/resume", seq!, status)) }),
         { status, headers: { "x-loam-enc": "1" } },
       );
     }
 
-    it("asks for a status-bound reply (r: 1) on every resume", async () => {
+    it("asks for a status-bound reply (r: 2) on every resume", async () => {
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;
       let sawR: unknown;
@@ -928,7 +1057,51 @@ describe("transport", () => {
       );
       await ensureSession("required", host.publicKey);
       await resumeIdentity();
-      expect(sawR).toBe(1);
+      expect(sawR).toBe(2);
+    });
+
+    it("keeps one identity for the page load when the browser refuses every storage write", async () => {
+      const host = createTransportIdentity();
+      window.location.hash = `#k=${host.publicKey}`;
+      // Reads work, writes throw: a full quota, or a WebView that allows none.
+      const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      });
+      const presented: (string | undefined)[] = [];
+      vi.stubGlobal(
+        "fetch",
+        mockNode(host, (token, key, seq) => {
+          presented.push(token);
+          return sealedReply(key, { s: seq, m: "POST", p: "/api/session/resume", currentUser: { id: "u" }, token: token ?? "minted-token" });
+        }),
+      );
+      try {
+        await ensureSession("required", host.publicKey);
+        await expect(resumeIdentity()).resolves.toEqual({ currentUser: { id: "u" } });
+        expect(getSession()?.bound).toBe(true);
+
+        await resumeIdentity();
+        expect(presented).toEqual([undefined, "minted-token"]);
+
+        // Clearing it (a wipe, a logout) forgets the page's copy too.
+        clearStoredIdentityToken();
+        await resumeIdentity();
+        expect(presented).toEqual([undefined, "minted-token", undefined]);
+      } finally {
+        setItem.mockRestore();
+      }
+    });
+
+    it("snapshots for a wipe without throwing when storage is blocked entirely", () => {
+      const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError");
+      });
+      try {
+        expect(() => snapshotForWipe()).not.toThrow();
+        expect(apiUrl("/api/config")).toBe("/api/config");
+      } finally {
+        getItem.mockRestore();
+      }
     });
 
     it("keeps the stored token on a forged 401 (x-loam-enc: 1, body that doesn't open)", async () => {
@@ -936,8 +1109,7 @@ describe("transport", () => {
       // real resume and answers 401 must not make the client throw its identity away.
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;
-      const storageKey = `loam.identityToken.${window.location.origin}`;
-      localStorage.setItem(storageKey, "real-token");
+      seedTokenRecord(host.publicKey, "real-token");
       const presented: (string | undefined)[] = [];
       vi.stubGlobal(
         "fetch",
@@ -949,7 +1121,7 @@ describe("transport", () => {
       await ensureSession("required", host.publicKey);
       await expect(resumeIdentity()).rejects.toThrow(/401/);
       expect(presented).toEqual(["real-token"]); // no tokenless mint follows
-      expect(localStorage.getItem(storageKey)).toBe("real-token");
+      expect(storedTokenRecord()).toEqual({ k: host.publicKey, t: "real-token" });
     });
 
     it("keeps the stored token on a 401 sealed for another sequence or status", async () => {
@@ -957,8 +1129,7 @@ describe("transport", () => {
       // not open under this request's binding either.
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;
-      const storageKey = `loam.identityToken.${window.location.origin}`;
-      localStorage.setItem(storageKey, "real-token");
+      seedTokenRecord(host.publicKey, "real-token");
       const presented: (string | undefined)[] = [];
       vi.stubGlobal(
         "fetch",
@@ -971,7 +1142,7 @@ describe("transport", () => {
       await ensureSession("required", host.publicKey);
       await expect(resumeIdentity()).rejects.toThrow(/401/);
       expect(presented).toEqual(["real-token"]);
-      expect(localStorage.getItem(storageKey)).toBe("real-token");
+      expect(storedTokenRecord()).toEqual({ k: host.publicKey, t: "real-token" });
     });
 
     it("mints a fresh identity, stores the token, and returns currentUser (credentials omitted)", async () => {
@@ -1037,7 +1208,7 @@ describe("transport", () => {
       const { currentUser } = await resumeIdentity(); // same-session retry recovers the cached identity
       expect((currentUser as { id: string; isAdmin: boolean }).id).toBe("user.admin");
       expect((currentUser as { isAdmin: boolean }).isAdmin).toBe(true);
-      expect(localStorage.getItem(`loam.identityToken.${window.location.origin}`)).toBe("admin-tok");
+      expect(storedTokenRecord()).toEqual({ k: host.publicKey, t: "admin-tok" });
       expect(resumeCalls).toBe(2); // no third mint
     });
 
@@ -1045,7 +1216,7 @@ describe("transport", () => {
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;
       // Seed a stored token for this origin so the first resume presents it.
-      localStorage.setItem(`loam.identityToken.${window.location.origin}`, "stale-token");
+      seedTokenRecord(host.publicKey, "stale-token");
       const presented: (string | undefined)[] = [];
       const fetchMock = mockNode(host, (token, key, seq) => {
         presented.push(token);
@@ -1097,12 +1268,12 @@ describe("transport", () => {
 
       await ensureSession("required", host.publicKey);
       await resumeIdentity();
-      expect(localStorage.getItem(`loam.identityToken.${window.location.origin}`)).toBe("tok");
+      expect(storedTokenRecord()).toEqual({ k: host.publicKey, t: "tok" });
 
       const handled = await logoutSecureIdentity();
       expect(handled).toBe(true); // it handled a bound identity → caller must NOT also call session/end
       expect(logoutHits).toBe(1);
-      expect(localStorage.getItem(`loam.identityToken.${window.location.origin}`)).toBeNull();
+      expect(localStorage.getItem(tokenRecordKey())).toBeNull();
     });
 
     it("logoutSecureIdentity returns false and sends nothing for a purely anonymous session (docs/20 H3)", async () => {
@@ -1171,7 +1342,7 @@ describe("transport", () => {
       const confirmed = await logoutSecureIdentity();
       expect(confirmed).toBe(false); // never confirmed → caller must still clear the cookie
       expect(node.logoutHits()).toBe(2); // first attempt + one retry after the re-establish
-      expect(localStorage.getItem(`loam.identityToken.${window.location.origin}`)).toBeNull(); // token cleared locally
+      expect(localStorage.getItem(tokenRecordKey())).toBeNull(); // token cleared locally
     });
 
     it("logoutSecureIdentity confirms TRUE when the retry over a revived session succeeds (docs/20 H3)", async () => {
@@ -1194,7 +1365,7 @@ describe("transport", () => {
       const confirmed = await logoutSecureIdentity();
       expect(confirmed).toBe(true); // the retry landed
       expect(node.logoutHits()).toBe(2);
-      expect(localStorage.getItem(`loam.identityToken.${window.location.origin}`)).toBeNull();
+      expect(localStorage.getItem(tokenRecordKey())).toBeNull();
     });
 
     it("wipeServerCredentials still clears the cookie when the secure-logout re-handshake HANGS (docs/20 #3/H)", async () => {
@@ -1262,7 +1433,6 @@ describe("transport", () => {
       // that possible even though localStorage is already empty.
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;
-      const tokenKey = `loam.identityToken.${window.location.origin}`;
       let serverKey: string | undefined;
       const resumeTokens: (string | undefined)[] = [];
       const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
@@ -1292,12 +1462,12 @@ describe("transport", () => {
 
       await ensureSession("required", host.publicKey);
       await resumeIdentity(); // mint → resumeTokens: [undefined]; token "tok" stored
-      expect(localStorage.getItem(tokenKey)).toBe("tok");
+      expect(storedTokenRecord()).toEqual({ k: host.publicKey, t: "tok" });
 
       // Model the wipe order: snapshot BEFORE clearing local storage, then clear it, then revoke.
       snapshotForWipe();
       clearStoredIdentityToken();
-      expect(localStorage.getItem(tokenKey)).toBeNull();
+      expect(localStorage.getItem(tokenRecordKey())).toBeNull();
       await wipeServerCredentials(1_000);
 
       // The recovery re-establish presented the SNAPSHOT token (not undefined) — so revocation could run
@@ -1330,8 +1500,7 @@ describe("transport", () => {
       // but `storeIdentityToken` is gated, so localStorage is not repopulated.
       const host = createTransportIdentity();
       window.location.hash = `#k=${host.publicKey}`;
-      const key = `loam.identityToken.${window.location.origin}`;
-      localStorage.setItem(key, "stored-token");
+      seedTokenRecord(host.publicKey, "stored-token");
       const fetchMock = mockNode(host, (_token, serverKey, seq) =>
         sealedReply(serverKey, { s: seq, m: "POST", p: "/api/session/resume", currentUser: { id: "u" }, token: "new-token" }),
       );
@@ -1345,7 +1514,7 @@ describe("transport", () => {
         setMintSuppressed(false);
       }
       // The new token was NOT written — the credential the wipe cleared can't be repopulated mid-wipe.
-      expect(localStorage.getItem(key)).toBe("stored-token");
+      expect(storedTokenRecord()).toEqual({ k: host.publicKey, t: "stored-token" });
     });
 
     it("resumeIdentity refuses to bind over a non-QR-verified (optional) session (docs/20 L8)", async () => {
@@ -1381,10 +1550,355 @@ describe("transport", () => {
       await expect(resumeIdentity()).rejects.toThrow(); // no session to bind over
     });
 
-    it("clearStoredIdentityToken drops the per-origin token", async () => {
-      localStorage.setItem(`loam.identityToken.${window.location.origin}`, "tok");
+    it("clearStoredIdentityToken drops the per-origin token in both storage formats", async () => {
+      seedTokenRecord(createTransportIdentity().publicKey, "tok");
+      localStorage.setItem(legacyTokenKey(), "legacy-tok");
       clearStoredIdentityToken();
-      expect(localStorage.getItem(`loam.identityToken.${window.location.origin}`)).toBeNull();
+      expect(localStorage.getItem(tokenRecordKey())).toBeNull();
+      expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+    });
+
+    describe("the token is bound to the host key it was issued under", () => {
+      type Host = ReturnType<typeof createTransportIdentity>;
+
+      afterEach(() => {
+        delete (window as { __loamHostTransportKey?: unknown }).__loamHostTransportKey;
+      });
+
+      /**
+       * A fake node at this origin whose identity can change (`node.host = …`), as when a different LOAM
+       * network comes up at the same address. It answers handshakes as the current host, opens every sealed
+       * resume to record which token it carried and to which host, and answers with that token, or a fresh
+       * `minted-<n>` when none came. Every request's URL, headers and raw body are kept in `raw`.
+       */
+      function switchableNode(initial: Host) {
+        const node = {
+          host: initial,
+          presented: [] as { hostKey: string; token: string | undefined }[],
+          raw: [] as string[],
+          minted: 0,
+        };
+        let serverKey: string | undefined;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string, init: RequestInit) => {
+            node.raw.push(`${url} ${JSON.stringify(init.headers ?? {})} ${typeof init.body === "string" ? init.body : ""}`);
+            if (url === "/api/transport/handshake") {
+              const accepted = transportServerAccept({
+                hostSecret: node.host.secretKey,
+                clientEphemeralPublic: (JSON.parse(init.body as string) as { clientEphemeralPublic: string }).clientEphemeralPublic,
+              });
+              serverKey = accepted.sessionKey;
+              return new Response(
+                JSON.stringify({ sessionId: "s", hostEphemeralPublic: accepted.hostEphemeralPublic, hostPublicKey: node.host.publicKey }),
+                { status: 200 },
+              );
+            }
+            if (url === "/api/session/resume") {
+              const opened = openTransport(serverKey!, (JSON.parse(init.body as string) as { enc: string }).enc, RESUME_AAD);
+              const envelope = JSON.parse(opened!) as { s: number; b: { token?: string } };
+              node.presented.push({ hostKey: node.host.publicKey, token: envelope.b.token });
+              const token = envelope.b.token ?? `minted-${(node.minted += 1)}`;
+              return sealedReply(serverKey!, { s: envelope.s, m: "POST", p: "/api/session/resume", currentUser: { id: "u" }, token });
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+          }),
+        );
+        return node;
+      }
+
+      /** Join `node` by scanning its QR and bind an identity (the node mints `minted-1`), then reload the page:
+       * module state goes, localStorage stays, and the record of requests starts empty. */
+      async function joinThenReload(node: ReturnType<typeof switchableNode>): Promise<void> {
+        window.location.hash = `#k=${node.host.publicKey}`;
+        captureJoinKey();
+        await ensureSession("required", node.host.publicKey);
+        await resumeIdentity();
+        expect(node.presented).toEqual([{ hostKey: node.host.publicKey, token: undefined }]);
+        resetTransportStateForTests();
+        node.presented.length = 0;
+        node.raw.length = 0;
+      }
+
+      it("never seals a network's token to a different network that later answers at the same origin", async () => {
+        const a = createTransportIdentity();
+        const b = createTransportIdentity();
+        const node = switchableNode(a);
+        await joinThenReload(node); // holds pin A and A's token "minted-1"
+
+        // Network B now answers at this address, and the person scans B's QR.
+        node.host = b;
+        window.location.hash = `#k=${b.publicKey}`;
+        captureJoinKey();
+        expect(getCachedHostPublicKey()).toBe(a.publicKey); // parked, not adopted
+        await expect(ensureSession("required", b.publicKey)).rejects.toBeInstanceOf(TransportNeedsQrError);
+        expect(isHostKeyPinBroken()).toBe(true);
+        expect(getPendingHostKeyChange()?.matchesNode).toBe(true);
+        expect(acceptPendingHostKey()).toBe(true);
+        await ensureSession("required", b.publicKey);
+        expect(isSessionQrVerified()).toBe(true);
+        await resumeIdentity();
+
+        expect(node.presented).toEqual([{ hostKey: b.publicKey, token: undefined }]);
+        for (const request of node.raw) {
+          expect(request).not.toContain("minted-1");
+        }
+        // B's fresh token replaces A's record, bound to B.
+        expect(storedTokenRecord()).toEqual({ k: b.publicKey, t: "minted-2" });
+      });
+
+      it("still presents the token to the same key, on resume and on a reconnect", async () => {
+        const a = createTransportIdentity();
+        const node = switchableNode(a);
+        await joinThenReload(node);
+
+        captureJoinKey();
+        await ensureSession("required", a.publicKey);
+        await resumeIdentity();
+        expect(await reestablishSession()).toBe(true);
+
+        expect(node.presented).toEqual([
+          { hostKey: a.publicKey, token: "minted-1" },
+          { hostKey: a.publicKey, token: "minted-1" },
+        ]);
+        expect(storedTokenRecord()).toEqual({ k: a.publicKey, t: "minted-1" });
+      });
+
+      it("a reconnect after the pin was replaced presents no token", async () => {
+        const a = createTransportIdentity();
+        const b = createTransportIdentity();
+        const node = switchableNode(a);
+        await joinThenReload(node);
+
+        // The host's own WebView on a node whose key changed (the launcher's key replaces the pin).
+        node.host = b;
+        (window as { __loamHostTransportKey?: unknown }).__loamHostTransportKey = b.publicKey;
+        captureJoinKey();
+        await ensureSession("required");
+        expect(await reestablishSession()).toBe(true);
+
+        expect(node.presented).toEqual([{ hostKey: b.publicKey, token: undefined }]);
+        expect(storedTokenRecord()).toEqual({ k: b.publicKey, t: "minted-2" });
+      });
+
+      it("migrates an earlier release's bare token, bound to the stored pin", async () => {
+        const a = createTransportIdentity();
+        const node = switchableNode(a);
+        localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, a.publicKey);
+        localStorage.setItem(legacyTokenKey(), "legacy-tok");
+
+        captureJoinKey();
+        await ensureSession("required", a.publicKey);
+        await resumeIdentity();
+
+        expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "legacy-tok" }]);
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+        expect(storedTokenRecord()).toEqual({ k: a.publicKey, t: "legacy-tok" });
+      });
+
+      it("a bare token is bound to the pin the launcher's key replaces, never to the new key", async () => {
+        const a = createTransportIdentity();
+        const b = createTransportIdentity();
+        const node = switchableNode(b);
+        localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, a.publicKey);
+        localStorage.setItem(legacyTokenKey(), "legacy-tok");
+        (window as { __loamHostTransportKey?: unknown }).__loamHostTransportKey = b.publicKey;
+
+        captureJoinKey();
+        await ensureSession("required");
+        await resumeIdentity();
+
+        expect(node.presented).toEqual([{ hostKey: b.publicKey, token: undefined }]);
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+        expect(storedTokenRecord()).toEqual({ k: b.publicKey, t: "minted-1" });
+      });
+
+      it("a bare token is bound to the pin an accepted key change replaces, never to the new key", async () => {
+        const a = createTransportIdentity();
+        const b = createTransportIdentity();
+        const node = switchableNode(b);
+        localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, a.publicKey);
+        localStorage.setItem(legacyTokenKey(), "legacy-tok");
+        // No `captureJoinKey`: the only migration on this path is the one inside the pin replacement.
+        window.location.hash = `#k=${b.publicKey}`;
+
+        await expect(ensureSession("required", b.publicKey)).rejects.toBeInstanceOf(TransportNeedsQrError);
+        expect(acceptPendingHostKey()).toBe(true);
+        expect(storedTokenRecord()).toEqual({ k: a.publicKey, t: "legacy-tok" });
+        await ensureSession("required", b.publicKey);
+        await resumeIdentity();
+
+        expect(node.presented).toEqual([{ hostKey: b.publicKey, token: undefined }]);
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+        expect(storedTokenRecord()).toEqual({ k: b.publicKey, t: "minted-1" });
+      });
+
+      it("deletes a bare token stored with no pin, and never sends it", async () => {
+        const a = createTransportIdentity();
+        const node = switchableNode(a);
+        localStorage.setItem(legacyTokenKey(), "orphan-tok");
+        captureJoinKey();
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+        expect(localStorage.getItem(tokenRecordKey())).toBeNull();
+
+        // The same with the first scan's `#k=` (the pin it sets must not adopt the orphan).
+        localStorage.setItem(legacyTokenKey(), "orphan-tok");
+        window.location.hash = `#k=${a.publicKey}`;
+        await ensureSession("required", a.publicKey);
+        await resumeIdentity();
+
+        expect(node.presented).toEqual([{ hostKey: a.publicKey, token: undefined }]);
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+        expect(storedTokenRecord()).toEqual({ k: a.publicKey, t: "minted-1" });
+      });
+
+      it("ignores a malformed record", async () => {
+        const a = createTransportIdentity();
+        const node = switchableNode(a);
+        const malformed = [
+          "not json",
+          "null",
+          JSON.stringify("minted"),
+          JSON.stringify([a.publicKey, "tok"]),
+          JSON.stringify({ k: a.publicKey }),
+          JSON.stringify({ t: "tok" }),
+          JSON.stringify({ k: "", t: "tok" }),
+          JSON.stringify({ k: a.publicKey, t: "" }),
+          JSON.stringify({ k: a.publicKey, t: 5 }),
+        ];
+        for (const raw of malformed) {
+          resetTransportStateForTests();
+          localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, a.publicKey);
+          localStorage.setItem(tokenRecordKey(), raw);
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+        }
+        expect(node.presented).toEqual(malformed.map(() => ({ hostKey: a.publicKey, token: undefined })));
+
+        // A bare token beside a malformed record still migrates.
+        resetTransportStateForTests();
+        localStorage.setItem(tokenRecordKey(), "not json");
+        localStorage.setItem(legacyTokenKey(), "legacy-tok");
+        await ensureSession("required", a.publicKey);
+        await resumeIdentity();
+        expect(node.presented.at(-1)).toEqual({ hostKey: a.publicKey, token: "legacy-tok" });
+      });
+
+      it("the wipe snapshot's token is presented only to a session under the snapshot's key", async () => {
+        const a = createTransportIdentity();
+        const b = createTransportIdentity();
+        const node = switchableNode(a);
+        window.location.hash = `#k=${a.publicKey}`;
+        await ensureSession("required", a.publicKey);
+        await resumeIdentity(); // "minted-1" under A
+        node.presented.length = 0;
+
+        snapshotForWipe();
+        clearStoredIdentityToken();
+        localStorage.clear();
+        setMintSuppressed(true);
+        try {
+          // Same key: the snapshot carries the revocation's re-bind.
+          expect(await reestablishSession()).toBe(true);
+          expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "minted-1" }]);
+
+          // A session under another key gets no token, and with minting suppressed no resume at all.
+          node.host = b;
+          (window as { __loamHostTransportKey?: unknown }).__loamHostTransportKey = b.publicKey;
+          captureJoinKey();
+          await ensureSession("required");
+          expect(getSession()?.hostPublicKey).toBe(b.publicKey);
+          expect(await reestablishSession()).toBe(false);
+          expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "minted-1" }]);
+        } finally {
+          setMintSuppressed(false);
+        }
+      });
+
+      it("a bare token still reaches the next resume when the browser refuses to store its record", async () => {
+        const a = createTransportIdentity();
+        const node = switchableNode(a);
+        localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, a.publicKey);
+        localStorage.setItem(legacyTokenKey(), "legacy-tok");
+        // Reads work, writes fail: a full quota.
+        const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+          throw new DOMException("quota", "QuotaExceededError");
+        });
+        try {
+          captureJoinKey();
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+        } finally {
+          setItem.mockRestore();
+        }
+
+        expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "legacy-tok" }]);
+        // The bare token is gone, so a later pin change can't claim it.
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+      });
+
+      describe("a key stored in another spelling of the same bytes", () => {
+        const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        const PIN_KEY = (): string => `loam.transportHostKey.${window.location.origin}`;
+
+        /** The same 32-byte key with the last character's two unused low bits set. */
+        function respelled(key: string): string {
+          return key.slice(0, 42) + BASE64URL[BASE64URL.indexOf(key[42]!) | 1];
+        }
+
+        it("a respelled or padded pin is read in its one spelling, and the node's answer keeps it", async () => {
+          for (const stored of [(key: string) => respelled(key), (key: string) => `${key}=`]) {
+            resetTransportStateForTests();
+            localStorage.clear();
+            const a = createTransportIdentity();
+            switchableNode(a);
+            localStorage.setItem(PIN_KEY(), stored(a.publicKey));
+
+            expect(getCachedHostPublicKey()).toBe(a.publicKey);
+            await ensureSession("required", a.publicKey);
+            expect(isHostKeyPinBroken()).toBe(false);
+            expect(getSession()?.hostPublicKey).toBe(a.publicKey);
+          }
+        });
+
+        it("a token record whose key is respelled is still presented to that key", async () => {
+          const a = createTransportIdentity();
+          const node = switchableNode(a);
+          localStorage.setItem(PIN_KEY(), a.publicKey);
+          seedTokenRecord(respelled(a.publicKey), "tok-1");
+
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+
+          expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "tok-1" }]);
+        });
+
+        it("a bare token migrates bound to the respelled pin's one spelling", async () => {
+          const a = createTransportIdentity();
+          const node = switchableNode(a);
+          localStorage.setItem(PIN_KEY(), respelled(a.publicKey));
+          localStorage.setItem(legacyTokenKey(), "legacy-tok");
+
+          captureJoinKey();
+          expect(storedTokenRecord()).toEqual({ k: a.publicKey, t: "legacy-tok" });
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+          expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "legacy-tok" }]);
+        });
+
+        it("a stored pin of other bytes still breaks against the node's key, and one that is not 32 bytes is absent", async () => {
+          const a = createTransportIdentity();
+          switchableNode(a);
+          localStorage.setItem(PIN_KEY(), createTransportIdentity().publicKey);
+          await expect(ensureSession("required", a.publicKey)).rejects.toBeInstanceOf(TransportNeedsQrError);
+          expect(isHostKeyPinBroken()).toBe(true);
+
+          resetTransportStateForTests();
+          localStorage.clear();
+          localStorage.setItem(PIN_KEY(), a.publicKey.slice(0, 42));
+          expect(getCachedHostPublicKey()).toBeUndefined();
+        });
+      });
     });
   });
 
@@ -1441,20 +1955,8 @@ describe("transport", () => {
         }
         // The tunnelled image GET fails at the server (e.g. transport session expired) — a sealed 404-ish
         // descriptor with a non-ok status, so the tunnel returns a non-ok Response.
-        const opened = openTransport(serverKey!, (JSON.parse(init.body as string) as { enc: string }).enc, "POST /api/transport/tunnel");
-        const envelope = JSON.parse(opened!) as { s: number; b: { m: string; p: string } };
-        const descriptor = JSON.stringify({
-          s: envelope.s,
-          m: envelope.b.m,
-          p: envelope.b.p,
-          status: 404,
-          contentType: "application/json",
-          bodyB64: btoa(JSON.stringify({ error: { message: "gone" } })),
-        });
-        return new Response(JSON.stringify({ enc: sealTransport(serverKey!, descriptor, "POST /api/transport/tunnel") }), {
-          status: 200,
-          headers: { "x-loam-enc": "1" },
-        });
+        const envelope = openTunnelRequest(serverKey!, init)!;
+        return tunnelDescriptorReply(serverKey!, envelope, { status: 404, bodyB64: btoa(JSON.stringify({ error: { message: "gone" } })) });
       });
       vi.stubGlobal("fetch", fetchMock);
 
@@ -1480,8 +1982,11 @@ describe("transport", () => {
 
       await ensureSession("optional", host.publicKey);
 
-      expect(wsUrl("ws://host/ws")).toBe(`ws://host/ws?enc=${encodeURIComponent("sess-1")}`);
-      expect(wsUrl("ws://host/ws?foo=bar")).toBe(`ws://host/ws?foo=bar&enc=${encodeURIComponent("sess-1")}`);
+      // Each socket also carries its own random `cn` (the challenge must repeat it).
+      expect(wsUrl("ws://host/ws")).toMatch(new RegExp(`^ws://host/ws\\?enc=${encodeURIComponent("sess-1")}&cn=[A-Za-z0-9_-]{22}$`));
+      expect(wsUrl("ws://host/ws?foo=bar")).toMatch(
+        new RegExp(`^ws://host/ws\\?foo=bar&enc=${encodeURIComponent("sess-1")}&cn=[A-Za-z0-9_-]{22}$`),
+      );
     });
   });
 
@@ -1490,7 +1995,8 @@ describe("transport", () => {
     const WS_PROOF_AAD = "loam.ws.proof.v1";
     const wsFrameAad = (connectionId: string) => `loam.ws.frame.v1 ${connectionId}`;
 
-    async function liveSession(): Promise<string> {
+    /** A live session and a new socket on it: the session key and the `cn` that socket sent. */
+    async function liveSession(): Promise<{ key: string; cn: string }> {
       const host = createTransportIdentity();
       const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
         const { status, json } = handshakeResponseBody(host.secretKey, host.publicKey, init.body as string);
@@ -1501,8 +2007,8 @@ describe("transport", () => {
       const key = getSession()?.key;
       expect(key).toBeDefined();
       // A new socket resets the per-connection challenge state.
-      wsUrl("ws://host/ws");
-      return key as string;
+      const url = wsUrl("ws://host/ws");
+      return { key: key as string, cn: new URLSearchParams(url.split("?")[1]).get("cn") as string };
     }
 
     it("passes raw string frames through unchanged with no session", () => {
@@ -1511,12 +2017,12 @@ describe("transport", () => {
     });
 
     it("answers the challenge with a proof under the separate proof aad, then decodes app frames", async () => {
-      const key = await liveSession();
+      const { key, cn } = await liveSession();
       const connectionId = "conn-abc";
       const nonce = "nonce-xyz";
 
-      // The server's challenge (sealed under the challenge aad).
-      const challenge = sealTransport(key, JSON.stringify({ type: "challenge", connectionId, nonce }), WS_CHALLENGE_AAD);
+      // The server's challenge (sealed under the challenge aad), repeating the socket's `cn`.
+      const challenge = sealTransport(key, JSON.stringify({ type: "challenge", connectionId, nonce, cn }), WS_CHALLENGE_AAD);
       const answered = handleWsFrame(challenge);
       expect(answered.proof).toBeDefined();
       expect(answered.payload).toBeUndefined();
@@ -1533,14 +2039,14 @@ describe("transport", () => {
     });
 
     it("ignores frames before the challenge is answered and rejects a wrong-connection frame", async () => {
-      const key = await liveSession();
+      const { key, cn } = await liveSession();
       // An application frame arriving before any challenge (wrong aad for the pre-confirm state) is ignored.
       const stray = sealTransport(key, JSON.stringify({ q: 1, f: "x" }), wsFrameAad("conn-1"));
       expect(handleWsFrame(stray)).toEqual({});
       expect(handleWsFrame("garbage")).toEqual({});
 
       // Answer a challenge for conn-1, then a frame sealed for a DIFFERENT connection id won't open.
-      const challenge = sealTransport(key, JSON.stringify({ type: "challenge", connectionId: "conn-1", nonce: "n" }), WS_CHALLENGE_AAD);
+      const challenge = sealTransport(key, JSON.stringify({ type: "challenge", connectionId: "conn-1", nonce: "n", cn }), WS_CHALLENGE_AAD);
       expect(handleWsFrame(challenge).proof).toBeDefined();
       const otherConn = sealTransport(key, JSON.stringify({ q: 1, f: "y" }), wsFrameAad("conn-2"));
       expect(handleWsFrame(otherConn)).toEqual({});
@@ -1651,8 +2157,9 @@ describe("review fixes 2026-09-04 (client transport)", () => {
     });
 
     it("clearCachedHostPublicKey forgets the per-origin cached key", () => {
-      localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, "abc");
-      expect(getCachedHostPublicKey()).toBe("abc");
+      const pinned = createTransportIdentity().publicKey;
+      localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, pinned);
+      expect(getCachedHostPublicKey()).toBe(pinned);
       clearCachedHostPublicKey();
       expect(getCachedHostPublicKey()).toBeUndefined();
     });
@@ -1673,7 +2180,7 @@ describe("review fixes 2026-09-04 (client transport)", () => {
             return new Response(null, { status: 401 }); // an unsealed (forgeable) 401 on a GET
           }
           const session = getSession();
-          const sealed = sealTransport(session!.key, JSON.stringify({ ok: true }), `GET ${url}#${session!.seq}#200`);
+          const sealed = sealTransport(session!.key, JSON.stringify({ ok: true }), responseAad("GET", url, session!.seq, 200));
           return new Response(JSON.stringify({ enc: sealed }), { status: 200, headers: { "x-loam-enc": "1" } });
         }),
       );

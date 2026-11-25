@@ -20,35 +20,83 @@ function isSafeLink(href: string): boolean {
 }
 
 /**
- * Strip a join-QR host-key fragment (`#k=…`) from a message link. A `#k=`
- * is only meaningful when it arrives out-of-band from a physically scanned QR; a link carrying one in a
- * message would otherwise let any member hand others a key to pin — for this node's origin that's a
- * remote lockout (or, with an on-path position, a key substitution). The link still works; it just no
- * longer carries a key. Any fragment with a `k=` parameter is dropped, whatever the origin.
+ * The fragment parameters this app acts on at start-up: `k` (the join QR's host key, `transport.ts`), `a`
+ * (an admin claim code, `admin-link.ts`), `i` (an invite code, `invite.ts`) and `l` (a node-link code,
+ * `link-code-fragment.ts`). Each reader takes `<name>=` from `window.location.hash` split on `&`,
+ * case-sensitively and without percent-decoding.
  */
-function withoutHostKeyFragment(href: string): string {
+const STARTUP_FRAGMENT_PARAMS = new Set(["k", "a", "i", "l"]);
+
+/** Decode each `%XX` escape on its own, leaving a malformed `%` as it is (never throws). */
+function percentDecodeTolerant(value: string): string {
+  return value.replace(/%([0-9A-Fa-f]{2})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+/** Whether `hash` (a URL's `#…`, or empty) has a parameter named `k`, `a`, `i` or `l`, ignoring case,
+ * percent-encoding and surrounding spaces in the name. */
+function hasStartupFragmentParam(hash: string): boolean {
+  for (const part of hash.replace(/^#/, "").split("&")) {
+    const equalsAt = part.indexOf("=");
+    if (equalsAt !== -1 && STARTUP_FRAGMENT_PARAMS.has(percentDecodeTolerant(part.slice(0, equalsAt)).trim().toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Drop the fragment from a message link when it carries a start-up parameter (see `STARTUP_FRAGMENT_PARAMS`).
+ * Those fragments may only arrive from a scanned code or the host's own screen, never from a message: a posted
+ * `#k=` would let any member hand others a key to pin (for this node's origin a remote lockout or, with an
+ * on-path position, a key substitution), and a posted `#a=`, `#i=` or `#l=` would present someone else's code.
+ * The fragment is judged as the browser will see it, after URL parsing, because the browser strips tab, CR and
+ * LF from a URL first: `#<TAB>k=` reaches the opened page as `#k=`. The link still works; it just loses its
+ * whole fragment, whatever the origin. Any other href is returned exactly as it was.
+ */
+function withoutStartupFragment(href: string): string {
   const hashAt = href.indexOf("#");
   if (hashAt === -1) {
     return href;
   }
-  const fragment = href.slice(hashAt + 1);
-  return /(^|&)k=/i.test(fragment) ? href.slice(0, hashAt) : href;
+  let hash: string;
+  try {
+    hash = new URL(href, window.location.origin).hash;
+  } catch {
+    // Unparseable here (the caller has already checked it parses): drop the fragment rather than guess.
+    return href.slice(0, hashAt);
+  }
+  return hasStartupFragmentParam(hash) ? href.slice(0, hashAt) : href;
 }
 
 /**
- * Images only ever need to load from a normal http(s) URL. Unlike links,
- * there is no legitimate `mailto:`/`data:` use case here, so — belt and
- * braces alongside DOMPurify's own scheme filtering — restrict `<img src>`
- * to `http:`/`https:` and drop anything else (control-char/whitespace/case
- * obfuscated schemes, `data:`, `vbscript:`, etc. all fail the same way).
+ * Every element snarkdown 2.0.0 can emit, less `img` (see `imagesAsAltText`). Nothing else may reach the
+ * page, so a malformed link (snarkdown builds one with `String.replace`, which expands `$` patterns in the
+ * target) can't bring in an element of its own.
  */
-function isSafeImageSrc(src: string): boolean {
-  try {
-    const url = new URL(src, window.location.origin);
-    return ["http:", "https:"].includes(url.protocol);
-  } catch {
-    return false;
+const ALLOWED_TAGS = ["a", "em", "strong", "s", "br", "hr", "pre", "code", "blockquote", "ol", "ul", "li", "h1", "h2", "h3", "h4", "h5", "h6"];
+
+/**
+ * The one attribute a message may carry into the page: a link's `href`. The link hardening below runs after
+ * the sanitiser and sets `rel` and `target` itself. The same `$`-pattern trick can put any attribute on a
+ * link (`tabindex`, `title`, `download`, `name`, `data-*`, `aria-*`…), so none is trusted by default.
+ */
+const ALLOWED_ATTRIBUTES = ["href"];
+
+/**
+ * Replace each `<img>` snarkdown emitted with its alt text as plain text (nothing when it has none). Pictures
+ * are shared as attachments. A message image could only load from the node itself (the page's CSP blocks
+ * other hosts), so a post of hundreds of `![](/api/...)` would make every reader's browser send that many
+ * requests to the node from the reader's own address, spending their rate budget, and on an encrypted network
+ * each would be a clear-text GET showing a listener which devices rendered the post. The HTML is parsed into an
+ * inert `<template>`, which loads nothing; the sanitiser then drops any `<img>` this missed.
+ */
+function imagesAsAltText(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  for (const img of Array.from(template.content.querySelectorAll("img"))) {
+    img.replaceWith(img.getAttribute("alt") ?? "");
   }
+  return template.innerHTML;
 }
 
 /**
@@ -60,9 +108,16 @@ function isSafeImageSrc(src: string): boolean {
 const FORBIDDEN_ATTRIBUTES = ["class", "id", "style"];
 
 export function renderMarkdown(markdown: string): string {
-  const html = snarkdown(escapeHtml(markdown));
+  const html = imagesAsAltText(snarkdown(escapeHtml(markdown)));
   const template = document.createElement("template");
-  template.innerHTML = DOMPurify.sanitize(html, { FORBID_ATTR: FORBIDDEN_ATTRIBUTES });
+  template.innerHTML = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR: ALLOWED_ATTRIBUTES,
+    // DOMPurify keeps data-* and aria-* attributes whatever ALLOWED_ATTR says unless these are off.
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
+    FORBID_ATTR: FORBIDDEN_ATTRIBUTES,
+  });
 
   for (const link of Array.from(template.content.querySelectorAll("a"))) {
     const href = link.getAttribute("href") ?? "";
@@ -72,21 +127,13 @@ export function renderMarkdown(markdown: string): string {
       continue;
     }
 
-    const neutralised = withoutHostKeyFragment(href);
+    const neutralised = withoutStartupFragment(href);
     if (neutralised !== href) {
       link.setAttribute("href", neutralised);
     }
 
     link.setAttribute("rel", "noreferrer");
     link.setAttribute("target", "_blank");
-  }
-
-  for (const img of Array.from(template.content.querySelectorAll("img"))) {
-    const src = img.getAttribute("src") ?? "";
-
-    if (!isSafeImageSrc(src)) {
-      img.removeAttribute("src");
-    }
   }
 
   return template.innerHTML;
@@ -119,7 +166,9 @@ export function clearMarkdownCache(): void {
  * @returns Sanitized, link-hardened HTML.
  */
 export function renderMarkdownCached(id: string, body: string, editedAt?: number): string {
-  const key = `${id}\n${editedAt ?? ""}\n${body}`;
+  // A JSON array, not a joined string: an id may hold any character (a sync peer can supply one), so a
+  // separator could appear inside a part and two messages share a key.
+  const key = JSON.stringify([id, editedAt ?? null, body]);
   const cached = markdownCache.get(key);
 
   if (cached !== undefined) {

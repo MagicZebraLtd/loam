@@ -1,7 +1,7 @@
 import type { Channel, Message, MessageAttachment, User } from "@loam/schema";
 import type { VNode } from "preact";
 import { render } from "preact";
-import { LocationProvider } from "preact-iso";
+import { LocationProvider } from "../lib/location";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ANNOUNCE_DELAY_MS } from "../lib/live-announcer";

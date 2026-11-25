@@ -1,15 +1,115 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { loadLocale, setActiveLocale } from "../i18n";
 import {
   ATTACHMENT_FILE_MAX_BYTES,
   ATTACHMENT_IMAGE_SOURCE_MAX_BYTES,
+  ATTACHMENT_MAX_BYTES,
   attachmentExtension,
   attachmentPath,
   bytesToBase64,
   exceededAttachmentLimit,
   fitWithin,
   formatByteLimit,
+  prepareImageAttachment,
 } from "./attachments";
+
+/** What a fake encoder hands back, in bytes a pixel: PNG 3, WebP `quality * 0.2`, JPEG `quality * 0.4`. */
+function fakeEncodedSize(type: string, pixels: number, quality = 0.92): number {
+  if (type === "image/png") {
+    return pixels * 3;
+  }
+  return Math.round(pixels * quality * (type === "image/webp" ? 0.2 : 0.4));
+}
+
+/**
+ * Stand-ins for what jsdom lacks: a picture that loads at `width` x `height`, object URLs, a 2D context
+ * that records its fills, and `toBlob`. `webp` false is Safari, which hands back a PNG when asked for WebP.
+ */
+function fakeImagePipeline({ width, height, webp, detail = 1 }: { width: number; height: number; webp: boolean; detail?: number }) {
+  const fills: string[] = [];
+  const context = {
+    fillStyle: "",
+    clearRect: vi.fn(),
+    drawImage: vi.fn(),
+    fillRect: vi.fn(function fillRect(this: { fillStyle: string }) {
+      fills.push(this.fillStyle);
+    }),
+  };
+  const requested: string[] = [];
+  class FakeImage {
+    naturalWidth = width;
+    naturalHeight = height;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+  vi.stubGlobal("Image", FakeImage);
+  Object.assign(URL, { createObjectURL: vi.fn(() => "blob:picked"), revokeObjectURL: vi.fn() });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function toBlob(
+    this: HTMLCanvasElement,
+    callback: BlobCallback,
+    type = "image/png",
+    quality?: number,
+  ) {
+    requested.push(type);
+    const produced = type === "image/webp" && !webp ? "image/png" : type;
+    // `detail` stands for a busier picture: the same pixels encode to that many times the bytes.
+    const size = fakeEncodedSize(produced, this.width * this.height, quality) * detail;
+    queueMicrotask(() => callback(new Blob([new Uint8Array(size)], { type: produced })));
+  });
+  return { fills, requested };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  Reflect.deleteProperty(URL, "createObjectURL");
+  Reflect.deleteProperty(URL, "revokeObjectURL");
+  setActiveLocale("en");
+});
+
+describe("prepareImageAttachment", () => {
+  it("keeps WebP where the browser can write it", async () => {
+    fakeImagePipeline({ width: 4000, height: 3000, webp: true });
+    const prepared = await prepareImageAttachment(new File(["x"], "photo.jpg", { type: "image/jpeg" }));
+    expect(prepared.blob.type).toBe("image/webp");
+    expect(prepared.blob.size).toBeLessThanOrEqual(ATTACHMENT_MAX_BYTES);
+    expect({ width: prepared.width, height: prepared.height }).toEqual({ width: 1280, height: 960 });
+  });
+
+  it("shrinks a WebP that no quality gets under the limit at full size", async () => {
+    fakeImagePipeline({ width: 4000, height: 3000, webp: true, detail: 2 });
+    const prepared = await prepareImageAttachment(new File(["x"], "forest.jpg", { type: "image/jpeg" }));
+    expect(prepared.blob.type).toBe("image/webp");
+    expect(prepared.blob.size).toBeLessThanOrEqual(ATTACHMENT_MAX_BYTES);
+    expect({ width: prepared.width, height: prepared.height }).toEqual({ width: 960, height: 720 });
+  });
+
+  it("sends a JPEG under the limit, over white, from a browser that hands back PNG for WebP", async () => {
+    const { fills, requested } = fakeImagePipeline({ width: 4000, height: 3000, webp: false });
+    const prepared = await prepareImageAttachment(new File(["x"], "photo.jpg", { type: "image/jpeg" }));
+    expect(prepared.blob.type).toBe("image/jpeg");
+    expect(prepared.blob.size).toBeLessThanOrEqual(ATTACHMENT_MAX_BYTES);
+    // No quality fits 1280 x 960 here, so it came from a smaller size, which the upload reports.
+    expect(prepared.width).toBeLessThan(1280);
+    expect(prepared.width / prepared.height).toBeCloseTo(4 / 3, 1);
+    // WebP was asked for once: the PNG answer showed the browser can't write it.
+    expect(requested.filter((type) => type === "image/webp")).toHaveLength(1);
+    expect(fills).toContain("#ffffff");
+  });
+
+  it("says in the reader's language that an image can't be sent", async () => {
+    await loadLocale("fr");
+    setActiveLocale("fr");
+    await expect(prepareImageAttachment(new File(["x"], "drawing.svg", { type: "image/svg+xml" }))).rejects.toThrow(
+      "Choisissez une image PNG, JPEG ou WebP.",
+    );
+  });
+});
 
 describe("fitWithin", () => {
   it("never upscales", () => {

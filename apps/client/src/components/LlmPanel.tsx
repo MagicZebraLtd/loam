@@ -6,6 +6,7 @@ import {
   type LlmProvider,
   type LoamConfig,
   OPENAI_COMPATIBLE_PRESETS,
+  sameUrlOrigin,
 } from "@loam/schema";
 import { useState } from "preact/hooks";
 
@@ -65,10 +66,14 @@ function hostOf(baseUrl: string): string {
  * props, edits funnel through the three `on…Change` callbacks with a partial update (mirroring AdminView's
  * setters), and `onListModels` asks the node (`POST /api/admin/llm/models`) so the panel holds only what
  * the Test button found. The API key is write-only: the config carries `apiKeySet`, never the key, so the
- * key field is empty until the admin types a new one, and "Clear key" sends an empty string.
+ * key field is empty until the admin types a new one, and "Clear key" sends an empty string. A saved key is
+ * only used with the origin it was saved for (the server drops it when a save moves the address to another
+ * one), so `savedOpenAiBaseUrl`, the address in the server's copy of the config, decides whether the field
+ * may say a key is saved.
  */
 export function LlmPanel({
   llm,
+  savedOpenAiBaseUrl,
   saving,
   onOllamaChange,
   onOpenAiChange,
@@ -76,6 +81,7 @@ export function LlmPanel({
   onListModels,
 }: {
   llm: LlmConfig;
+  savedOpenAiBaseUrl?: string;
   saving: boolean;
   onOllamaChange: (update: Partial<OllamaConfig>) => void;
   onOpenAiChange: (update: Partial<OpenAiConfig>) => void;
@@ -86,6 +92,15 @@ export function LlmPanel({
   const provider = activeLlmProvider(llm);
   const [tests, setTests] = useState<Record<"ollama" | "openai", TestState>>({ ollama: { kind: "idle" }, openai: { kind: "idle" } });
   const cloud = !isLocalNetworkUrl(openai.baseUrl);
+  // The draft points the service at another origin than the saved key was saved for, and no new key is typed:
+  // saving drops the saved key, so the field must not offer it as kept.
+  const savedKeyLeftBehind =
+    openai.apiKeySet === true &&
+    openai.apiKey === undefined &&
+    savedOpenAiBaseUrl !== undefined &&
+    openai.baseUrl !== savedOpenAiBaseUrl &&
+    !sameUrlOrigin(openai.baseUrl, savedOpenAiBaseUrl);
+  const keySaved = openai.apiKeySet === true && !savedKeyLeftBehind;
   // Ollama answers wherever its address points, so an Ollama address off the local network is a cloud
   // assistant too, and the server refuses it on a hardened network just like a service (llmProviderRefusal).
   const ollamaCloud = !isLocalNetworkUrl(ollama.baseUrl);
@@ -236,13 +251,14 @@ export function LlmPanel({
               disabled={saving}
               maxLength={512}
               onInput={(event) => onOpenAiChange({ apiKey: event.currentTarget.value || undefined })}
-              placeholder={openai.apiKeySet && openai.apiKey === undefined ? t("admin.llmApiKeySet") : t("admin.llmApiKeyNone")}
+              placeholder={keySaved && openai.apiKey === undefined ? t("admin.llmApiKeySet") : t("admin.llmApiKeyNone")}
               type="password"
               value={openai.apiKey ?? ""}
             />
             <span className="field-hint">{t("admin.llmApiKeyHint")}</span>
+            {savedKeyLeftBehind ? <span className="field-hint">{t("admin.llmApiKeyOtherAddress")}</span> : null}
           </label>
-          {openai.apiKeySet && openai.apiKey !== "" ? (
+          {keySaved && openai.apiKey !== "" ? (
             <div className="field">
               <button className="btn btn-secondary btn-sm" disabled={saving} onClick={() => onOpenAiChange({ apiKey: "" })} type="button">
                 {t("admin.llmApiKeyClear")}

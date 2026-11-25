@@ -25,7 +25,8 @@ export class ErrorBoundary extends Component<{ children: ComponentChildren }, Er
   }
 
   private goHome = (): void => {
-    window.history.replaceState(window.history.state, "", "/channels");
+    // The route lives in the fragment (lib/location.tsx), so the path stays `/`.
+    window.history.replaceState(window.history.state, "", "/#/channels");
     this.setState({ error: undefined });
   };
 

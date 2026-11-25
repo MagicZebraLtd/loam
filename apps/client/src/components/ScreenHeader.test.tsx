@@ -1,6 +1,6 @@
 import type { VNode } from "preact";
 import { render } from "preact";
-import { LocationProvider } from "preact-iso";
+import { LocationProvider } from "../lib/location";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ScreenHeader } from "./ScreenHeader";
@@ -37,7 +37,7 @@ describe("ScreenHeader", () => {
 
     expect(root.querySelector("header.screen-header h1.screen-title")?.textContent).toBe("Find messages");
     const back = root.querySelector<HTMLAnchorElement>("a.mobile-back")!;
-    expect(back.getAttribute("href")).toBe("/channels");
+    expect(back.getAttribute("href")).toBe("#/channels");
     expect(back.getAttribute("aria-label")).toBe("Back");
     expect(root.querySelector(".screen-subtitle")).toBeNull();
     expect(root.querySelector(".screen-header-actions")).toBeNull();

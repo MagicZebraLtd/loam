@@ -79,6 +79,12 @@ describe("configDelta", () => {
     });
     expect(configDelta(draft, base)).toEqual({ llm: { openai: { apiKey: "sk-typed" } } });
   });
+
+  it("clears a saved system prompt with an empty string", () => {
+    const saved = edit(base, (config) => (config.llm.ollama.systemPrompt = "Answer in French."));
+    const draft = edit(saved, (config) => (config.llm.ollama.systemPrompt = undefined));
+    expect(configDelta(draft, saved)).toEqual({ llm: { ollama: { systemPrompt: "" } } });
+  });
 });
 
 describe("rebaseConfig", () => {
@@ -124,6 +130,18 @@ describe("rebaseConfig", () => {
       { url: "http://192.168.4.50:3000", label: "Linked by code" },
       { url: "http://192.168.4.30:3000", transportKey: "pinned-key" },
     ]);
+  });
+
+  it("keeps the server's reason the assistant is off from the newer copy", () => {
+    const draft = edit(base, (config) => (config.node.name = "Hilltop"));
+    const fresh = edit(base, (config) => (config.llm.refusal = "llm_cloud_not_allowed"));
+    expect(rebaseConfig(draft, base, fresh).llm.refusal).toBe("llm_cloud_not_allowed");
+  });
+
+  it("drops a stale reason the assistant is off when the newer copy has none", () => {
+    const stale = edit(base, (config) => (config.llm.refusal = "llm_unencrypted_not_allowed"));
+    const draft = edit(stale, (config) => (config.node.name = "Hilltop"));
+    expect(rebaseConfig(draft, stale, base).llm).not.toHaveProperty("refusal");
   });
 
   it("is the newer copy itself when the admin changed nothing", () => {

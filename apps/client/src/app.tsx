@@ -1,6 +1,5 @@
 import {
   ChannelSchema,
-  DmInboxSchema,
   MEMBER_RULES_VERSION,
   MessageAttachmentSchema,
   MessageSchema,
@@ -15,7 +14,7 @@ import {
 } from "@loam/schema";
 import { generateDisplayName } from "@loam/display-name";
 import type { ComponentChildren } from "preact";
-import { LocationProvider, useLocation } from "preact-iso";
+import { LocationProvider, useLocation } from "./lib/location";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import loamMark from "./assets/loam.svg";
@@ -32,6 +31,8 @@ import { RulesView } from "./views/RulesView";
 import { forgetRememberedSearch, SearchView } from "./views/SearchView";
 import { SettingsView } from "./views/SettingsView";
 import { ApiError, fetchJson, requestJson, REQUEST_TIMEOUT_MS } from "./lib/api";
+import { parseDmInboxEntries, parseListEntries } from "./lib/list-payloads";
+import { heldDmPeers, isConversationGone, readMarkersWithout } from "./lib/read-markers";
 import { canModerate } from "./lib/capabilities";
 import { bytesToBase64, exceededAttachmentLimit, formatByteLimit, prepareImageAttachment } from "./lib/attachments";
 import { cachedBlockListFor, fetchBlockList, persistBlockList, setUserBlocked, withoutBlockedAuthors } from "./lib/blocks";
@@ -67,7 +68,9 @@ import {
 } from "./lib/local-store";
 import { clearRecentReactions } from "./lib/reactions";
 import { clearAssistantAcks } from "./lib/assistant-ack";
-import { cachedRetentionTtl, expiredMessageIds, persistRetentionTtl } from "./lib/retention";
+import { isAssistantDestinationChanged, withAssistantDestination } from "./lib/assistant-destination";
+import { cachedRetentionTtl, expiredMessageIds, persistRetentionTtl, RETENTION_PRUNE_INTERVAL_MS } from "./lib/retention";
+import { publishSearchChange } from "./lib/search-results";
 import { reconcileRoster, sortUsers } from "./lib/roster";
 import { createLivenessWatchdog, type LivenessWatchdog } from "./lib/ws-liveness";
 import {
@@ -99,9 +102,11 @@ import {
   getPendingHostKeyChange,
   handleWsFrame,
   inviteQrHostKey,
+  isHostKeyPinBroken,
   isTunnelActive,
   joinKeyPresentAtStartup,
   mayFallBackToPlaintext,
+  plaintextRefused,
   reestablishSession,
   rejectPendingHostKey,
   resumeIdentity,
@@ -168,9 +173,6 @@ const TOAST_DISMISS_MS = 4_000;
 // Single `sync`-store record holding the per-conversation last-read timestamps (ms). One row keeps
 // the write cheap; the map is `conversationKey` → last-read time.
 const CONVERSATION_READS_KEY = "conversationReads";
-// How often the client drops held messages that have passed the node's retention (`pruneExpiredMessages`),
-// besides at start and whenever the TTL or a channel changes. The node's own reaper runs every 30 s.
-const RETENTION_PRUNE_INTERVAL_MS = 60_000;
 
 type ConversationReads = {
   id: string;
@@ -290,6 +292,37 @@ async function fetchConfigJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Config> 
 }
 
 /**
+ * GET `/api/config` through the tunnel, for a client with a bound session (docs/20 §4: "resume + tunnelled
+ * config"). The plaintext bootstrap can be altered by anyone on the path, so a pinned member's network
+ * settings (the assistant's destination, retention, the join URL its invite QR carries) come from this
+ * sealed copy. Validated with the same schema as the cookie read (`parseConfigResponse`). `noRehandshake`
+ * keeps a failed read from starting a new session; boot retries the whole pass instead.
+ */
+async function fetchTunnelledConfigJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Config> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await encryptedFetch("GET", "/api/config", undefined, { signal: controller.signal, noRehandshake: true });
+    const payload: unknown = await response.json().catch(() => undefined);
+
+    if (!response.ok) {
+      throw new Error(errorText(payload, t("common.requestFailed", { status: response.status })));
+    }
+
+    const config = parseConfigResponse(payload);
+
+    if (!config) {
+      throw new Error(t("app.configUnrecognised"));
+    }
+
+    return config;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+/**
  * The full boot/reconnect sequence (docs/20): read the public bootstrap, establish the transport
  * session, then resolve identity — a `bound` (required / QR-pinned) client resumes a sealed identity
  * (its `currentUser` comes back over the encrypted channel, never a cookie); an anonymous optional/off
@@ -341,16 +374,28 @@ async function loadConfig(): Promise<Config> {
         ({ currentUser } = await resumeIdentity());
       }
     }
+    // The network settings come from the node's sealed answer, never the bootstrap, whose plaintext anyone on
+    // the path can rewrite (review 2026-11-18). The bootstrap only told us how to reach a session (the mode
+    // and the key handed to `ensureSession`) and the `hostNoLocalCache` hint. A failed read fails this boot
+    // pass, which is retried like a failed resume.
+    const sealed = await fetchTunnelledConfigJson();
     return {
-      version: boot.version,
-      joinUrl: boot.joinUrl,
-      websocketPath: boot.websocketPath,
-      networkConfig: boot.networkConfig,
+      version: sealed.version,
+      joinUrl: sealed.joinUrl,
+      websocketPath: sealed.websocketPath,
+      networkConfig: sealed.networkConfig,
       // Validate the resumed identity at the boundary like every other server payload — the sealed resume
       // reply is decrypted JSON, so `currentUser` is `unknown` until checked. A malformed user throws here
       // and boot surfaces it, rather than casting untrusted data into app state.
       currentUser: UserSchema.parse(currentUser),
     };
+  }
+
+  // A pinned client (a stored pin, the launcher's key, or a node that requires encryption) has no tunnel
+  // here only if something above went wrong: it never falls back to the cookie `/api/config`, whose
+  // request and reply travel in the clear.
+  if (plaintextRefused()) {
+    throw new Error(t("app.serverUnreachable"));
   }
 
   // Anonymous (optional/off): the cookie identity + `/api/config` bootstrap, unchanged.
@@ -437,23 +482,6 @@ function LoamApp() {
   // (notably `selectedMessages`, which then re-filtered + re-sorted the whole history each render).
   const routeState = useMemo(() => parseRoute(location.path), [location.path]);
   const activeConversation = routeState.screen === "channels" ? routeState.conversation : undefined;
-  const shellClassName = [
-    "app-shell",
-    activeConversation ? "has-conversation" : undefined,
-    !activeConversation && routeState.screen === "channels" ? "no-conversation" : undefined,
-    activeConversation?.kind === "channel" && activeConversation.threadId ? "thread-open" : undefined,
-    routeState.screen === "settings" ||
-    routeState.screen === "people" ||
-    routeState.screen === "admin" ||
-    routeState.screen === "search" ||
-    routeState.screen === "mesh" ||
-    routeState.screen === "privacy" ||
-    routeState.screen === "rules"
-      ? "settings-open"
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
   const [channels, setChannels] = useState<Channel[]>([]);
   // The server's DM inbox (`GET /api/dms`): who this user has conversations with. Undefined while loading
   // (the sidebar then shows the conversations this device already holds), null on a node too old to have
@@ -476,6 +504,9 @@ function LoamApp() {
   const [cachedNodeTtlMs, setCachedNodeTtlMs] = useState<number>();
   // Counts live `configUpdated` events, so the admin screen re-reads the full config it edits.
   const [configVersion, setConfigVersion] = useState(0);
+  // Bumped by every live `configUpdated`, so a config reload that was in flight when one landed drops its
+  // older answer instead of putting a stale assistant destination revision back.
+  const liveConfigGenerationRef = useRef(0);
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   // The app-level error notice. `persistent` marks a connectivity failure (kept until the next boot pass
   // succeeds or the user dismisses it); everything else is a one-off action error that dismisses itself.
@@ -540,6 +571,9 @@ function LoamApp() {
   // Bumped to force a full server re-sync: on WebSocket reconnect (missed events don't replay) and
   // on a failed boot fetch (retry with backoff instead of stranding the app offline).
   const [syncTick, setSyncTick] = useState(0);
+  // Bumped each time a boot pass has finished re-reading channels, users and blocks from the node (the first
+  // load, and every resync after it), so a screen holding its own copy of node data (Search) refreshes it.
+  const [resyncCount, setResyncCount] = useState(0);
   const syncFailuresRef = useRef(0);
   // Latches once the initial IndexedDB hydration has run, so reconnects (which re-run the boot effect
   // via `syncTick`) go straight to the network refetch instead of re-reading the whole cache and
@@ -618,6 +652,30 @@ function LoamApp() {
     setLastReadByConversation(next);
     void putRecord("sync", { id: CONVERSATION_READS_KEY, reads: next });
   }, []);
+
+  /**
+   * Forget the conversations `isGone` picks: their read markers (in memory and on disk) and the remembered
+   * last conversation when it is one of them. A marker names who the member talked to and when, so it must
+   * not outlive the messages the node and the cache have already deleted.
+   */
+  const forgetConversations = useCallback(
+    (isGone: (key: string) => boolean) => {
+      const kept = readMarkersWithout(lastReadRef.current, isGone);
+      if (kept !== lastReadRef.current) {
+        updateLastRead(() => kept);
+      }
+      try {
+        const remembered = localStorage.getItem(LAST_CONVERSATION_KEY);
+        const conversation = remembered ? conversationOfPath(remembered) : undefined;
+        if (conversation && isGone(conversationKey(conversation))) {
+          localStorage.removeItem(LAST_CONVERSATION_KEY);
+        }
+      } catch {
+        // Storage unavailable: nothing durable to clear.
+      }
+    },
+    [updateLastRead],
+  );
 
   const pushToast = useCallback((toast: ToastItem) => {
     setToasts((previous) => [...previous, toast]);
@@ -747,11 +805,15 @@ function LoamApp() {
    * permanently deleted): purge the channel, its cached messages, AND the reactions targeting them
    * (reactions carry only a targetMessageId, no channelId — without the second pass they'd linger
    * in IndexedDB forever after a "gone for good" delete), then leave the conversation if it is on
-   * screen. Archiving doesn't call this: archived channels stay cached, read-only.
+   * screen. Archiving doesn't call this: archived channels stay cached, read-only. An open search drops the
+   * channel's results too, and its read marker goes.
    */
   const removeChannel = useCallback((channelId: string) => {
     setChannels((previous) => previous.filter((channel) => channel.id !== channelId));
     void deleteRecord("channels", channelId);
+    publishSearchChange({ kind: "channelRemoved", channelId });
+    // `forgetConversations` is the same function on every render (its only dependency never changes).
+    forgetConversations((key) => key === `channel:${channelId}`);
 
     setMessages((previous) => {
       const purgedIds = new Set<string>();
@@ -902,6 +964,11 @@ function LoamApp() {
         persistMessages(next, incomingMessages);
         return next;
       });
+      // Each is the node's current copy: an open search rewrites (or drops) its row for any it holds and
+      // ignores the rest, so a new message never joins the results.
+      for (const message of incomingMessages) {
+        publishSearchChange({ kind: "updated", message });
+      }
     },
     [persistMessages],
   );
@@ -942,6 +1009,7 @@ function LoamApp() {
     liveChangesRef.current.recordDeleted(messageId);
     setMessages((previous) => previous.filter((message) => message.id !== messageId));
     void deleteRecord("messages", messageId);
+    publishSearchChange({ kind: "deleted", messageId });
   }, []);
 
   /**
@@ -1130,10 +1198,9 @@ function LoamApp() {
     setMintSuppressed(true);
 
     // ---- Local erasure FIRST (all local, no network — fast + bounded). ----
-    setMessages([]);
-    setChannels([]);
-    setUsers([]);
-    setBlockedUserIds(new Set());
+    // Everything the page holds in memory goes too (the DM inbox, read markers, typing, presence, toasts, the
+    // error banner), not just what the wiped screen would have shown.
+    clearInMemoryContent();
     setConfig(undefined);
     // Drop the secure identity token (docs/20) BEFORE removing SERVER_URL_KEY — the token is namespaced
     // by the configured origin, so clearing it must happen while that origin is still resolvable. (The
@@ -1223,8 +1290,11 @@ function LoamApp() {
     await clearAllRecords();
   }, []);
 
-  /** Drop every piece of content held in memory (the in-memory half of `purgeCachedContent`). */
+  /** Drop every piece of content held in memory (the in-memory half of `purgeCachedContent`, and part of a
+   * wipe). Toasts and the error banner go too: they quote messages, names and channels. */
   function clearInMemoryContent(): void {
+    setToasts([]);
+    setError(undefined);
     setMessages([]);
     setChannels([]);
     setUsers([]);
@@ -1295,6 +1365,29 @@ function LoamApp() {
     );
   }, []);
 
+  /**
+   * Re-read the node's network config and adopt it, as a live `configUpdated` would. For when the node says
+   * this screen's copy is out of date (a DM written for an assistant destination that has since changed).
+   * From where boot reads it: through the tunnel on a bound session, else the public bootstrap. A pinned
+   * client whose tunnel is down keeps what it has rather than take the plaintext bootstrap's word. It never
+   * runs a handshake or an identity resume and mints nothing. Best effort: the next reconnect resyncs anyway.
+   */
+  const reloadNetworkConfig = useCallback(async (): Promise<void> => {
+    try {
+      if (!isTunnelActive() && plaintextRefused()) {
+        return;
+      }
+      const generation = liveConfigGenerationRef.current;
+      const next = isTunnelActive() ? await fetchTunnelledConfigJson() : await fetchBootstrapJson();
+      if (generation !== liveConfigGenerationRef.current) {
+        return;
+      }
+      setConfig((previous) => (previous ? { ...previous, networkConfig: next.networkConfig } : previous));
+    } catch {
+      // Unreachable or refused: a resend names the old revision and is refused again, so nothing leaks.
+    }
+  }, []);
+
   const sendMessage = useCallback(
     async (request: MessageCreateRequest) => {
       const controller = new AbortController();
@@ -1306,9 +1399,10 @@ function LoamApp() {
         });
 
         if (!response.ok) {
-          // Localize a server error code when present (e.g. dms_disabled), else a generic message.
+          // Localize a server error code when present (e.g. dms_disabled), else a generic message; the
+          // status and code stay on the ApiError so the catch below can branch on them.
           const errorPayload: unknown = await response.json().catch(() => undefined);
-          throw new Error(errorText(errorPayload, t("common.requestFailed", { status: response.status })));
+          throw new ApiError(response.status, errorPayload, t("common.requestFailed", { status: response.status }));
         }
 
         let payload: unknown;
@@ -1333,6 +1427,11 @@ function LoamApp() {
           removeMessage(result.deletedMessageId);
         }
       } catch (error) {
+        // The assistant now answers from somewhere else: nothing was sent. Show the new destination (and,
+        // for an online service, its acknowledgement) before the member sends again (docs/06).
+        if (isAssistantDestinationChanged(error)) {
+          void reloadNetworkConfig();
+        }
         // Surface the failure (matching editMessage/deleteMessage) so a send/reaction that fails
         // isn't silent, then re-throw so the composer keeps the unsent text for a retry.
         setError(error instanceof Error ? error.message : t("app.sendError"));
@@ -1341,7 +1440,7 @@ function LoamApp() {
         window.clearTimeout(timeout);
       }
     },
-    [removeMessage, upsertMessages],
+    [reloadNetworkConfig, removeMessage, upsertMessages],
   );
 
   const updateCurrentUser = useCallback(
@@ -1848,13 +1947,17 @@ function LoamApp() {
           const inviteCode = takeInviteCode();
           if (inviteCode) {
             const admitted = await redeemInvite(inviteCode);
+            // The notice is about this page load's one code, not about this pass: on a first visit the pass
+            // is already superseded by now (the confirmed id replaced the placeholder), and the pass after it
+            // has no code left to try, so it is said whatever became of the pass.
+            if (!admitted) {
+              setInviteRefused(true);
+            }
             if (!active) {
               return;
             }
             if (admitted) {
               nextConfig = { ...nextConfig, currentUser: admitted };
-            } else {
-              setInviteRefused(true);
             }
           }
         }
@@ -1867,6 +1970,15 @@ function LoamApp() {
           setMessages([]);
           invalidateInboxRequests();
           setDmInbox(undefined);
+          // The read markers name who this person talked to and when; they and the remembered conversation go.
+          lastReadRef.current = {};
+          setLastReadByConversation({});
+          void deleteRecord("sync", CONVERSATION_READS_KEY);
+          try {
+            localStorage.removeItem(LAST_CONVERSATION_KEY);
+          } catch {
+            // Storage unavailable: nothing durable to clear.
+          }
 
           for (const storeName of ["channels", "messages"] as const) {
             const cachedRecords = await getAllRecords<{ id: string }>(storeName).catch(() => []);
@@ -1888,25 +2000,28 @@ function LoamApp() {
         invalidateInboxRequests();
         const inboxEpoch = inboxEpochRef.current;
         void fetchJson<unknown>("/api/dms")
-          .then((payload) => DmInboxSchema.parse(payload).conversations)
+          .then(parseDmInboxEntries)
           .catch(() => null)
           .then((nextInbox) => {
             if (active && inboxEpoch === inboxEpochRef.current) {
               setDmInbox(nextInbox);
               // The inbox names every DM partner the node still has messages with: a cached DM with anyone
-              // else (deleted, expired) is gone from the node, so it goes from the cache too.
+              // else (deleted, expired) is gone from the node, so it goes from the cache too, and so does
+              // the read marker of a DM partner no longer held at all.
               if (nextInbox) {
                 dropStaleConversationMessages(
                   undefined,
                   new Set(nextInbox.map((entry) => entry.userId)),
                   preFetchMessageIds,
                 );
+                const dmPeerIds = heldDmPeers(nextInbox, messagesRef.current, preFetchMessageIds, currentUserIdRef.current);
+                forgetConversations((key) => isConversationGone(key, { dmPeerIds }));
               }
             }
           });
         const [nextChannels, nextUsers, nextBlocks] = await Promise.all([
-          fetchJson<Channel[]>("/api/channels"),
-          fetchJson<User[]>("/api/users"),
+          fetchJson<unknown>("/api/channels").then((payload) => parseListEntries(payload, ChannelSchema, "channel")),
+          fetchJson<unknown>("/api/users").then((payload) => parseListEntries(payload, UserSchema, "user")),
           // Best effort: a failed block-list read keeps the list already in memory rather than failing boot.
           fetchBlockList().catch(() => undefined),
         ]);
@@ -1938,6 +2053,12 @@ function LoamApp() {
         // Messages of a channel the node no longer lists go too, including any whose channel record is already
         // gone (the loop above never sees those), and the reactions on them.
         dropStaleConversationMessages(keep, undefined, preFetchMessageIds);
+        // And the read markers of every channel the node no longer lists (the DM side is judged when the inbox
+        // lands, above).
+        forgetConversations((key) => isConversationGone(key, { channelIds: keep }));
+        if (active) {
+          setResyncCount((count) => count + 1);
+        }
 
         // The person opened a "link another node" QR in a browser (lib/link-code-fragment.ts). Its key still
         // pinned the join, so they are in as a member; the code itself was for another node's setup screen and
@@ -1991,6 +2112,7 @@ function LoamApp() {
     currentUser.banned,
     currentUser.pending,
     dropStaleConversationMessages,
+    forgetConversations,
     purgeCachedContent,
     removeChannel,
     replaceRoster,
@@ -2032,7 +2154,8 @@ function LoamApp() {
     // A DM history rebuilds that partner's inbox entry (below) — only for the inbox of the same epoch.
     const inboxEpoch = inboxEpochRef.current;
 
-    fetchJson<Message[]>(path)
+    fetchJson<unknown>(path)
+      .then((payload) => parseListEntries(payload, MessageSchema, "message"))
       .then((nextMessages) => {
         if (active) {
           setNotFoundConversation((previous) => (previous === key ? undefined : previous));
@@ -2068,7 +2191,10 @@ function LoamApp() {
   }, [activeConversation?.id, activeConversation?.kind, config, currentUser.id, reconcileConversationMessages, setError, syncTick]);
 
   useEffect(() => {
-    if (!config?.currentUser.id) {
+    // Behind the "scan the join QR" gate there is no session this client trusts: no socket stays open (one
+    // opened under the dropped session would otherwise sit there taking frames) and none is reopened until the
+    // gate lifts, which re-runs this effect.
+    if (!config?.currentUser.id || needsQr) {
       return;
     }
 
@@ -2081,6 +2207,11 @@ function LoamApp() {
     let reconnectTimer: number | undefined;
     let socket: WebSocket | undefined;
     let socketAttempt = 0;
+    // Sockets in a row that ended on a frame-sequence gap (`handleWsFrame`'s `gap`). Each one makes the wait
+    // before the next reconnect longer, as a failed connect would, so someone on the path who drops one frame
+    // per socket can't make this client reconnect and resync faster than the normal backoff (a socket's open
+    // otherwise resets it). Forgotten once a socket has heard two heartbeats with no gap, a full interval.
+    let gapStreak = 0;
     // Liveness of the CURRENT socket (see `ws-liveness.ts`): the server heartbeats every admitted socket,
     // and a socket that goes quiet for ~2 beats is dead even though the browser never fired `close`.
     let watchdog: LivenessWatchdog | undefined;
@@ -2180,9 +2311,20 @@ function LoamApp() {
         // transport session starts anonymous server-side, so under `required` mode the WS would be
         // refused until the identity is resumed again. Best-effort: on failure, fall through and try to
         // connect anyway — the reconnect loop handles a connection that still can't succeed.
-        await reestablishSession().catch(() => undefined);
+        const reestablished = await reestablishSession().catch(() => false);
 
         if (disposed || attempt !== socketAttempt) {
+          return;
+        }
+        // The node answered with a key other than the pin (an Emergency Reset this client slept through, or
+        // someone on the path): the old session is one the node no longer knows, so a socket under it would be
+        // refused, and this loop would retry it forever behind stale content. Only the boot pass raises the
+        // rescan gate, so run it; the reconnect stays scheduled in case it doesn't (a blip on the way). Once
+        // the gate is up this effect is torn down and nothing reopens.
+        if (!reestablished && isHostKeyPinBroken()) {
+          setConnection("offline");
+          setSyncTick((tick) => tick + 1);
+          scheduleReconnect();
           return;
         }
       }
@@ -2202,6 +2344,8 @@ function LoamApp() {
       watchdog?.stop();
       watchdog = createLivenessWatchdog(() => abandonSocket(nextSocket));
       const socketWatchdog = watchdog;
+      // Heartbeats this socket has delivered in sequence (see `gapStreak`).
+      let pingsHeard = 0;
       setConnection("connecting");
 
       nextSocket.onopen = () => {
@@ -2243,6 +2387,16 @@ function LoamApp() {
 
         const frame = handleWsFrame(event.data);
 
+        if (frame.gap) {
+          // A frame was lost or dropped on the way (a delete, a moderator removal): this socket can't be
+          // trusted to have said everything. Close it and reconnect through the normal path, whose open
+          // resyncs, after a backoff that grows with each gap in a row.
+          gapStreak += 1;
+          reconnectAttempts = Math.max(reconnectAttempts, gapStreak);
+          abandonSocket(nextSocket);
+          return;
+        }
+
         if (frame.proof !== undefined) {
           socketWatchdog.frame(false);
           // The server's reflection-safe key-confirmation challenge (docs/20 §7) — answer it. Until the
@@ -2266,6 +2420,10 @@ function LoamApp() {
         socketWatchdog.frame(payload.type === "ping");
 
         if (payload.type === "ping") {
+          pingsHeard += 1;
+          if (pingsHeard >= 2) {
+            gapStreak = 0;
+          }
           return;
         }
 
@@ -2299,6 +2457,7 @@ function LoamApp() {
         }
 
         if (payload.type === "configUpdated") {
+          liveConfigGenerationRef.current += 1;
           setConfigVersion((version) => version + 1);
           setConfig((previous) => {
             // A live transport-mode flip only takes effect through `ensureSession`, which runs on the
@@ -2381,6 +2540,7 @@ function LoamApp() {
     applyUserUpsert,
     config?.currentUser.id,
     maybeToastForMessage,
+    needsQr,
     purgeLocalData,
     removeChannel,
     removeMessage,
@@ -2422,6 +2582,31 @@ function LoamApp() {
         : [],
     [activeConversation, currentUser.id, messages],
   );
+  // Whether the routed thread's first post is held, by the same rule `ConversationView` uses to show the thread
+  // panel. On a narrow screen `thread-open` hides the conversation (and the sidebar), so set from the route
+  // alone it left an empty page with no way back for a post that is gone (deleted, removed, expired) or not
+  // loaded yet. No redirect: on a cold deep link the post arrives with the history and the thread opens then.
+  const threadParentHeld = useMemo(() => {
+    const threadId = activeConversation?.kind === "channel" ? activeConversation.threadId : undefined;
+    return threadId !== undefined && selectedMessages.some((message) => message.type === "channelPost" && message.id === threadId);
+  }, [activeConversation, selectedMessages]);
+  const shellClassName = [
+    "app-shell",
+    activeConversation ? "has-conversation" : undefined,
+    !activeConversation && routeState.screen === "channels" ? "no-conversation" : undefined,
+    threadParentHeld ? "thread-open" : undefined,
+    routeState.screen === "settings" ||
+    routeState.screen === "people" ||
+    routeState.screen === "admin" ||
+    routeState.screen === "search" ||
+    routeState.screen === "mesh" ||
+    routeState.screen === "privacy" ||
+    routeState.screen === "rules"
+      ? "settings-open"
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   // Count unread (non-own) messages per conversation: any post/reply/DM newer than the conversation's
   // read marker. Reactions never count (they have no conversation key).
@@ -2440,12 +2625,18 @@ function LoamApp() {
       void fetchJson<unknown>("/api/dms")
         .then((payload) => {
           if (epoch === inboxEpochRef.current) {
-            setDmInbox(DmInboxSchema.parse(payload).conversations);
+            const nextInbox = parseDmInboxEntries(payload);
+            setDmInbox(nextInbox);
+            // Prune as boot does: a partner neither in the inbox nor in any DM still held takes their read
+            // marker and the remembered conversation along. Nothing was dropped from the cache here, so
+            // every held DM counts.
+            const dmPeerIds = heldDmPeers(nextInbox, messagesRef.current, new Set(), currentUserIdRef.current);
+            forgetConversations((key) => isConversationGone(key, { dmPeerIds }));
           }
         })
         .catch(() => undefined);
     }, 400);
-  }, []);
+  }, [forgetConversations]);
   useEffect(() => () => window.clearTimeout(inboxRefreshTimerRef.current), []);
 
   const dmPeers = useMemo(
@@ -2654,8 +2845,13 @@ function LoamApp() {
         unreadByConversation={unreadByConversation}
         users={users}
       />
+      {/* Each screen below holds state that belongs to one identity (the Mesh card and contacts, the admin
+          draft, the people lists, the settings form), so like SearchView it is keyed by the confirmed user:
+          a different identity the node confirms starts it empty. The conversation pane is not keyed here; it
+          keys itself by conversation. */}
       {routeState.screen === "admin" ? (
         <AdminView
+          key={currentUser.id}
           configVersion={configVersion}
           currentUser={currentUser}
           joinUrl={config?.joinUrl}
@@ -2664,17 +2860,30 @@ function LoamApp() {
           onWiped={purgeLocalData}
         />
       ) : routeState.screen === "people" ? (
-        <PeopleView currentUser={currentUser} onUsersChanged={upsertUsers} reportsVersion={reportsVersion} />
+        <PeopleView key={currentUser.id} currentUser={currentUser} onUsersChanged={upsertUsers} reportsVersion={reportsVersion} />
       ) : routeState.screen === "search" ? (
-        <SearchView blockedUserIds={blockedUserIds} channels={channels} currentUser={currentUser} usersById={usersById} />
+        <SearchView
+          // The results and term on screen belong to one identity: a different one the node confirms (an Emergency
+          // Reset this client missed) starts the screen empty rather than showing, and re-running, the old search.
+          key={currentUser.id}
+          blockedUserIds={blockedUserIds}
+          channels={channels}
+          currentUser={currentUser}
+          heldMessages={messages}
+          nodeTtlMs={nodeTtlMs}
+          ready={config !== undefined}
+          resyncCount={resyncCount}
+          usersById={usersById}
+        />
       ) : routeState.screen === "mesh" && config?.networkConfig.enableMesh ? (
-        <MeshView />
+        <MeshView key={currentUser.id} />
       ) : routeState.screen === "privacy" ? (
         <PrivacyView />
       ) : routeState.screen === "rules" ? (
         <RulesView />
       ) : routeState.screen === "settings" ? (
         <SettingsView
+          key={currentUser.id}
           blockedUserIds={blockedUserIds}
           config={config}
           currentUser={currentUser}
@@ -2732,13 +2941,20 @@ function LoamApp() {
               });
             }
 
-            return sendMessage({
-              type: "dm",
-              recipientUserId: activeConversation.id,
-              body,
-              ...(attachments?.length ? { attachments } : {}),
-              ...(messageLocation ? { location: messageLocation } : {}),
-            });
+            // A DM to the assistant names the destination this screen shows (docs/06).
+            return sendMessage(
+              withAssistantDestination(
+                {
+                  type: "dm",
+                  recipientUserId: activeConversation.id,
+                  body,
+                  ...(attachments?.length ? { attachments } : {}),
+                  ...(messageLocation ? { location: messageLocation } : {}),
+                },
+                usersById.get(activeConversation.id),
+                config?.networkConfig,
+              ),
+            );
           }}
           onThreadReply={(parentMessageId, body, attachments, messageLocation) => {
             if (!activeConversation || activeConversation.kind !== "channel") {

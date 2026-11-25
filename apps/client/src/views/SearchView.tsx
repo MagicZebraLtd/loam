@@ -1,8 +1,8 @@
 import type { Channel, Message, User } from "@loam/schema";
 import { MessageSchema } from "@loam/schema";
 import { generateDisplayName } from "@loam/display-name";
-import { useLocation } from "preact-iso";
-import { useEffect, useId, useState } from "preact/hooks";
+import { useLocation } from "../lib/location";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 
 import { IconSearch } from "../components/icons";
 import { ScreenHeader } from "../components/ScreenHeader";
@@ -11,6 +11,13 @@ import { t } from "../i18n";
 import { fetchJson } from "../lib/api";
 import { markdownToPlainText } from "../lib/markdown";
 import { bodyFor, displayTime } from "../lib/message-format";
+import { RETENTION_PRUNE_INTERVAL_MS } from "../lib/retention";
+import {
+  applySearchChange,
+  pruneExpiredResults,
+  type SearchChange,
+  subscribeSearchChanges,
+} from "../lib/search-results";
 
 /**
  * The last term searched in this tab, and who searched it, so coming back from a result (or reopening
@@ -20,83 +27,248 @@ import { bodyFor, displayTime } from "../lib/message-format";
  */
 let rememberedSearch: { userId: string; term: string } | undefined;
 
-/** Forget the remembered search (a device wipe, or the start of a different identity). */
+/**
+ * A `#/search?q=` term taken off the address and not yet searched, because the app had no session to search
+ * with yet. Module memory, since the screen is keyed by the confirmed user id: on a first visit it remounts
+ * under that id, after the address has already lost the term. Cleared when the search runs.
+ */
+let pendingDeepLinkTerm: string | undefined;
+
+/** Forget the remembered search and any deep-link term still waiting (a device wipe, or the start of a different
+ * identity). */
 export function forgetRememberedSearch(): void {
   rememberedSearch = undefined;
+  pendingDeepLinkTerm = undefined;
 }
+
+/** The results on screen and the term they were found by (what to highlight, and what an edit must still match). */
+type ShownResults = { term: string; rows: Message[] };
+
+/** A search request in flight, with the live changes that arrived while it was out (folded over its answer). */
+type SearchRequest = { refresh: boolean; changes: SearchChange[] };
 
 /**
  * Full-text message search over `GET /api/search`. The server scopes results strictly to what this
  * user may read (public channels, their private channels, their own DMs), so the client just
  * renders whatever comes back. Tapping a result jumps to its conversation (or thread).
+ *
+ * The results stay in step with the app while the screen is open: deletes, edits and lost channels the app
+ * publishes (`lib/search-results.ts`) are folded in, retention prunes them by the rule conversations use, and
+ * the search on screen runs again after the app resyncs with the node (`resyncCount`), which brings in what was
+ * missed while the socket was down.
  */
 export function SearchView({
   blockedUserIds,
   channels,
   currentUser,
+  heldMessages,
+  nodeTtlMs,
+  ready,
+  resyncCount,
   usersById,
 }: {
   blockedUserIds: ReadonlySet<string>;
   channels: Channel[];
   currentUser: User;
+  /** The messages the app holds, judged alongside the results for retention (see `pruneExpiredResults`). */
+  heldMessages: readonly Message[];
+  /** The node's retention, as the app applies it to conversations. */
+  nodeTtlMs: number | undefined;
+  /** Whether the app has its config from the node, so a search has a session to go out on. The search a
+   * person arrives with waits for it; the screen can show before it, after the identity splash gives up. */
+  ready: boolean;
+  /** The app's count of finished resyncs with the node; a change re-runs the search on screen. */
+  resyncCount: number;
   usersById: Map<string, User>;
 }) {
   const location = useLocation();
-  // A `/search?q=…` link (a deep link from elsewhere) runs that search once; its term comes off the
-  // address before the request goes out. Otherwise the search this person last ran here, if any.
+  // A `/#/search?q=…` link (a deep link from elsewhere; an older `/search?q=…` is moved into the fragment by
+  // lib/location.tsx) runs that search once; its term comes off the address before the request goes out.
+  // Otherwise the search this person last ran here, if any. The route's query is in the fragment, which the
+  // start-up readers split on `&`: a search route never takes a parameter named `k`, `a`, `i` or `l`.
   const deepLinkQuery = typeof location.query.q === "string" ? location.query.q.trim() : "";
-  const initialQuery = deepLinkQuery || (rememberedSearch?.userId === currentUser.id ? rememberedSearch.term : "");
+  const initialQuery =
+    deepLinkQuery || pendingDeepLinkTerm || (rememberedSearch?.userId === currentUser.id ? rememberedSearch.term : "");
   const [query, setQuery] = useState(initialQuery);
-  // The terms of the results on screen (what to highlight), not whatever is being typed now.
-  const [searchedFor, setSearchedFor] = useState("");
-  const [results, setResults] = useState<Message[]>();
+  const [shown, setShown] = useState<ShownResults>();
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string>();
   const searchInputId = useId();
+  const inFlightRef = useRef<SearchRequest | undefined>(undefined);
+  // What retention needs, read when a prune runs rather than captured by the closure that runs it.
+  const retentionRef = useRef({ channels, heldMessages, nodeTtlMs });
+  retentionRef.current = { channels, heldMessages, nodeTtlMs };
+  const seenResyncRef = useRef(resyncCount);
+  // A resync that landed while a request was out: the request's answer may predate it, so the search on
+  // screen runs again once nothing is in flight. The count is bumped from the completion path so that run
+  // sees the results this request just put on screen.
+  const resyncPendingRef = useRef(false);
+  const [deferredResyncs, setDeferredResyncs] = useState(0);
+  // Whether this mount has run the search it arrived with (or found none to run).
+  const arrivalDoneRef = useRef(false);
 
-  async function run(text = query): Promise<void> {
+  /** `rows` less what has passed its retention now. */
+  function pruned(rows: Message[]): Message[] {
+    const retention = retentionRef.current;
+    return pruneExpiredResults(rows, retention.channels, retention.nodeTtlMs, Date.now(), retention.heldMessages);
+  }
+
+  /**
+   * Search for `text`. A refresh (the search on screen, again after a resync) runs quietly and only when no other
+   * request is out; a search the person runs replaces a refresh still in flight. A failed refresh leaves nothing
+   * on screen, since what was there may be out of date.
+   */
+  async function run(text = query, refresh = false): Promise<void> {
     const trimmed = text.trim();
 
-    if (!trimmed || searching) {
+    if (!trimmed || (refresh ? inFlightRef.current : searching)) {
       return;
     }
 
-    setSearching(true);
-    setError(undefined);
-    rememberedSearch = { userId: currentUser.id, term: trimmed };
+    const request: SearchRequest = { refresh, changes: [] };
+    inFlightRef.current = request;
+
+    if (!refresh) {
+      setSearching(true);
+      setError(undefined);
+      rememberedSearch = { userId: currentUser.id, term: trimmed };
+    }
 
     try {
       const payload = await fetchJson<unknown>(`/api/search?q=${encodeURIComponent(trimmed)}`);
+
+      if (inFlightRef.current !== request) {
+        return;
+      }
+
       const rawResults =
         payload && typeof payload === "object" && "results" in payload && Array.isArray(payload.results)
           ? (payload.results as unknown[])
           : [];
-      setSearchedFor(trimmed);
-      setResults(
-        rawResults.flatMap((item) => {
-          const parsed = MessageSchema.safeParse(item);
-          return parsed.success ? [parsed.data] : [];
-        }),
-      );
+      const rows = rawResults.flatMap((item) => {
+        const parsed = MessageSchema.safeParse(item);
+        return parsed.success ? [parsed.data] : [];
+      });
+      // A change that arrived while the request was out may postdate its answer: apply them, in order, on top.
+      const live = request.changes.reduce((current, change) => applySearchChange(current, change, trimmed), rows);
+      setShown({ term: trimmed, rows: pruned(live) });
     } catch (searchError) {
+      if (inFlightRef.current !== request) {
+        return;
+      }
+
+      if (refresh) {
+        setShown(undefined);
+      }
       setError(searchError instanceof Error ? searchError.message : t("search.error"));
     } finally {
-      setSearching(false);
+      if (inFlightRef.current === request) {
+        inFlightRef.current = undefined;
+        if (resyncPendingRef.current) {
+          resyncPendingRef.current = false;
+          setDeferredResyncs((count) => count + 1);
+        }
+      }
+      // A later search the person started that replaced this one clears the flag when it lands.
+      if (!refresh && !inFlightRef.current) {
+        setSearching(false);
+      }
     }
   }
 
-  // Opened with a term (a deep link, or a search to come back to): run it once. A deep link's term is
-  // replaced in the address first, so the one request is the only place it goes.
+  // A deep link's term comes off the address at once, so the one request is the only place it goes, and waits
+  // in `pendingDeepLinkTerm` until there is a session to search with.
   useEffect(() => {
     if (deepLinkQuery) {
+      pendingDeepLinkTerm = deepLinkQuery;
       location.route(location.path, true);
-    }
-    if (initialQuery) {
-      void run(initialQuery);
     }
     // Only on arrival; later searches go through the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Opened with a term (a deep link, or a search to come back to): run it once, as soon as the app has its config.
+  // Before that a pinned client has no session (the search would fail and never be retried) and any other would
+  // send it ahead of its session.
+  useEffect(() => {
+    if (!ready || arrivalDoneRef.current) {
+      return;
+    }
+    arrivalDoneRef.current = true;
+    const term = pendingDeepLinkTerm ?? initialQuery;
+    pendingDeepLinkTerm = undefined;
+    if (term) {
+      void run(term);
+    }
+    // Only on arrival; later searches go through the form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  // The app's deletes, edits and channel removals, folded into the results on screen and kept for the answer
+  // of a request still in flight.
+  useEffect(
+    () =>
+      subscribeSearchChanges((change) => {
+        inFlightRef.current?.changes.push(change);
+        setShown((previous) => {
+          if (!previous) {
+            return previous;
+          }
+          const rows = applySearchChange(previous.rows, change, previous.term);
+          return rows === previous.rows ? previous : { ...previous, rows };
+        });
+      }),
+    [],
+  );
+
+  // Retention, as for conversations: whenever the TTLs may have changed, and on the app's interval.
+  useEffect(() => {
+    const prune = (): void =>
+      setShown((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        const rows = pruned(previous.rows);
+        return rows === previous.rows ? previous : { ...previous, rows };
+      });
+    prune();
+    const timer = window.setInterval(prune, RETENTION_PRUNE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+    // `pruned` reads the latest inputs through `retentionRef`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channels, nodeTtlMs]);
+
+  /** Run the search on screen again after a resync, or, with a request out, once that request has finished. */
+  function refreshAfterResync(): void {
+    if (inFlightRef.current) {
+      resyncPendingRef.current = true;
+      return;
+    }
+    if (shown?.rows.length) {
+      void run(shown.term, true);
+    }
+  }
+
+  // The app finished a resync: run the search on screen again, once, so what changed while the socket was down
+  // (deletes, edits, lost access) shows. Nothing on screen needs no second one.
+  useEffect(() => {
+    if (resyncCount === seenResyncRef.current) {
+      return;
+    }
+    seenResyncRef.current = resyncCount;
+    refreshAfterResync();
+    // Only on a new resync; `shown` is read as it is now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resyncCount]);
+
+  // A resync that waited for a request in flight, now that it has finished.
+  useEffect(() => {
+    if (deferredResyncs > 0) {
+      refreshAfterResync();
+    }
+    // Only when a waiting resync is due; `shown` is read as it is now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferredResyncs]);
 
   function contextLabel(message: Message): string {
     if (message.type === "channelPost" || message.type === "channelReply") {
@@ -165,11 +337,11 @@ export function SearchView({
             </button>
           </form>
           {error ? <p className="notice notice-danger">{error}</p> : null}
-          {!results && !error && !searching ? <p className="empty-note">{t("search.hint")}</p> : null}
-          {results && !results.length ? <p className="empty-note">{t("search.noResults")}</p> : null}
-          {results?.length ? (
+          {!shown && !error && !searching ? <p className="empty-note">{t("search.hint")}</p> : null}
+          {shown && !shown.rows.length ? <p className="empty-note">{t("search.noResults")}</p> : null}
+          {shown?.rows.length ? (
             <ul className="search-results">
-              {results.map((message) => {
+              {shown.rows.map((message) => {
                 const route = routeFor(message);
                 const author = usersById.get(message.authorId);
                 return (
@@ -184,7 +356,7 @@ export function SearchView({
                         location.route(route);
                       }
                     }}
-                    query={searchedFor}
+                    query={shown.term}
                     time={displayTime(message.createdAt)}
                   />
                 );

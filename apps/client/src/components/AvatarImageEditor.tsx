@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 
 import { t } from "../i18n";
+import { encodeCanvasUnderLimit, type EncodingAttempt } from "../lib/image-encoding";
 import { clamp } from "../lib/numbers";
 
 const AVATAR_OUTPUT_SIZE = 256;
@@ -94,51 +95,52 @@ function drawAvatarCanvas(canvas: HTMLCanvasElement, image: HTMLImageElement, cr
   context.restore();
 }
 
+/** WebP at descending qualities, then PNG, while the browser writes WebP. */
+const AVATAR_WEBP_ATTEMPTS: EncodingAttempt[] = [
+  { type: "image/webp", quality: 0.82 },
+  { type: "image/webp", quality: 0.72 },
+  { type: "image/png" },
+];
+
+/** Where the browser can't write WebP (Safari, every iOS browser): PNG when it fits, as a small flat picture
+ *  does, JPEG at descending qualities otherwise. */
+const AVATAR_FALLBACK_ATTEMPTS: EncodingAttempt[] = [
+  { type: "image/png" },
+  { type: "image/jpeg", quality: 0.82 },
+  { type: "image/jpeg", quality: 0.72 },
+  { type: "image/jpeg", quality: 0.6 },
+];
+
 /**
- * Create an image Blob from a canvas suitable for avatar upload.
+ * Encode the cropped avatar for upload, under AVATAR_MAX_UPLOAD_BYTES, on a canvas of its own so the preview
+ * stays as it is. The blob's own type is the one uploaded.
  *
- * Attempts to encode and compress the provided canvas into an image Blob whose size does not exceed AVATAR_MAX_UPLOAD_BYTES; rejects if no acceptable Blob can be produced.
- *
- * @param canvas - The source HTMLCanvasElement to convert
- * @returns A Blob containing the encoded image ready for upload
+ * @param image - The chosen picture
+ * @param crop - The crop the preview shows
+ * @returns A Blob ready for upload
  */
-function blobFromCanvas(canvas: HTMLCanvasElement): Promise<Blob> {
-  const formats: { type: "image/webp" | "image/png"; quality?: number }[] = [
-    { type: "image/webp", quality: 0.82 },
-    { type: "image/webp", quality: 0.72 },
-    { type: "image/png" },
-  ];
+async function avatarBlob(image: HTMLImageElement, crop: AvatarCrop): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
 
-  return new Promise((resolve, reject) => {
-    function tryFormat(index: number): void {
-      const format = formats[index];
+  if (!context) {
+    throw new Error(t("avatarEditor.uploadError"));
+  }
 
-      if (!format) {
-        reject(new Error(t("avatarEditor.tooLarge")));
-        return;
-      }
-
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            tryFormat(index + 1);
-            return;
-          }
-
-          if (blob.size <= AVATAR_MAX_UPLOAD_BYTES) {
-            resolve(blob);
-            return;
-          }
-
-          tryFormat(index + 1);
-        },
-        format.type,
-        format.quality,
-      );
-    }
-
-    tryFormat(0);
+  const encoded = await encodeCanvasUnderLimit(canvas, context, {
+    width: AVATAR_OUTPUT_SIZE,
+    height: AVATAR_OUTPUT_SIZE,
+    maxBytes: AVATAR_MAX_UPLOAD_BYTES,
+    paint: (target) => drawAvatarCanvas(target, image, crop),
+    attempts: AVATAR_WEBP_ATTEMPTS,
+    withoutWebp: AVATAR_FALLBACK_ATTEMPTS,
   });
+
+  if (!encoded) {
+    throw new Error(t("avatarEditor.tooLarge"));
+  }
+
+  return encoded.blob;
 }
 
 /**
@@ -344,9 +346,9 @@ export function AvatarImageEditor({ disabled, onUpload }: AvatarImageEditorProps
   }
 
   async function upload(): Promise<void> {
-    const canvas = canvasRef.current;
+    const image = imageRef.current;
 
-    if (!canvas || !hasImage) {
+    if (!image || !hasImage) {
       return;
     }
 
@@ -354,7 +356,7 @@ export function AvatarImageEditor({ disabled, onUpload }: AvatarImageEditorProps
     setError(undefined);
 
     try {
-      const blob = await blobFromCanvas(canvas);
+      const blob = await avatarBlob(image, crop);
       await onUpload(blob);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t("avatarEditor.uploadError"));
@@ -382,9 +384,13 @@ export function AvatarImageEditor({ disabled, onUpload }: AvatarImageEditorProps
         className="sr-only"
         disabled={disabled || uploading}
         onInput={(event) => {
-          const file = event.currentTarget.files?.[0];
+          const input = event.currentTarget;
+          const file = input.files?.[0];
 
           if (file) {
+            // A field that keeps its value fires nothing when the same file is picked again (after an
+            // error, say), so it is cleared once the file is in hand.
+            input.value = "";
             void selectImage(file);
           }
         }}

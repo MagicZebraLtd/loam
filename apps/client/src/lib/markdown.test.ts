@@ -43,6 +43,62 @@ describe("renderMarkdown", () => {
     expect(renderMarkdown("[section](https://example.com/page#notes)")).toContain('href="https://example.com/page#notes"');
   });
 
+  describe("a start-up fragment never survives in a link, judged as the browser parses it", () => {
+    const KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    /** The href of the one link `markdown` renders to. */
+    function renderedHref(markdown: string): string | null {
+      const template = document.createElement("template");
+      template.innerHTML = renderMarkdown(markdown);
+      const links = template.content.querySelectorAll("a");
+      expect(links).toHaveLength(1);
+      return links[0].getAttribute("href");
+    }
+
+    it.each([
+      ["a tab after the #", `#\tk=${KEY}`],
+      ["a tab inside the name", `#k\t=${KEY}`],
+      ["a CR after the #", `#\rk=${KEY}`],
+      ["an LF after the #", `#\nk=${KEY}`],
+      ["an LF inside the name", `#k\n=${KEY}`],
+      ["a CRLF after the #", `#\r\nk=${KEY}`],
+      ["a tab and a CR", `#\t\rk\t=${KEY}`],
+      ["an upper-case name", `#K=${KEY}`],
+      ["a percent-encoded name", `#%6B=${KEY}`],
+      ["an upper-case percent-encoded name", `#%4B=${KEY}`],
+      ["a later parameter", `#x=1&k=${KEY}`],
+      ["a tab before the &", `#x=1\t&k=${KEY}`],
+      ["an admin code", "#a=AAAAAAAAAAAAAAAAAAAAAA"],
+      ["an invite code", "#i=abc"],
+      ["a node-link code", "#l=AAAAAAAAAAAAAAAA"],
+      ["a key with an invite", `#k=${KEY}&i=abc`],
+    ])("drops a fragment with %s", (_label, fragment) => {
+      expect(renderedHref(`[join](/channels${fragment})`)).toBe("/channels");
+      expect(renderedHref(`[join](${window.location.origin}/channels${fragment})`)).toBe(`${window.location.origin}/channels`);
+    });
+
+    it("drops it when a tab comes before the #", () => {
+      expect(renderedHref(`[join](/channels\t#k=${KEY})`)).toBe("/channels\t");
+    });
+
+    it("drops it from a mailto: link too", () => {
+      expect(renderedHref(`[mail](mailto:a@example.com#\tk=${KEY})`)).toBe("mailto:a@example.com");
+      expect(renderedHref("[mail](mailto:a@example.com#i=abc)")).toBe("mailto:a@example.com");
+    });
+
+    it.each([
+      ["#section", "https://example.com/page#section"],
+      ["#task=1", "https://example.com/page#task=1"],
+      ["#ok=1", "https://example.com/page#ok=1"],
+      ["#x=1&kk=2", "https://example.com/page#x=1&kk=2"],
+      ["#a (no =)", "https://example.com/page#a"],
+      ["no fragment", "https://example.com/page"],
+      ["a relative #section", "/channels#section"],
+    ])("leaves %s exactly as it was", (_label, href) => {
+      expect(renderedHref(`[link](${href})`)).toBe(href);
+    });
+  });
+
   it("hardens safe http(s) links with rel and target", () => {
     const html = renderMarkdown("[loam](https://example.com)");
     expect(html).toContain('href="https://example.com"');
@@ -99,8 +155,8 @@ describe("renderMarkdown", () => {
     it("drops javascript: image src while keeping the alt text", () => {
       const html = renderMarkdown("![x](javascript:alert(1))");
       assertNoDangerousSrc(html);
-      expect(html).toContain("<img");
-      expect(html).toContain('alt="x"');
+      expect(html).not.toContain("<img");
+      expect(html).toContain("x");
     });
 
     it("drops obfuscated-case JaVaScRiPt: image src", () => {
@@ -151,19 +207,64 @@ describe("renderMarkdown", () => {
       assertNoDangerousSrc(html);
     });
 
-    it("keeps a safe https image src intact", () => {
-      const html = renderMarkdown("![alt text](https://example.com/pic.png)");
-      expect(html).toContain('src="https://example.com/pic.png"');
-      expect(html).toContain('alt="alt text"');
+  });
+
+  describe("image syntax renders no image", () => {
+    /** The rendered markdown parsed into an inert template, for element and text checks. */
+    function rendered(markdown: string): DocumentFragment {
+      const template = document.createElement("template");
+      template.innerHTML = renderMarkdown(markdown);
+      return template.content;
+    }
+
+    it("shows an https image as its alt text, with no img element and no URL", () => {
+      const content = rendered("![alt text](https://example.com/pic.png)");
+      expect(content.querySelector("img")).toBeNull();
+      expect(content.textContent).toBe("alt text");
     });
 
-    it("keeps a relative attachment image src intact (resolves to the http(s) origin)", () => {
-      // Attachments are served from same-origin relative paths (e.g. /api/attachments/:file);
-      // these resolve to the http(s) origin and must be preserved, proving the hardening is
-      // scheme-based and not a blanket removal of every image.
-      const html = renderMarkdown("![receipt](/api/attachments/abc123.webp)");
-      expect(html).toContain('src="/api/attachments/abc123.webp"');
-      expect(html).toContain('alt="receipt"');
+    it("never makes a reader's browser fetch a node URL", () => {
+      // A post of hundreds of these would spend every reader's request budget on the node.
+      const content = rendered("look ![](/api/search?q=1) ![](/api/search?q=2) here");
+      expect(content.querySelector("img")).toBeNull();
+      expect(content.textContent).toBe("look   here");
+      expect(renderMarkdown("![](/api/search?q=1)")).not.toContain("/api/search");
+    });
+
+    it("keeps the alt text as plain text, escaped", () => {
+      const content = rendered('![a <b> & "c"](/x.png)');
+      expect(content.querySelector("img, b")).toBeNull();
+      expect(content.textContent).toBe('a <b> & "c"');
+    });
+
+    it("shows nothing for an image with no alt text", () => {
+      expect(renderMarkdown("![](/api/attachments/abc123.webp)")).toBe("");
+    });
+  });
+
+  describe("the sanitiser keeps only what the renderer emits", () => {
+    it("strips the attributes a $-pattern in a link target smuggles onto the link", () => {
+      const content = document.createElement("template");
+      content.innerHTML = renderMarkdown(
+        "![q](x tabindex=0 title=hello download=evil.html name=x data-x=1 aria-label=hi onfocus=alert(1)) [a]($`)",
+      );
+      const links = content.content.querySelectorAll("a");
+      expect(links).toHaveLength(1);
+      // The garbled href is a harmless relative path, so the protocol check keeps it.
+      expect(links[0].getAttributeNames().sort()).toEqual(["href", "rel", "target"]);
+      expect(content.content.querySelector("img")).toBeNull();
+    });
+
+    it("still renders headings, lists, code, emphasis and links", () => {
+      // No quote: the body is HTML-escaped before snarkdown reads it, so a leading ">" is "&gt;" and
+      // never starts a quote (that was so before the allowlist too).
+      const html = renderMarkdown(
+        "# Title\n\n## Sub\n\n- one\n- two\n\n1. first\n\n`inline`\n\n```\nblock\n```\n\n**b** *i* ~~s~~\n\n---\n\n[link](https://example.com)",
+      );
+      for (const tag of ["<h1>", "<h2>", "<ul>", "<ol>", "<li>", "<code>", "<pre>", "<strong>", "<em>", "<s>", "<hr>", "<br>"]) {
+        expect(html).toContain(tag);
+      }
+      expect(html).toContain('<a href="https://example.com" rel="noreferrer" target="_blank">link</a>');
     });
   });
 });
@@ -195,6 +296,12 @@ describe("renderMarkdownCached", () => {
     // returning a stale entry — always matching a direct renderMarkdown(body) call.
     expect(renderMarkdownCached(id, body, 1000)).toBe(renderMarkdown(body));
     expect(renderMarkdownCached(id, body, 2000)).toBe(renderMarkdown(body));
+  });
+
+  it("can't serve one message's rendering for another whose id holds a newline", () => {
+    // An id may hold any character (a sync peer can supply one), so the parts of the key must not run together.
+    expect(renderMarkdownCached("a\n5\nfoo", "bar")).toBe(renderMarkdown("bar"));
+    expect(renderMarkdownCached("a", "foo\n\nbar", 5)).toBe(renderMarkdown("foo\n\nbar"));
   });
 });
 

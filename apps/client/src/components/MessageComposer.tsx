@@ -113,7 +113,8 @@ export function MessageComposer({ allowLocationSharing, disabledReason, label, o
     if (textArea.scrollHeight) {
       textArea.style.height = `${Math.min(textArea.scrollHeight, TEXTAREA_MAX_PX)}px`;
     }
-  }, [value]);
+    // A notice that replaced the composer leaves a new, one-row field behind it, so its end resizes too.
+  }, [value, disabledReason]);
 
   /** Drop one chip (and its preview). */
   function removePending(key: string): void {
@@ -220,15 +221,25 @@ export function MessageComposer({ allowLocationSharing, disabledReason, label, o
       return;
     }
 
+    // Every chip showing now goes with this send (an upload in flight blocks it, so each is sent or failed).
+    const sentKeys = new Set(pending.map((entry) => entry.key));
     setSending(true);
 
     try {
       await onSend(body, readyAttachments.length ? readyAttachments : undefined, draftLocation);
       // The field stays live while the send is in flight, so remove only what was sent: anything typed
-      // after pressing Enter is the start of the next message, not part of this one.
+      // after pressing Enter is the start of the next message, not part of this one, and so is a picture
+      // pasted or picked meanwhile.
       setValue((current) => (current.startsWith(sent) ? current.slice(sent.length).trimStart() : current));
-      pending.forEach(revokePreview);
-      setPending([]);
+      setPending((current) =>
+        current.filter((entry) => {
+          if (sentKeys.has(entry.key)) {
+            revokePreview(entry);
+            return false;
+          }
+          return true;
+        }),
+      );
       closeLocationForm();
     } catch {
       // onSend surfaces its own error (setError); keep the composer text so the user can retry

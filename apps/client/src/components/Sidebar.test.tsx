@@ -2,7 +2,7 @@ import type { Channel, User } from "@loam/schema";
 import type { VNode } from "preact";
 import { render } from "preact";
 import { act } from "preact/test-utils";
-import { LocationProvider } from "preact-iso";
+import { LocationProvider } from "../lib/location";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Sidebar } from "./Sidebar";
@@ -87,14 +87,14 @@ describe("Sidebar", () => {
   it("lists channels (with a lock glyph for private ones) and DM peers, excluding the current user", () => {
     const host = mount(<Sidebar {...baseProps()} />);
 
-    const channelLinks = Array.from(host.querySelectorAll('a[href^="/channel/"]'));
+    const channelLinks = Array.from(host.querySelectorAll('a[href^="#/channel/"]'));
     expect(channelLinks.map((link) => link.querySelector(".nav-label")?.textContent)).toEqual(["general", "secret"]);
     // The private channel shows the (labelled) lock glyph; the public one a decorative hash.
     const glyphs = channelLinks.map((link) => link.querySelector(".nav-glyph"));
     expect(glyphs[0]?.getAttribute("aria-hidden")).toBe("true");
     expect(glyphs[1]?.getAttribute("aria-label")).toBe("Private channel");
 
-    const dmLinks = Array.from(host.querySelectorAll('a[href^="/dm/"]'));
+    const dmLinks = Array.from(host.querySelectorAll('a[href^="#/dm/"]'));
     expect(dmLinks).toHaveLength(1);
     expect(dmLinks[0]?.textContent).toContain("Ada");
   });
@@ -105,14 +105,14 @@ describe("Sidebar", () => {
       <Sidebar {...baseProps()} dmPeers={[peer]} dmUnreadHints={new Set([peer.id])} users={[currentUser, peer, other]} />,
     );
 
-    const dmLinks = Array.from(host.querySelectorAll('.nav-section a[href^="/dm/"]'));
+    const dmLinks = Array.from(host.querySelectorAll('.nav-section a[href^="#/dm/"]'));
     expect(dmLinks.map((link) => link.querySelector(".nav-label")?.textContent)).toEqual(["Ada"]);
     expect(dmLinks[0]?.querySelector(".unread-dot")?.getAttribute("aria-label")).toBe("New messages");
 
     const toggle = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("New message"))!;
     act(() => toggle.click());
     const picker = document.querySelector(".new-message-dialog")!;
-    const names = () => Array.from(picker.querySelectorAll('a[href^="/dm/"] .nav-label')).map((label) => label.textContent);
+    const names = () => Array.from(picker.querySelectorAll('a[href^="#/dm/"] .nav-label')).map((label) => label.textContent);
     const people = names();
     expect(people.sort()).toEqual(["Ada", "Grace"]);
 
@@ -126,15 +126,15 @@ describe("Sidebar", () => {
 
   it("shows the admin link only for admins", () => {
     const withoutAdmin = mount(<Sidebar {...baseProps()} />);
-    expect(withoutAdmin.querySelector('a[href="/admin"]')).toBeNull();
+    expect(withoutAdmin.querySelector('a[href="#/admin"]')).toBeNull();
 
     const withAdmin = mount(<Sidebar {...baseProps()} currentUser={{ ...currentUser, isAdmin: true }} />);
-    expect(withAdmin.querySelector('a[href="/admin"]')).not.toBeNull();
+    expect(withAdmin.querySelector('a[href="#/admin"]')).not.toBeNull();
   });
 
   it("shows the mesh link only when mesh mail is enabled", () => {
-    expect(mount(<Sidebar {...baseProps()} />).querySelector('a[href="/mesh"]')).toBeNull();
-    expect(mount(<Sidebar {...baseProps()} showMesh />).querySelector('a[href="/mesh"]')).not.toBeNull();
+    expect(mount(<Sidebar {...baseProps()} />).querySelector('a[href="#/mesh"]')).toBeNull();
+    expect(mount(<Sidebar {...baseProps()} showMesh />).querySelector('a[href="#/mesh"]')).not.toBeNull();
   });
 
   it("reflects the connection status in the status pill", () => {
@@ -163,13 +163,13 @@ describe("Sidebar", () => {
     );
 
     // Archived sinks below the active channels despite being first in the input order.
-    const labels = Array.from(host.querySelectorAll('a[href^="/channel/"] .nav-label')).map(
+    const labels = Array.from(host.querySelectorAll('a[href^="#/channel/"] .nav-label')).map(
       (label) => label.textContent,
     );
     expect(labels).toEqual(["general", "secret", "retired"]);
 
     // It is marked, dimmed, and shows the archived tag INSTEAD of an unread badge...
-    const retired = Array.from(host.querySelectorAll('a[href^="/channel/"]')).find((link) =>
+    const retired = Array.from(host.querySelectorAll('a[href^="#/channel/"]')).find((link) =>
       link.textContent?.includes("retired"),
     );
     expect(retired?.querySelector(".nav-label")?.className).toContain("archived-channel");
@@ -177,7 +177,7 @@ describe("Sidebar", () => {
     expect(retired?.querySelector(".unread-badge")).toBeNull();
 
     // ...while active channels keep their unread badges.
-    const general = Array.from(host.querySelectorAll('a[href^="/channel/"]')).find((link) =>
+    const general = Array.from(host.querySelectorAll('a[href^="#/channel/"]')).find((link) =>
       link.textContent?.includes("general"),
     );
     expect(general?.querySelector(".unread-badge")).not.toBeNull();

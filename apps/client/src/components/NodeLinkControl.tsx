@@ -62,13 +62,23 @@ export function NodeLinkControl({ joinUrl }: { joinUrl?: string }) {
       {canVouch ? null : <p className="form-note">{t("nodeLink.needsKey")}</p>}
       {shown ? (
         <div className="invite-panel">
-          <div aria-hidden="true" className="qr-tile invite-qr" dangerouslySetInnerHTML={{ __html: qrSvg }} />
-          <p className="form-note">{t("nodeLink.note")}</p>
-          <p className="form-note">{t("nodeLink.expires", { time: displayTime(shown.expiresAt) })}</p>
+          {qrSvg ? (
+            <>
+              <div aria-hidden="true" className="qr-tile invite-qr" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+              <p className="form-note">{t("nodeLink.note")}</p>
+              <p className="form-note">{t("nodeLink.expires", { time: displayTime(shown.expiresAt) })}</p>
+            </>
+          ) : hostKey.key ? (
+            // The join URL plus `#k=…&l=…` is past what the QR encoder fits (a long hostname, a full IPv6
+            // address), so there is nothing to scan. With no key the note above already says why.
+            <p className="form-error">{t("nodeLink.addressTooLong")}</p>
+          ) : null}
           <div className="card-actions">
-            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void showCode()} type="button">
-              {t("nodeLink.again")}
-            </button>
+            {qrSvg ? (
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void showCode()} type="button">
+                {t("nodeLink.again")}
+              </button>
+            ) : null}
             <button className="btn btn-secondary btn-sm" onClick={() => setShown(undefined)} type="button">
               {t("nodeLink.hide")}
             </button>
