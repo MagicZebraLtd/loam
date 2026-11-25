@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp, type LoamApp } from "./app.js";
+import { assistantRevision } from "./test-support/app-harness.js";
 
 // The Ollama/LLM streaming path. These tests exercise `createAssistantResponse` end
 // to end: a user DMs the configured bot, the server streams Ollama's `/api/chat` reply out as
@@ -179,13 +180,13 @@ async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<boolean
   return check();
 }
 
-/** POST a DM to the configured bot as the given session. */
-function dmBot(app: LoamApp, cookie: string, body: string) {
+/** POST a DM to the configured bot as the given session, naming the destination the node advertises. */
+async function dmBot(app: LoamApp, cookie: string, body: string) {
   return app.server.inject({
     method: "POST",
     url: "/api/messages",
     headers: { cookie },
-    payload: { type: "dm", recipientUserId: BOT_ID, body },
+    payload: { type: "dm", recipientUserId: BOT_ID, body, assistantDestinationRevision: await assistantRevision(app) },
   });
 }
 

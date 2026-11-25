@@ -1,6 +1,6 @@
 // Admin: claim, config read/patch, kill switch, and the unauthenticated panic token, registered over the
 // shared AppContext.
-import { AdminClaimRequestSchema, KillSwitchRequestSchema, LlmModelsRequestSchema, type LoamConfig, type LoamConfigUpdate, LoamConfigUpdateSchema, PanicRequestSchema, UserSchema } from "@loam/schema";
+import { AdminClaimRequestSchema, KillSwitchRequestSchema, LlmModelsRequestSchema, type LoamConfig, type LoamConfigUpdate, LoamConfigUpdateSchema, PanicRequestSchema, sameUrlOrigin, UserSchema } from "@loam/schema";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -87,8 +87,12 @@ export function registerAdminRoutes(ctx: AppContext): void {
     const currentUser = ctx.ensureSessionUser(ctx.getSessionUserId(request, reply));
 
     // Only the host phone's own WebView holds the launcher's host token, and it presents it on every page
-    // load (already admin or not), so this is who the host phone's message notifications are for.
-    if (ctx.options.hostToken && timingSafeEqualStrings(body.data.secret, ctx.options.hostToken)) {
+    // load (already admin or not), so this is who the host phone's message notifications are for. That
+    // window is on loopback (the tunnel forwards the real caller's address), so the token counts only from
+    // there: a leaked token presented from the LAN is a wrong secret like any other.
+    const hostTokenPresented =
+      ctx.requestFromLoopback(request) && !!ctx.options.hostToken && timingSafeEqualStrings(body.data.secret, ctx.options.hostToken);
+    if (hostTokenPresented) {
       ctx.hostDeviceUserId = currentUser.id;
     }
 
@@ -131,7 +135,8 @@ export function registerAdminRoutes(ctx: AppContext): void {
     // token is honoured BEFORE the per-IP attempt limiter: the host's own claim arrives from
     // loopback, a bucket every co-located Android app can also hit, and a 256-bit random token cannot be
     // brute-forced, so exempting a match costs nothing — while a wrong guess still counts against the bucket.
-    if (strategy === "hostDevice" && hostToken && timingSafeEqualStrings(body.data.secret, hostToken)) {
+    // The right token from any address but loopback is a wrong guess too (`hostTokenPresented`).
+    if (strategy === "hostDevice" && hostTokenPresented) {
       return promote();
     }
 
@@ -262,21 +267,32 @@ export function registerAdminRoutes(ctx: AppContext): void {
       return reply.code(404).send(errorBody("Not found"));
     }
 
-    // Spend the scrypt on every well-formed attempt, armed or not, rate-limited or not, against a stand-in
-    // hash when there is no token: a configured node's check takes tens of milliseconds, and answering an
-    // unarmed node's 404 faster than a wrong token's would tell the prober which it is. Off the event loop
-    // (`verifySecretAsync`), so a prober can't stall the node by paying for those milliseconds on every request.
+    // Attempts are counted, and a caller over the limit refused before any scrypt, whether or not a token is
+    // set: both nodes then refuse the same attempts, equally fast, and a refused caller costs no hashing.
     const armed = ctx.appConfig.killSwitch.enabled && !!ctx.appConfig.killSwitch.panicToken;
-    const rateLimited = armed && ctx.attemptRateLimited(ctx.panicAttempts, request.ip);
-    const matches = await verifySecretAsync(body.data.token, armed ? (ctx.appConfig.killSwitch.panicToken as string) : unarmedPanicHash);
 
-    if (!armed || rateLimited || !matches) {
+    if (ctx.attemptRateLimited(ctx.panicAttempts, request.ip)) {
       return reply.code(404).send(errorBody("Not found"));
     }
 
+    // Spend the scrypt on every attempt the limiter lets through, armed or not, against a stand-in hash when
+    // there is no token: a configured node's check takes tens of milliseconds, and answering an unarmed node's
+    // 404 faster than a wrong token's would tell the prober which it is. Off the event loop
+    // (`verifySecretAsync`), so a prober can't stall the node by paying for those milliseconds on every request.
+    const generation = ctx.wipeGeneration;
+    const matches = await verifySecretAsync(body.data.token, armed ? (ctx.appConfig.killSwitch.panicToken as string) : unarmedPanicHash);
+
+    if (!armed || !matches) {
+      return reply.code(404).send(errorBody("Not found"));
+    }
+
+    // One token press, one reset: a reset that started while this request's check ran (a second tap, a
+    // retried request) is the one this caller asked for. It is joined while it runs and its outcome reused
+    // once it has finished; starting another would run the whole wipe twice, and on a node whose launcher
+    // holds the database key, rewrite the wipe journal and call the launcher a second time.
     // The token holder proved it, so an incomplete wipe is reported honestly (503),
     // not as a false `{ ok: true }`. Only genuine probing (bad/absent token, above) stays a uniform 404.
-    const result = await ctx.executeKillSwitch();
+    const result = ctx.wipeGeneration !== generation && ctx.latestWipe ? await ctx.latestWipe : await ctx.executeKillSwitch();
     if (!result.complete) {
       return reply.code(503).send(incompleteWipeBody(result));
     }
@@ -329,6 +345,8 @@ export function applyConfigUpdate(
     return { ok: false, status: 400, error: "Invalid config values" };
   }
 
+  next = withoutKeyForNewServiceOrigin(ctx.appConfig, next, update);
+
   // Passphrase bootstrap without a passphrase would advertise a claim flow that can never
   // succeed (and clearing the passphrase while the mode is active would lock admins out).
   if (next.admin.bootstrap === "passphrase" && !next.admin.passphrase) {
@@ -361,6 +379,21 @@ export function applyConfigUpdate(
     return { ok: false, status: 500, error: "Internal server error" };
   }
   return { ok: true };
+}
+
+/**
+ * The chat service's saved API key is only ever sent to the origin it was saved for: a save that moves
+ * `llm.openai.baseUrl` to another origin (`sameUrlOrigin`) without carrying a new key drops the saved one,
+ * so the next DM can't hand it to the new host. A change of path on the same origin keeps it. Boot keeps the
+ * drop: `loadAppConfig` never pairs config.json's key with a stored address on another origin.
+ */
+function withoutKeyForNewServiceOrigin(current: LoamConfig, next: LoamConfig, update: LoamConfigUpdate): LoamConfig {
+  const before = current.llm.openai.baseUrl;
+  const after = next.llm.openai.baseUrl;
+  if (next.llm.openai.apiKey === undefined || after === before || sameUrlOrigin(before, after) || update.llm?.openai?.apiKey?.trim()) {
+    return next;
+  }
+  return { ...next, llm: { ...next.llm, openai: { ...next.llm.openai, apiKey: undefined } } };
 }
 
 /**

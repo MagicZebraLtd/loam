@@ -1,5 +1,7 @@
 // The optional LLM assistant: the bot user, the Ollama / OpenAI-compatible / on-device backends, and the
 // DM-driven assistant reply, behind the shared `Runtime` view.
+import { randomBytes } from "node:crypto";
+
 import {
   activeLlmProvider,
   type AssistantDestination,
@@ -11,6 +13,7 @@ import {
   type LoamConfig,
   type Message,
   MessageSchema,
+  sameUrlOrigin,
   type User,
   UserSchema,
 } from "@loam/schema";
@@ -40,6 +43,22 @@ const CHAT_TIMEOUT_MS = 5 * 60 * 1000;
 const MODELS_TIMEOUT_MS = 15 * 1000;
 /** Most model names a backend's list is trimmed to (OpenRouter offers several hundred). */
 const MODELS_MAX = 500;
+/** Most bytes of a model list read from a backend; a bigger answer is `llm_bad_response`. */
+const MODELS_MAX_BYTES = 8 * 1024 * 1024;
+/** Most bytes of a failed response's body read for the log line (`errorDetail`); the rest is never read. */
+const ERROR_DETAIL_MAX_BYTES = 4 * 1024;
+/** Most characters a streamed reply may hold since its last newline: no Ollama or SSE line comes near it, so
+ * a service that streams on without one is refused rather than buffered for ever (`streamLines`). */
+const STREAM_LINE_MAX_CHARS = 256 * 1024;
+
+/**
+ * Most characters of an assistant reply the node keeps. A runaway or hostile backend could otherwise make the
+ * node store and broadcast a reply of any size; past this the reply is finalised with
+ * `ASSISTANT_REPLY_CUT_OFF_NOTE` and the backend is no longer read.
+ */
+export const ASSISTANT_REPLY_MAX_CHARS = 64_000;
+/** What follows a reply cut at `ASSISTANT_REPLY_MAX_CHARS`, after a blank line. */
+export const ASSISTANT_REPLY_CUT_OFF_NOTE = "(The answer was cut off here because it was too long.)";
 
 /** The message `applyConfigUpdate` refuses with (mapped to `llm_cloud_not_allowed` in errors.ts). */
 export const CLOUD_ASSISTANT_REFUSED = "A cloud assistant is not allowed on a hardened network";
@@ -82,8 +101,6 @@ export function capHistoryByChars(history: ChatMessage[], maxChars: number = ON_
   }
   return kept;
 }
-/** `fetch`'s redirect option (`follow` | `error` | `manual`), without the DOM lib. */
-type RedirectPolicy = NonNullable<RequestInit["redirect"]>;
 
 /**
  * Why `config`'s assistant backend may not run, or undefined when it may: a `hardened` network keeps every
@@ -129,9 +146,9 @@ export function unencryptedBackendRefused(baseUrl: string, policy: LlmLauncherPo
 
 /**
  * Whether `host` (as `backendHostname` gives it) is this machine by its spelling alone: `localhost`, 127/8,
- * `::1` or an IPv4-mapped 127/8. Unlike `classifyBackendUrl`, not a `*.localhost` name: Node's `fetch` and
- * Android's resolver look such a name up in DNS like any other (only `localhost` is in the hosts file), so
- * it can answer from another machine.
+ * `::1` or an IPv4-mapped 127/8. Not a `*.localhost` name: Node's `fetch` and Android's resolver look such a
+ * name up in DNS like any other (only `localhost` is in the hosts file), so it can answer from another
+ * machine.
  */
 function isLoopbackLiteral(host: string): boolean {
   return (
@@ -165,15 +182,31 @@ export function activeBackendUrl(llm: LoamConfig["llm"]): string | undefined {
 }
 
 /**
- * How a backend request treats an HTTP redirect. A hardened network never follows one: a local address that
- * answered with a redirect to a public host would otherwise carry the conversation off the LAN after the
- * locality check passed. Everywhere else `fetch`'s default (follow) stands, so a service behind a redirecting
- * proxy keeps working.
+ * Whether a backend answered with a redirect. No backend request follows one, on any network: a 307 or 308
+ * keeps the POST body, so a redirect could carry a member's question and DM history to an origin other than
+ * the one members were told (`NetworkConfig.assistantDestination`), past the locality and encryption checks
+ * made on the configured address. Requests use `redirect: "manual"`, so Node's `fetch` hands back the 3xx
+ * itself (with its `Location`) and nothing is sent to the target.
  */
-export function backendRedirectPolicy(config: LoamConfig, policy: LlmLauncherPolicy = {}): RedirectPolicy {
-  // A redirect could take a hardened network's messages to the internet, or an encrypted network's from
-  // HTTPS down to plain HTTP, so neither follows one.
-  return config.security.profile === "hardened" || policy.requireTransportEncryption ? "error" : "follow";
+function isRedirect(response: Response): boolean {
+  return response.status >= 300 && response.status < 400;
+}
+
+/**
+ * The log line for a redirect a backend answered with: the status and the target's hostname only (a
+ * `Location` can carry credentials or a path), resolved against the request's address.
+ */
+function redirectMessage(what: string, url: string, response: Response): string {
+  const location = response.headers.get("location");
+  let target = "another address";
+  if (location) {
+    try {
+      target = backendHostname(new URL(location, url).href);
+    } catch {
+      // An unparseable Location names nothing worth logging.
+    }
+  }
+  return `${what} answered ${response.status} with a redirect to ${target}; the assistant does not follow redirects, so set the service's final address`;
 }
 
 /**
@@ -195,12 +228,24 @@ function backendHostname(baseUrl: string): string {
 }
 
 /**
- * The endpoint a backend address names, as the history cut identifies a recipient (docs/06): hostname, port
- * when given, and path without a trailing slash (`openrouter.ai/api/v1`, `127.0.0.1:11434`), never the
- * credentials or query an address might carry. Two tenants on one host (`/tenant-a/v1`, `/tenant-b/v1`) are
- * two recipients; the same service written with or without a trailing slash is one.
+ * The endpoint a backend address names, as the history cut identifies a recipient (docs/06): scheme,
+ * hostname, port when given, and path without a trailing slash (`https://openrouter.ai/api/v1`,
+ * `http://127.0.0.1:11434`), never the credentials or query an address might carry. Two tenants on one host
+ * (`/tenant-a/v1`, `/tenant-b/v1`) are two recipients, and so are `http://` and `https://` on one host (plain
+ * HTTP can be read and redirected on the way); the same service written with or without a trailing slash is
+ * one.
  */
 function backendEndpoint(baseUrl: string): string {
+  try {
+    return `${new URL(baseUrl).protocol}//${schemelessBackendEndpoint(baseUrl)}`;
+  } catch {
+    return schemelessBackendEndpoint(baseUrl);
+  }
+}
+
+/** `backendEndpoint` without the scheme: how versions before the scheme counted spelled a destination,
+ * kept so a record they wrote for the same destination is recognised (`currentDestinationRecord`). */
+function schemelessBackendEndpoint(baseUrl: string): string {
   const host = backendHostname(baseUrl);
   try {
     const url = new URL(baseUrl);
@@ -213,27 +258,22 @@ function backendEndpoint(baseUrl: string): string {
 
 /**
  * Where a network-backed assistant at `baseUrl` answers from, as members are told it (docs/06): this
- * computer (a loopback address), another computer on the local network (`isLocalNetworkUrl`), or an online
- * service named by its hostname.
+ * computer (a loopback address by its spelling, `isLoopbackLiteral`), another computer on the local network
+ * (`isLocalNetworkUrl`), or an online service named by its hostname. A `*.localhost` name is resolved like
+ * any other name, so it is an online service here.
  */
 export function classifyBackendUrl(baseUrl: string): AssistantDestination {
   const host = backendHostname(baseUrl);
-  // URL parsing spells an IPv4-mapped loopback (`[::ffff:127.0.0.1]`) in hex (`::ffff:7f00:1`).
-  if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    host === "::1" ||
-    /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)
-  ) {
+  if (isLoopbackLiteral(host)) {
     return { kind: "host" };
   }
   return isLocalNetworkUrl(baseUrl) ? { kind: "lan" } : { kind: "online", host };
 }
 
 /** The record under `ASSISTANT_DESTINATION_CONFIG_KEY`: which destination the assistant last answered from,
- * and since when (ms epoch; 0 = since before this record existed). */
-type AssistantDestinationRecord = { key: string; since: number };
+ * since when (ms epoch; 0 = since before this record existed), and a random revision minted with it (absent
+ * from a record an earlier version wrote, until it is next read). */
+type AssistantDestinationRecord = { key: string; since: number; rev?: string };
 
 /** Parse a stored destination record; undefined when it is absent or unreadable. */
 function parseDestinationRecord(raw: string | undefined): AssistantDestinationRecord | undefined {
@@ -243,10 +283,11 @@ function parseDestinationRecord(raw: string | undefined): AssistantDestinationRe
   try {
     const parsed: unknown = JSON.parse(raw);
     if (isRecord(parsed) && typeof parsed.key === "string" && typeof parsed.since === "number" && Number.isFinite(parsed.since)) {
-      return { key: parsed.key, since: parsed.since };
+      const rev = typeof parsed.rev === "string" && /^[0-9a-f]{32}$/.test(parsed.rev) ? parsed.rev : undefined;
+      return { key: parsed.key, since: parsed.since, rev };
     }
   } catch {
-    // Unreadable: treated as a change (see syncAssistantDestination).
+    // Unreadable: treated as a change (see currentDestinationRecord).
   }
   return undefined;
 }
@@ -261,6 +302,27 @@ function openAiHeaders(apiKey: string | undefined): Record<string, string> {
   return apiKey ? { "content-type": "application/json", authorization: `Bearer ${apiKey}` } : { "content-type": "application/json" };
 }
 
+/**
+ * A failure a backend reported. `message` is a fixed line naming the backend and the HTTP status, or saying
+ * that its stream reported an error: nothing in it comes from the backend, so it may go in the default log.
+ * `detail` is the backend's own text, cut to 200 characters, and is logged at debug level only: a service
+ * may quote the member's question in its error, and the host's log outlives an Emergency Reset.
+ */
+class BackendError extends Error {
+  readonly detail: string;
+
+  constructor(message: string, detail: string) {
+    super(message);
+    this.detail = detail;
+  }
+}
+
+/** A backend's own text cut for the debug log: 200 characters, anything shaped like an API key replaced
+ * (a service's 401 text can quote the start of the key it refused, as OpenAI's does). */
+function backendText(text: string): string {
+  return text.slice(0, 200).replace(/\b(?:sk|or|gsk)[-_][A-Za-z0-9_*.-]{6,}/g, "[key]");
+}
+
 /** A fetch error's name is all a member-facing path needs; the rest is for the log. */
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -270,23 +332,24 @@ function isAbort(error: unknown): boolean {
  * POST a streaming chat request and yield the response body one line at a time (trimmed, blank lines
  * dropped), for the newline-delimited JSON Ollama streams and the SSE `data:` lines an OpenAI-compatible
  * service streams. One timeout covers the whole exchange; the reader is cancelled however the caller leaves.
+ * A redirect is refused (`isRedirect`), and so is a line longer than `STREAM_LINE_MAX_CHARS`.
  */
-async function* streamLines(
-  url: string,
-  headers: Record<string, string>,
-  body: unknown,
-  what: string,
-  redirect: RedirectPolicy,
-): AsyncGenerator<string> {
+async function* streamLines(url: string, headers: Record<string, string>, body: unknown, what: string): AsyncGenerator<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
   let response: Response;
 
   try {
-    response = await fetch(url, { method: "POST", headers, signal: controller.signal, body: JSON.stringify(body), redirect });
+    response = await fetch(url, { method: "POST", headers, signal: controller.signal, body: JSON.stringify(body), redirect: "manual" });
   } catch (error) {
     clearTimeout(timeout);
     throw isAbort(error) ? new Error(`${what} request timed out before streaming started.`) : error;
+  }
+
+  if (isRedirect(response)) {
+    clearTimeout(timeout);
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error(redirectMessage(what, url, response));
   }
 
   if (!response.ok || !response.body) {
@@ -298,7 +361,7 @@ async function* streamLines(
     } finally {
       clearTimeout(timeout);
     }
-    throw new Error(`${what} request failed: ${response.status}${detail}`);
+    throw new BackendError(`${what} request failed: ${response.status}`, detail.trim());
   }
 
   const reader = response.body.getReader();
@@ -318,11 +381,21 @@ async function* streamLines(
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
+        // A read can hold a whole over-long line with its newline, which the check below never sees.
+        if (line.length > STREAM_LINE_MAX_CHARS) {
+          throw new Error(`${what} sent a line that is too long (over ${STREAM_LINE_MAX_CHARS} characters).`);
+        }
+
         const trimmed = line.trim();
 
         if (trimmed) {
           yield trimmed;
         }
+      }
+
+      // Whatever is held now has no newline yet: past the limit it never will be a line worth reading.
+      if (buffer.length > STREAM_LINE_MAX_CHARS) {
+        throw new Error(`${what} sent a line that is too long (over ${STREAM_LINE_MAX_CHARS} characters).`);
       }
     }
 
@@ -340,16 +413,47 @@ async function* streamLines(
 }
 
 /**
- * The first line of a failed response's body, for the log (a model name, a quota message); never a member.
- * A service's 401 text can quote the start of the key it refused (OpenAI's does), so anything shaped like
- * an API key is replaced before the line can reach the log.
+ * The first line of a failed response's body, for the debug log (a model name, a quota message); never a
+ * member, and never the default log (`BackendError`). Cut and key-scrubbed by `backendText`. Only the first
+ * `ERROR_DETAIL_MAX_BYTES` are read; the rest of the body is cancelled.
  */
 async function errorDetail(response: Response): Promise<string> {
   try {
-    const text = (await response.text()).trim().split("\n")[0] ?? "";
-    return text ? ` ${text.slice(0, 200).replace(/\b(?:sk|or|gsk)[-_][A-Za-z0-9_*.-]{6,}/g, "[key]")}` : "";
+    const text = (await readTextUpTo(response, ERROR_DETAIL_MAX_BYTES)).text.trim().split("\n")[0] ?? "";
+    return text ? ` ${backendText(text)}` : "";
   } catch {
     return "";
+  }
+}
+
+/**
+ * Read at most `maxBytes` of a response body as UTF-8 text, cancelling the body once it goes past them, so a
+ * backend can't make the node buffer an answer of any size. `complete` is false when the body was longer
+ * (the text then holds its first `maxBytes`, a split character at the cut decoded as U+FFFD).
+ */
+async function readTextUpTo(response: Response, maxBytes: number): Promise<{ text: string; complete: boolean }> {
+  if (!response.body) {
+    return { text: "", complete: true };
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return { text: Buffer.concat(chunks).toString("utf8"), complete: true };
+      }
+      if (total + value.byteLength > maxBytes) {
+        chunks.push(value.subarray(0, maxBytes - total));
+        return { text: Buffer.concat(chunks).toString("utf8"), complete: false };
+      }
+      total += value.byteLength;
+      chunks.push(value);
+    }
+  } finally {
+    // A no-op once the body has ended; otherwise the rest is never read.
+    void reader.cancel().catch(() => undefined);
   }
 }
 
@@ -387,8 +491,9 @@ export function createLlmLayer(rt: Runtime) {
     return baseUrl === undefined ? undefined : classifyBackendUrl(baseUrl);
   }
 
-  /** The active destination's identity for the history cut: provider plus hostname (`onDevice` alone for the
-   * phone's model); undefined while no backend is active. A change of either means a different recipient. */
+  /** The active destination's identity for the history cut: provider plus endpoint with its scheme
+   * (`backendEndpoint`; `onDevice` alone for the phone's model); undefined while no backend is active. A
+   * change of either means a different recipient. */
   function destinationKey(): string | undefined {
     const provider = activeProvider();
     if (provider === "off") {
@@ -399,6 +504,38 @@ export function createLlmLayer(rt: Runtime) {
     }
     const baseUrl = activeBackendUrl(rt.appConfig.llm);
     return baseUrl === undefined ? undefined : `${provider}:${backendEndpoint(baseUrl)}`;
+  }
+
+  /** The active destination's key as versions before the scheme counted spelled it (no scheme), for
+   * recognising a record they wrote; undefined for the phone's model, whose key never changed. */
+  function schemelessDestinationKey(): string | undefined {
+    const provider = activeProvider();
+    const baseUrl = provider === "off" || provider === "onDevice" ? undefined : activeBackendUrl(rt.appConfig.llm);
+    return baseUrl === undefined ? undefined : `${provider}:${schemelessBackendEndpoint(baseUrl)}`;
+  }
+
+  /** The provider and hostname the active destination answers from, for the log: never its port, path or
+   * scheme. */
+  function destinationLogName(): string {
+    const provider = activeProvider();
+    const baseUrl = provider === "off" || provider === "onDevice" ? undefined : activeBackendUrl(rt.appConfig.llm);
+    return baseUrl === undefined ? provider : `${provider}:${backendHostname(baseUrl)}`;
+  }
+
+  /**
+   * The cut-off for a destination record written now: the later of the clock and one past the newest DM to
+   * or from the assistant. A host clock that went back (no network time, a manual change) would otherwise
+   * date the cut before turns already written to the old destination, and send them to the new one.
+   */
+  function cutOffNow(): number {
+    const botId = rt.appConfig.llm.ollama.botId;
+    let newest = -Infinity;
+    for (const message of rt.data.messages) {
+      if (message.type === "dm" && (message.authorId === botId || message.recipientUserId === botId) && message.createdAt > newest) {
+        newest = message.createdAt;
+      }
+    }
+    return Math.max(Date.now(), newest + 1);
   }
 
   /**
@@ -413,14 +550,32 @@ export function createLlmLayer(rt: Runtime) {
    * @returns The cut-off (ms epoch), or undefined while no backend is active.
    */
   function syncAssistantDestination(): number | undefined {
+    return currentDestinationRecord()?.since;
+  }
+
+  /**
+   * The assistant's destination record, brought up to date first: written anew when the destination changed
+   * (see `syncAssistantDestination` for what `since` then means), and given a revision when an earlier
+   * version wrote it without one (its cut-off is kept). A record an earlier version keyed without the scheme
+   * (`schemelessDestinationKey`) for the same destination is rewritten under the current key with its cut-off
+   * and revision, so the upgrade itself cuts nobody's history. Undefined while no backend is active.
+   */
+  function currentDestinationRecord(): Required<AssistantDestinationRecord> | undefined {
     const key = destinationKey();
     if (key === undefined) {
       return undefined;
     }
     const raw = rt.store.getConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY);
-    const stored = parseDestinationRecord(raw);
+    const parsed = parseDestinationRecord(raw);
+    const rekeyed = parsed !== undefined && parsed.key !== key && parsed.key === schemelessDestinationKey();
+    const stored = rekeyed ? { ...parsed, key } : parsed;
     if (stored?.key === key) {
-      return stored.since;
+      if (stored.rev !== undefined && !rekeyed) {
+        return { key, since: stored.since, rev: stored.rev };
+      }
+      const upgraded = { key, since: stored.since, rev: stored.rev ?? newDestinationRevision() };
+      rt.store.setConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY, JSON.stringify(upgraded));
+      return upgraded;
     }
     // A first record keeps an unchanged local assistant's memory (`since: 0`: an upgrade, or a fresh node). An
     // ONLINE destination's first record starts now instead: a node upgraded with its assistant off, whose
@@ -428,13 +583,55 @@ export function createLlmLayer(rt: Runtime) {
     // picks an online service.
     const firstRecord = raw === undefined;
     const online = assistantDestination()?.kind === "online";
-    const next: AssistantDestinationRecord = { key, since: firstRecord && !online ? 0 : Date.now() };
+    const next = { key, since: firstRecord && !online ? 0 : cutOffNow(), rev: newDestinationRevision() };
     rt.store.setConfigValue(ASSISTANT_DESTINATION_CONFIG_KEY, JSON.stringify(next));
     if (next.since !== 0) {
-      // Logged as provider + hostname only: the key itself carries the endpoint's path.
-      rt.log.info(`The assistant now answers from ${key.split("/", 1)[0]}; earlier conversations will not be sent to it`);
+      // Logged as provider + hostname only: the key itself carries the endpoint's scheme, port and path.
+      rt.log.info(`The assistant now answers from ${destinationLogName()}; earlier conversations will not be sent to it`);
     }
-    return next.since;
+    return next;
+  }
+
+  /** A fresh revision for a destination record: 128 random bits as 32 hex characters. */
+  function newDestinationRevision(): string {
+    return randomBytes(16).toString("hex");
+  }
+
+  /**
+   * The revision of the assistant's destination record, for `NetworkConfig.assistantDestinationRevision`: a
+   * random value minted each time the destination changes (`currentDestinationRecord`, read here so the
+   * record is current) and stored with it. It is random, not derived from the destination, so it says only
+   * that something changed and can't be used to check a guess at the service's address or path. The same
+   * across restarts and across saves that keep the destination; different after any change, including a
+   * switch away and back. Undefined while no backend is active, and while the record can't be read (a store
+   * an incomplete Emergency Reset left closed), so `NetworkConfig` and the host API's status still answer;
+   * every check treats that as stale. A DM to the assistant must name it (`assistantDestinationStale`).
+   */
+  function destinationRevision(): string | undefined {
+    try {
+      return currentDestinationRecord()?.rev;
+    } catch (error) {
+      rt.log.debug(error, "The assistant's destination record could not be read");
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether a DM from `authorId` to `recipientUserId` is to the active assistant and names a destination
+   * revision other than the current one (`presentedRevision` missing counts). `POST /api/messages` checks
+   * this BEFORE the busy check and before creating the DM, and answers 409, so a question written for one
+   * destination never goes to another the sender wasn't shown (docs/06). A DM to a person, or any DM while
+   * no backend is active, is never stale; one to the assistant while its record can't be read always is.
+   */
+  function assistantDestinationStale(recipientUserId: string, authorId: string, presentedRevision: string | undefined): boolean {
+    const bot = activeBotUser();
+
+    if (!bot || recipientUserId !== bot.id || authorId === bot.id) {
+      return false;
+    }
+
+    const current = destinationRevision();
+    return current === undefined || presentedRevision !== current;
   }
 
   /** The model label shown on assistant replies: whichever backend answers. */
@@ -619,7 +816,6 @@ export function createLlmLayer(rt: Runtime) {
       { "content-type": "application/json" },
       { model, stream: true, messages },
       "Ollama",
-      backendRedirectPolicy(rt.appConfig, rt.options),
     );
 
     for await (const line of lines) {
@@ -630,7 +826,7 @@ export function createLlmLayer(rt: Runtime) {
       }
 
       if (typeof parsed.error === "string") {
-        throw new Error(parsed.error);
+        throw new BackendError("Ollama's stream reported an error", backendText(parsed.error));
       }
 
       const message = isRecord(parsed.message) ? parsed.message : undefined;
@@ -659,7 +855,6 @@ export function createLlmLayer(rt: Runtime) {
       openAiHeaders(apiKey),
       { model, stream: true, messages },
       "Chat service",
-      backendRedirectPolicy(rt.appConfig, rt.options),
     );
 
     for await (const line of lines) {
@@ -680,7 +875,10 @@ export function createLlmLayer(rt: Runtime) {
       }
 
       if (isRecord(parsed.error)) {
-        throw new Error(typeof parsed.error.message === "string" ? parsed.error.message : "the chat service reported an error");
+        throw new BackendError(
+          "The chat service's stream reported an error",
+          typeof parsed.error.message === "string" ? backendText(parsed.error.message) : "",
+        );
       }
 
       const choice = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined;
@@ -803,14 +1001,24 @@ export function createLlmLayer(rt: Runtime) {
    * Ask a backend which models it offers, for the admin screens' Test button and model picker: Ollama's
    * `GET /api/tags` or an OpenAI-compatible `GET /models`. The request's connection details win over the
    * saved ones so an admin can test before saving; a key left out means the stored key, so a saved key can
-   * be tested without typing it again. Names are deduplicated, sorted and capped. Failures come back as a
+   * be tested without typing it again, but only against the origin it was saved with (`sameUrlOrigin`): a
+   * Test of another address carries no key unless the admin typed one. Names are deduplicated, sorted and
+   * capped, and the answer is read through a byte cap. A redirect is not followed. Failures come back as a
    * code the UI can word (never the service's own text, which may echo the URL or the key's prefix); the
    * detail goes to the log at debug level.
    */
   async function listModels(request: LlmModelsRequest): Promise<LlmModelsResponse> {
     const { llm, security } = rt.appConfig;
     const baseUrl = request.baseUrl ?? (request.provider === "ollama" ? llm.ollama.baseUrl : llm.openai.baseUrl);
-    const apiKey = request.provider === "openai" ? (request.apiKey === undefined ? llm.openai.apiKey : request.apiKey || undefined) : undefined;
+    let apiKey: string | undefined;
+    if (request.provider === "openai") {
+      if (request.apiKey !== undefined) {
+        // Typed into the request by the admin: sent where they asked ("" = explicitly no key).
+        apiKey = request.apiKey || undefined;
+      } else if (request.baseUrl === undefined || sameUrlOrigin(request.baseUrl, llm.openai.baseUrl)) {
+        apiKey = llm.openai.apiKey;
+      }
+    }
 
     // The same locality rule as `llmProviderRefusal`, for both backends: a hardened network's admin can't
     // even probe a public address from here.
@@ -832,7 +1040,7 @@ export function createLlmLayer(rt: Runtime) {
         method: "GET",
         headers: openAiHeaders(apiKey),
         signal: controller.signal,
-        redirect: backendRedirectPolicy(rt.appConfig, rt.options),
+        redirect: "manual",
       });
     } catch (error) {
       clearTimeout(timeout);
@@ -841,6 +1049,12 @@ export function createLlmLayer(rt: Runtime) {
     }
 
     try {
+      if (isRedirect(response)) {
+        void response.body?.cancel().catch(() => undefined);
+        rt.log.debug(`LLM model list: ${redirectMessage("the backend", url, response)}`);
+        return { ok: false, code: "llm_bad_response" };
+      }
+
       if (response.status === 401 || response.status === 403) {
         return { ok: false, code: "llm_unauthorized" };
       }
@@ -850,7 +1064,14 @@ export function createLlmLayer(rt: Runtime) {
         return { ok: false, code: "llm_bad_response" };
       }
 
-      const parsed: unknown = await response.json();
+      const { text, complete } = await readTextUpTo(response, MODELS_MAX_BYTES);
+
+      if (!complete) {
+        rt.log.debug(`LLM model list: the backend's answer is over ${MODELS_MAX_BYTES} bytes`);
+        return { ok: false, code: "llm_bad_response" };
+      }
+
+      const parsed: unknown = JSON.parse(text);
       const entries = isRecord(parsed) ? (request.provider === "ollama" ? parsed.models : parsed.data) : undefined;
 
       if (!Array.isArray(entries)) {
@@ -883,8 +1104,10 @@ export function createLlmLayer(rt: Runtime) {
    * deltas come from `streamChat` (Ollama or the on-device model).
    *
    * @param userMessage - The incoming DM message that may trigger the bot response
+   * @param acceptedRevision - The destination revision the route accepted the DM under
+   *   (`assistantDestinationStale`); the reply contacts no backend unless it is still the current one
    */
-  async function createAssistantResponse(userMessage: Message): Promise<void> {
+  async function createAssistantResponse(userMessage: Message, acceptedRevision: string | undefined): Promise<void> {
     if (userMessage.type !== "dm") {
       return;
     }
@@ -906,14 +1129,18 @@ export function createLlmLayer(rt: Runtime) {
     repliesInFlight.add(requesterId);
 
     try {
-      await streamAssistantReply(bot, userMessage);
+      await streamAssistantReply(bot, userMessage, acceptedRevision);
     } finally {
       repliesInFlight.delete(requesterId);
     }
   }
 
   /** Stream one assistant reply to `userMessage` into a new bot DM (see createAssistantResponse). */
-  async function streamAssistantReply(bot: User, userMessage: Message & { type: "dm" }): Promise<void> {
+  async function streamAssistantReply(
+    bot: User,
+    userMessage: Message & { type: "dm" },
+    acceptedRevision: string | undefined,
+  ): Promise<void> {
     const assistantMessage = MessageSchema.parse({
       id: newMessageId("llm"),
       type: "dm",
@@ -948,7 +1175,20 @@ export function createLlmLayer(rt: Runtime) {
         rt.broadcastStreamEvent(audience, { type: "end", messageId: assistantMessage.id });
       }
     };
+
+    // The destination changed after the route accepted this DM (or its record can't be read): the question
+    // was written for the one the sender was shown, so no backend is contacted and the reply ends as a failure.
+    const currentRevision = destinationRevision();
+    if (currentRevision === undefined || currentRevision !== acceptedRevision) {
+      rt.log.warn("The assistant's destination changed before a reply started; nothing was sent to it");
+      rt.updateMessage(assistantMessage, ASSISTANT_FAILURE_BODY, false);
+      rt.broadcastStreamEvent(audience, { type: "error", messageId: assistantMessage.id, error: ASSISTANT_FAILURE_BODY });
+      return;
+    }
+
     let body = "";
+    // Set once the reply is finalised at `ASSISTANT_REPLY_MAX_CHARS`, so nothing after it writes the message again.
+    let cutOff = false;
     rt.broadcastStreamEvent(audience, { type: "start", messageId: assistantMessage.id });
 
     try {
@@ -958,7 +1198,12 @@ export function createLlmLayer(rt: Runtime) {
           return;
         }
 
-        body += delta;
+        // Keep only what fits under the cap, never ending on half of a surrogate pair.
+        let kept = delta.slice(0, ASSISTANT_REPLY_MAX_CHARS - body.length);
+        if (kept.length < delta.length && /[\uD800-\uDBFF]$/.test(kept)) {
+          kept = kept.slice(0, -1);
+        }
+        body += kept;
 
         // Keep the in-memory copy current for mid-stream REST reads, but defer persistence and the
         // full-message broadcast to the end — clients follow the incremental delta events instead.
@@ -966,7 +1211,19 @@ export function createLlmLayer(rt: Runtime) {
           assistantMessage.body = body;
         }
 
-        rt.broadcastStreamEvent(audience, { type: "delta", messageId: assistantMessage.id, text: delta });
+        if (kept) {
+          rt.broadcastStreamEvent(audience, { type: "delta", messageId: assistantMessage.id, text: kept });
+        }
+
+        if (kept.length < delta.length) {
+          // Finalise BEFORE leaving the loop: leaving runs the generator's `finally`, and the on-device one
+          // waits there (up to its timeout) for the phone's model to end. Leaving also cancels the backend's
+          // body, so nothing more is read from it.
+          cutOff = true;
+          rt.updateMessage(assistantMessage, `${body.trim()}\n\n${ASSISTANT_REPLY_CUT_OFF_NOTE}`, false);
+          rt.broadcastStreamEvent(audience, { type: "end", messageId: assistantMessage.id });
+          return;
+        }
       }
 
       if (wiped() || withdrawn()) {
@@ -977,14 +1234,31 @@ export function createLlmLayer(rt: Runtime) {
       rt.updateMessage(assistantMessage, body.trim() || "(No response.)", false);
       rt.broadcastStreamEvent(audience, { type: "end", messageId: assistantMessage.id });
     } catch (error) {
+      if (cutOff) {
+        // The reply is already final; a failure while the backend was being let go changes nothing.
+        rt.log.debug(error, "LLM backend error after an over-long reply was cut off");
+        return;
+      }
+
       if (wiped() || withdrawn()) {
         abandon();
         return;
       }
 
       // The backend's error text (a URL, a model name, an HTTP status, a stack) is operator detail: log it and
-      // show the member one plain sentence. Any partial reply already streamed stays above it.
-      rt.log.error(error, "LLM backend error while answering a direct message");
+      // show the member one plain sentence. Any partial reply already streamed stays above it. Text the
+      // backend wrote, which may quote the member's question, goes to the debug log only: the error line
+      // names the backend and the status (`BackendError`), and a line that isn't JSON is named as such,
+      // since a JSON parse error's message quotes the line it failed on.
+      if (error instanceof BackendError) {
+        rt.log.error(`LLM backend error while answering a direct message: ${error.message}`);
+        rt.log.debug(`LLM backend error detail: ${error.detail}`);
+      } else if (error instanceof SyntaxError) {
+        rt.log.error("LLM backend error while answering a direct message: the backend sent a line that is not JSON");
+        rt.log.debug(`LLM backend error detail: ${backendText(error.message)}`);
+      } else {
+        rt.log.error(error, "LLM backend error while answering a direct message");
+      }
       rt.updateMessage(assistantMessage, `${body}\n\n${ASSISTANT_FAILURE_BODY}`.trim(), false);
       rt.broadcastStreamEvent(audience, { type: "error", messageId: assistantMessage.id, error: ASSISTANT_FAILURE_BODY });
     }
@@ -998,6 +1272,8 @@ export function createLlmLayer(rt: Runtime) {
     ensureBotUser,
     botConfigError,
     assistantBusyFor,
+    destinationRevision,
+    assistantDestinationStale,
     createAssistantResponse,
     listModels,
   };

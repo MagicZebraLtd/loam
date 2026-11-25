@@ -345,6 +345,23 @@ describe("message attachments", () => {
     expect(listed[0]?.attachments?.[0]?.id).toBe(attachment.id);
   });
 
+  it("stores an upload named several times in one message once", async () => {
+    const app = await makeApp();
+    const session = await newSession(app);
+    const attachment = (await upload(app, session.cookie)).json() as { id: string; mimeType: string };
+
+    const posted = await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { cookie: session.cookie },
+      payload: { type: "channelPost", channelId: "general", body: "once", attachments: [attachment, attachment, attachment, attachment] },
+    });
+    expect(posted.statusCode).toBe(201);
+    expect((posted.json() as { message: { attachments?: { id: string }[] } }).message.attachments?.map((entry) => entry.id)).toEqual([attachment.id]);
+    const stored = app.store.loadMessages().find((message) => "body" in message && message.body === "once");
+    expect(stored && "attachments" in stored ? stored.attachments?.map((entry) => entry.id) : undefined).toEqual([attachment.id]);
+  });
+
   it("rejects a message with no body and no attachments", async () => {
     const app = await makeApp();
     const session = await newSession(app);

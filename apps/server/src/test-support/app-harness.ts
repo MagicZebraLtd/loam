@@ -5,6 +5,7 @@
  * Map of the server tests (src/*.test.ts). On this harness:
  *   admin, sessions, http-hardening: bootstrap and claims, config API, profiles; identity minting; headers, logs
  *   channels, messages, content-lifecycle, moderation, attachments: content, rosters, retention, bans, reports
+ *   member-safety: copied names and seeds, removed avatar files, moderator scope, mesh records, file names
  *   kill-switch, db-encryption: Emergency Reset and panic; SQLCipher at rest, key handoff, the wipe journal
  *   realtime-privacy, transport, sync, mesh, assistant: socket audiences, transport encryption, sync, mail, LLM
  * The rest keep a small harness of their own and are named for their module (db, llm, sync-transport...) or
@@ -202,6 +203,15 @@ export async function claim(app: LoamApp, cookie: string, secret: string): Promi
     headers: { cookie },
     payload: { secret },
   });
+}
+
+/**
+ * The assistant destination revision the node advertises (`/api/bootstrap`), or undefined while no backend
+ * is active. A DM to the assistant must repeat it (`assistantDestinationRevision`, docs/06).
+ */
+export async function assistantRevision(app: LoamApp): Promise<string | undefined> {
+  const response = await app.server.inject({ method: "GET", url: "/api/bootstrap" });
+  return (response.json() as { networkConfig: { assistantDestinationRevision?: string } }).networkConfig.assistantDestinationRevision;
 }
 
 export type OllamaChatRequestBody = { model?: string; stream?: boolean; messages?: { role: string; content: string }[] };

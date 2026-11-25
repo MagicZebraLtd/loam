@@ -42,7 +42,9 @@ export interface MeshIdentity {
 /** Domain-separation labels. Fixed byte strings so both ends produce identical envelopes. */
 const KX_BIND_LABEL = "loam.mesh.kxbind.v1";
 const SEAL_INFO = "loam.mesh.seal.v1";
-const INNER_SIG_LABEL = "loam.mesh.inner.v1";
+const INNER_SIG_LABEL = "loam.mesh.inner.v2";
+/** The inner payload version {@link sealMailbox} writes and {@link openMailbox} accepts. */
+const INNER_VERSION = 2;
 const TAG_INFO = "loam.mesh.tag.v1";
 
 const utf8 = new TextEncoder();
@@ -244,6 +246,7 @@ export function verifyKxBinding(signPublic: string, kxPublic: string, kxSig: str
  * (`from`) is only a hash of it and cannot be reversed.
  */
 interface SealedInner {
+  v: number; // inner payload version, always INNER_VERSION
   from: string; // sender meshId
   signPublic: string; // sender Ed25519 public key (base64url)
   fromKx: string; // sender X25519 public key (base64url)
@@ -252,31 +255,28 @@ interface SealedInner {
 }
 
 /**
- * The exact bytes the sender signs / the recipient verifies for the inner payload:
- * "loam.mesh.inner.v1" ‖ from ‖ fromKx ‖ pt ‖ aad, as UTF-8, with no length prefixes.
+ * The exact bytes the sender signs and the recipient verifies for the inner payload (version 2):
+ * "loam.mesh.inner.v2", then `from`, `fromKx`, `toKx`, `aad` and `pt` in that order, each as a 4-byte
+ * big-endian byte length followed by its UTF-8 bytes (docs/16, "Inner signature encoding").
  *
- * The bare concatenation is unambiguous over everything {@link openMailbox} accepts, so the wire format
- * (which every released build since 0.3.0 signs and verifies) stays as it is (docs/16, "Inner signature
- * encoding"). The label is fixed and is not a prefix of the only other message a mesh signing key signs
- * ("loam.mesh.kxbind.v1" ‖ kx), and neither is that one a prefix of it. `from` must equal the id derived
- * from the enclosed signing key, which is always 31 characters, and `fromKx` must be the canonical
- * spelling of a 32-byte key, always 43 characters ({@link isCanonicalKey}), so the field boundaries up to
- * `pt` sit at fixed offsets. That leaves `pt` ‖ `aad`: the verifier never takes `aad` from the blob, it
- * rebuilds it from the outer fields as `<toTag>|<ttlExpiresAt>`, and the server opens a blob only when
- * `toTag` is one of its own 22-character tags. Base64url has no `|` and a decimal timestamp has none, so a
- * string of that shape holds exactly one `|`, and of two such strings where one ends the other, both
- * share that `|`, hence the same timestamp and the same 22 characters before it: they are equal. Signed
- * bytes therefore determine every field, and no signature can be read as covering a different split.
- * Any new field must move to a new label with length-prefixed fields instead of being appended here.
+ * `toKx` is the canonical spelling of the recipient's X25519 public key. The sender signs the key it sealed
+ * to, and the recipient verifies against the key it derives from its own secret, so mail opened by one
+ * recipient can't be sealed again to another and still verify as the sender's. Version 1 signed only
+ * label ‖ from ‖ fromKx ‖ pt ‖ aad, and `aad` names the recipient only through the routing tag, which comes
+ * from the unauthenticated `mailboxToken` on a card that every contact of the recipient holds. So someone
+ * who was a contact of two people could hand the first a card with their own keys and the second's token,
+ * open the first's mail, and seal it on to the second, who took it as mail from the first. Version 1 is
+ * therefore no longer signed or accepted. The length prefixes make every field boundary explicit.
  */
-function innerSigMessage(from: string, fromKx: string, pt: string, aad: string): Uint8Array {
-  return concatBytes(
-    utf8.encode(INNER_SIG_LABEL),
-    utf8.encode(from),
-    utf8.encode(fromKx),
-    utf8.encode(pt),
-    utf8.encode(aad),
-  );
+function innerSigMessage(from: string, fromKx: string, toKx: string, aad: string, pt: string): Uint8Array {
+  const parts: Uint8Array[] = [utf8.encode(INNER_SIG_LABEL)];
+  for (const field of [from, fromKx, toKx, aad, pt]) {
+    const bytes = utf8.encode(field);
+    const length = new Uint8Array(4);
+    new DataView(length.buffer).setUint32(0, bytes.length, false);
+    parts.push(length, bytes);
+  }
+  return concatBytes(...parts);
 }
 
 /** Derive the XChaCha20-Poly1305 key from the ECDH shared secret (HKDF-SHA256). */
@@ -303,6 +303,11 @@ export function sealMailbox(input: {
   if (!isCanonicalKey(input.sender.kxPublic, 32)) {
     throw new Error("sender kxPublic must be a canonical 32-byte key"); // openMailbox would refuse it
   }
+  // The signature covers the recipient key as written, and the recipient verifies against its canonical
+  // spelling, so any other spelling would seal mail that never opens.
+  if (!isCanonicalKey(input.recipientKxPublic, 32)) {
+    throw new Error("recipientKxPublic must be a canonical 32-byte key");
+  }
   const recipientKxPublic = b64urlDecode(input.recipientKxPublic);
   const ephemeralSecret = x25519.utils.randomPrivateKey();
   const ephemeralPublic = x25519.getPublicKey(ephemeralSecret);
@@ -311,10 +316,11 @@ export function sealMailbox(input: {
 
   const from = meshIdFromSignPublic(input.sender.signPublic);
   const sig = ed25519.sign(
-    innerSigMessage(from, input.sender.kxPublic, input.plaintext, input.aad),
+    innerSigMessage(from, input.sender.kxPublic, input.recipientKxPublic, input.aad, input.plaintext),
     b64urlDecode(input.sender.signSecret),
   );
   const inner: SealedInner = {
+    v: INNER_VERSION,
     from,
     signPublic: input.sender.signPublic,
     fromKx: input.sender.kxPublic,
@@ -346,8 +352,8 @@ export function isCanonicalSealedBlob(blob: string): boolean {
 
 /**
  * True when `value` is the canonical unpadded base64url spelling of exactly `byteLength` bytes, the only
- * form {@link b64urlEncode} produces for a key. A 32-byte key is then always 43 characters, which is what
- * keeps the inner signature's field boundaries fixed (see {@link innerSigMessage}).
+ * form {@link b64urlEncode} produces for a key. A 32-byte key is then always 43 characters, and each key
+ * has exactly one spelling in the inner signature (see {@link innerSigMessage}).
  */
 function isCanonicalKey(value: string, byteLength: number): boolean {
   try {
@@ -361,8 +367,9 @@ function isCanonicalKey(value: string, byteLength: number): boolean {
 /**
  * Open and verify a sealed blob. Returns the authenticated sender identity + plaintext, or `null` on
  * ANY failure: malformed blob, decrypt/tag failure (wrong recipient key, tampered blob, or `aad` that
- * differs from the sealed one), an invalid inner sender signature, a `from` that doesn't derive
- * from the enclosed signing key, or a `fromKx` that isn't the canonical spelling of a 32-byte key.
+ * differs from the sealed one), an inner payload that isn't version 2, an invalid inner sender signature
+ * (including one made for another recipient's key), a `from` that doesn't derive from the enclosed
+ * signing key, or a `fromKx` that isn't the canonical spelling of a 32-byte key.
  */
 export function openMailbox(input: {
   blob: string;
@@ -386,6 +393,7 @@ export function openMailbox(input: {
     const inner = JSON.parse(utf8Decode.decode(plaintextBytes)) as Partial<SealedInner>;
 
     if (
+      inner.v !== INNER_VERSION || // version 1 mail (and anything unversioned) is refused, see innerSigMessage
       typeof inner.from !== "string" ||
       typeof inner.signPublic !== "string" ||
       typeof inner.fromKx !== "string" ||
@@ -398,14 +406,15 @@ export function openMailbox(input: {
     // The meshId must derive from the enclosed signing key (defeats a swapped `from`).
     if (meshIdFromSignPublic(inner.signPublic) !== inner.from) return null;
 
-    // `fromKx` must be a canonical 32-byte key, as every sender has always written it. A longer string
-    // would let the signed bytes be split differently between `fromKx` and `pt` (innerSigMessage).
+    // `fromKx` must be a canonical 32-byte key, the only spelling a sender writes, so one key has one
+    // signed form.
     if (!isCanonicalKey(inner.fromKx, 32)) return null;
 
-    // The inner signature must be valid over the exact signed bytes (binds sender + body + aad).
+    // The inner signature must be valid over the exact signed bytes (binds sender, recipient, aad and body).
+    // The recipient key is the one derived from our own secret, never anything the blob says.
     const ok = ed25519.verify(
       b64urlDecode(inner.sig),
-      innerSigMessage(inner.from, inner.fromKx, inner.pt, input.aad),
+      innerSigMessage(inner.from, inner.fromKx, b64urlEncode(recipientKxPublic), input.aad, inner.pt),
       b64urlDecode(inner.signPublic),
     );
     if (!ok) return null;

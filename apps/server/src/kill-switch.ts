@@ -57,6 +57,7 @@ export function createKillSwitch(ctx: AppContext) {
       ctx.wipeInFlight = undefined;
     });
     ctx.wipeInFlight = attempt;
+    ctx.latestWipe = attempt;
     return attempt;
   }
 
@@ -106,6 +107,8 @@ export function createKillSwitch(ctx: AppContext) {
     ctx.hostDeviceUserId = undefined;
     // And its message notifications (their text is this network's content) go now, through the launcher,
     // whoever ran the reset: the host's WebView may be suspended or offline and never hear the `wipe` event.
+    // With them goes the record of which messages they showed, so nothing from before the reset is taken back later.
+    ctx.forgetHostNotices();
     notifyHostOfReset();
     // Sync goes off before anything is deleted, in every branch below (they persist the paused config or carry
     // it in the wipe journal): the wipe empties the tombstones and provenance that would refuse a re-import.
@@ -135,11 +138,14 @@ export function createKillSwitch(ctx: AppContext) {
       return journaled ? { complete: false, journaled, phase: "delete-pending" } : { complete: false, journaled };
     }
 
-    /** Synchronous in-memory lockdown for an INCOMPLETE wipe: 503-gate on, drop every in-memory mirror,
-     *  tell clients to purge, close sockets, then report the distinct incomplete notice. Used by the
-     *  no-hook fail-closed paths (a phase-write failure and a deletion failure) so nothing stale is served
-     *  while the node is stuck; the fixed-key hook branch does its own equivalent lockdown up front. */
-    function lockDownAndReportIncomplete(message: string): KillSwitchResult {
+    /**
+     * Synchronous in-memory lockdown: 503 gate on, every in-memory mirror and credential map emptied, clients
+     * told to purge (before their sockets close, or the broadcast would reach no one), sockets closed. Every
+     * branch runs it first, before its first durable write or await, so a request admitted before the reset
+     * that reaches a handler while it runs finds no user, session or content to act on or write back.
+     * `appConfig` is deliberately left intact: it rides in the wipe journal and the fresh store.
+     */
+    function lockDownInMemory(): void {
       ctx.awaitingWipeRestart = true;
       ctx.data = { users: [], channels: [], messages: [] };
       ctx.attachmentOwners.clear();
@@ -158,15 +164,20 @@ export function createKillSwitch(ctx: AppContext) {
       for (const pending of [...ctx.pendingSockets]) {
         pending.close();
       }
+    }
+
+    /** The lockdown for an INCOMPLETE wipe, then the distinct incomplete notice, so nothing stale is served
+     *  while the node is stuck. Used by every fail-closed path after the lockdown that opened the reset. */
+    function lockDownAndReportIncomplete(message: string): KillSwitchResult {
+      lockDownInMemory();
       ctx.server.log.error(message);
       reportBootNotice(message, "kill_switch_wipe_incomplete");
       return incompleteResult();
     }
 
-    // Raise the 503 lockdown gate SYNCHRONOUSLY, before ANY branch or await, for EVERY wipe path. The
-    // in-process reopen paths (no-hook fixed-key, ephemeral, plaintext logical) reset the in-memory
-    // `data`/`sessions` only in the shared tail, AFTER their first `await rm(...)`; without this gate a
-    // concurrent request landing in that window would read the still-populated mirror with a 200. The gate
+    // Raise the 503 lockdown gate SYNCHRONOUSLY, before ANY branch or await, for EVERY wipe path. A request
+    // that arrives while the wipe runs is refused in `onRequest`; one admitted before it is refused in
+    // `preHandler`, which also compares the wipe generation it was admitted under. The gate
     // covers the whole wipe; it is LIFTED
     // again (`awaitingWipeRestart = false`) only on the in-process SUCCESS return once `loadData()` has
     // repopulated `data` from the fresh empty DB. The hooked fixed-key branch returns with the gate still
@@ -178,6 +189,11 @@ export function createKillSwitch(ctx: AppContext) {
     // memory and no client told to purge. It is reported like every other incomplete wipe (503-locked, the
     // `wipe` event broadcast, sockets closed), so the route answers honestly and a reopen retries.
     try {
+      // The in-memory lockdown runs FIRST, in every branch, before any durable write or await. The in-process
+      // branches used to empty the mirror only in the shared tail, after their first await: a request whose
+      // body arrived in that gap still found its user and session, and its write landed in the fresh store.
+      lockDownInMemory();
+
       // A `persistent`/`passphrase` key is FIXED (Keystore-held on Android, config-held on desktop) —
       // this process has no way to mint a new one. Recreating the encrypted DB in-process (as the
       // ephemeral/off branches below do) would just re-key the fresh database under the SAME key that
@@ -191,34 +207,10 @@ export function createKillSwitch(ctx: AppContext) {
         const hook = ctx.lifecycle.wipeRestartHook();
 
         if (hook) {
-          // The in-memory lockdown runs FIRST, synchronously, before any durable write: this branch hands off
-          // to a launcher restart and never reloads, so the mirror is emptied here rather than in the shared
-          // tail, and a request queued behind this turn of the event loop sees the 503, not stale content.
-          // `appConfig` is deliberately left intact by this block; it rides in the wipe journal just below and
-          // reaches config.json before the `key-clear-ready` journal and the hook.
-          ctx.awaitingWipeRestart = true;
-          ctx.data = { users: [], channels: [], messages: [] };
-          ctx.attachmentOwners.clear();
-          ctx.sessions.clear();
-          ctx.identityTokens.clear();
-          ctx.claimAttempts.clear();
-          ctx.panicAttempts.clear();
-          ctx.transportSessions.clear();
-          ctx.sync.forgetPeerState();
-          ctx.mesh.forget();
-
-          // Notify still-connected clients to purge their local caches BEFORE closing their sockets —
-          // closing first would leave the broadcast with no one left to reach.
-          ctx.broadcast({ type: "wipe" });
-
-          for (const { socket } of ctx.sockets) {
-            socket.close();
-          }
-          ctx.sockets.clear();
-          for (const pending of [...ctx.pendingSockets]) {
-            pending.close();
-          }
-
+          // This branch hands off to a launcher restart and never reloads; the lockdown at the top of the guard
+          // has already emptied the mirror. `appConfig` rides in the wipe journal just below and reaches
+          // config.json before the `key-clear-ready` journal and the hook.
+          //
           // Commit the wipe INTENT and the effective CONFIG together, atomically, as the FIRST durable action:
           // the wipe journal `{ phase: "delete-pending", config }`. A SIGKILL after this single write leaves BOTH
           // on disk, so a boot-time resume can restore config.json from the snapshot before it clears the
@@ -360,6 +352,8 @@ export function createKillSwitch(ctx: AppContext) {
               `confirmed; refusing to open a fresh database (a resurrected phase would re-wipe it). ${restartAdvice()}`,
           );
         }
+        // The journal is gone, so a failure from here on can't promise that a restart finishes the wipe.
+        journaled = false;
         ctx.store = ctx.lifecycle.openLoamStore();
         // The wipe destroys data, not settings; the fresh encrypted DB starts with an empty config table, so
         // re-persist the effective config into it — the FULL config, sync token included: the DB row is
@@ -499,6 +493,7 @@ export function createKillSwitch(ctx: AppContext) {
           await rm(join(ctx.dataDir, name), { force: true }).catch(() => undefined);
         }
       }
+      // The lockdown ran before the awaits above; clear again for anything a handler already under way added.
       ctx.attachmentOwners.clear();
       ctx.sessions.clear();
       // Drop every secure identity token (docs/20): the DB rows are gone (wipeAll / encrypted file delete),
@@ -535,9 +530,14 @@ export function createKillSwitch(ctx: AppContext) {
             `cannot record it as finished. ${restartAdvice()}`,
         );
       }
+      if (journalToClear) {
+        // Cleared: a failure from here on can't promise that a restart finishes the wipe.
+        journaled = false;
+      }
       // Rotate the transport keypair + drop all live sessions: the old join QR stops working and no
-      // captured session key survives the wipe (docs/08). loadData reloaded whatever was persisted
-      // (the old key on an unencrypted wipe), so rotate explicitly to guarantee a fresh one on both paths.
+      // captured session key survives the wipe (docs/08). Every branch has already removed the stored key
+      // (`wipeAll` deletes its row, the others delete the file), so the checkpointed file holds none; rotate
+      // explicitly anyway, so a fresh key and an empty session map never depend on what loadData found.
       ctx.rotateTransportIdentity();
       // Drop cached puller-side sessions to peers, and the per-peer refusal/downgrade memory (it names message
       // ids) — RAM hygiene during an emergency wipe (docs/08).

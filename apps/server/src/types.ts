@@ -73,6 +73,8 @@ export type AppData = {
  * Only what the notification shows: who, where, and the start of the text.
  */
 export type HostMessageNotice = {
+  /** The notified message's id, so the notification can be taken back when the message changes or goes. */
+  messageId: string;
   /** The client's conversation key: `dm:<authorId>` or `channel:<channelId>`. */
   conversation: string;
   /** A direct message to the host's person (not a channel post or reply). */
@@ -86,6 +88,13 @@ export type HostMessageNotice = {
   attachment: boolean;
   location: boolean;
 };
+
+/**
+ * Take back a host phone notification (`globalThis.__loamWithdrawHostNotice`, realtime.ts): by the message
+ * it showed (deleted, edited, removed by a moderator, expired, or its author shadow-banned), or a whole
+ * conversation (a `HostMessageNotice.conversation` key) the host's person can no longer read.
+ */
+export type HostNoticeWithdrawal = { messageId: string } | { conversation: string };
 
 export type ClientEvent =
   | {
@@ -227,10 +236,12 @@ export type AppOptions = {
   /** Node version string shown to clients (via `/api/config`). Defaults to `"dev"`. */
   version?: string;
   /**
-   * Cap on how many *new* anonymous identities a single client IP may mint within
+   * Cap on how many *new* anonymous identities a single client address may mint within
    * `identityWindowMs`, bounding the user-row/session growth an attacker can force by discarding its
    * session cookie and re-requesting. A device that keeps its cookie mints once and is unaffected; on
-   * a LAN each device has its own IP, so this is effectively per-device. Defaults to 60.
+   * a LAN each device has its own address, so this is effectively per-device. An IPv4-mapped IPv6
+   * address counts as its IPv4 form. A whole IPv6 /64 may mint `subnetIdentityFactor` (defaults.ts)
+   * times this, so cycling addresses inside one subnet buys no more. Defaults to 60.
    */
   maxNewIdentitiesPerWindow?: number;
   /**
@@ -244,7 +255,7 @@ export type AppOptions = {
    * they can post, upload or create a channel. On by default; tests that aren't about the rules turn it off.
    */
   requireRulesAcceptance?: boolean;
-  /** Sliding window (ms) for `maxNewIdentitiesPerWindow`. Defaults to 10 minutes. */
+  /** Fixed window (ms) for `maxNewIdentitiesPerWindow` and its per-/64 bound. Defaults to 10 minutes. */
   identityWindowMs?: number;
   /**
    * How long (ms) an identity that nobody ever used may exist before the reaper removes it. Every cookie-less

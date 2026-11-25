@@ -4,7 +4,9 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { verifyKxBinding } from "@loam/crypto";
+import { generateDisplayName } from "@loam/display-name";
 import { ChannelSchema, type Message, type MessageAttachment, MessageSchema, type SealedMessage, SyncAttachmentResponseSchema, type SyncDigest, SyncDigestSchema, type SyncLinkRequest, type SyncLinkResponse, SyncLinkResponseSchema, SyncMessagesResponseSchema, type SyncPeer, type SyncStatusReport, type User, UserSchema } from "@loam/schema";
+import { activeAssistantName, avatarNamesImage, avatarSeedImpersonates, displayNameComparisonForm, displayNameTakenByOther, stripControlAndFormatCharacters } from "./identity.js";
 import { attachmentFileMaxBytes, attachmentFileName, attachmentMaxBytes, isAcceptableAttachmentBytes, isImageAttachmentMime, missingAttachmentBackoffMs, missingAttachmentMaxAgeMs, missingAttachmentMaxRecordsPerPass } from "./media.js";
 import { type PeerTransportPosture, type PeerTransportSession, fetchPeerTransportPosture, handshakeWithPeer, sealedFetch } from "./sync-transport.js";
 import type { MeshLayer } from "./mesh.js";
@@ -13,6 +15,9 @@ import type { Runtime } from "./runtime.js";
 /** How soon to try a link again after the request itself failed (unreachable, not yet a session). A code
  *  lives 10 minutes, so retries are frequent; a refused code is never retried. */
 const LINK_RETRY_MS = 30_000;
+
+/** The longest display name a user record may hold, read from `UserSchema` so the two can't drift apart. */
+const DISPLAY_NAME_MAX_LENGTH = UserSchema.shape.displayName.maxLength ?? 80;
 
 /** How a node describes itself when it links to a peer, and what it does once a link is made. */
 export type SyncLinkHooks = {
@@ -587,6 +592,9 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
+        // A peer (or someone on the path to an unpinned one) could otherwise send this node to any address
+        // it can reach, loopback included. A 3xx, or an opaque redirect, is not ok and fails below.
+        redirect: "manual",
       });
 
       if (!response.ok) {
@@ -661,6 +669,22 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
   }
 
   /**
+   * The name an imported author gets in place of a blank or borrowed one: the generated name for `id`, unless
+   * a local person (or the assistant) already uses it, since anyone may type a name shaped like a generated
+   * one. Then the generated name with `.` and the id's last 4 characters, its last 8, or the whole id, the
+   * first that is free and within the display name limit; failing all of those, the id cut to that limit.
+   */
+  function freeGeneratedName(id: string, assistantName: string | undefined): string {
+    const generated = generateDisplayName(id);
+    for (const candidate of [generated, `${generated}.${id.slice(-4)}`, `${generated}.${id.slice(-8)}`, `${generated}.${id}`]) {
+      if (candidate.length <= DISPLAY_NAME_MAX_LENGTH && !displayNameTakenByOther(candidate, id, rt.data.users, assistantName)) {
+        return candidate;
+      }
+    }
+    return id.slice(0, DISPLAY_NAME_MAX_LENGTH);
+  }
+
+  /**
    * Import the author record of a message this node has just ACCEPTED: only the
    * authors of accepted messages, never every user in a peer's payload — a peer could otherwise push tens of
    * thousands of arbitrary user records per batch. Authority and moderation state are stripped — a peer's
@@ -700,13 +724,31 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
       return;
     }
 
+    // Avatar files never sync, so an uploaded picture on a peer's record can only dangle or name one of this
+    // node's files (which the record would then keep from being deleted). A generated avatar drawn from
+    // another record's seed, and a name that reads as another's, would let the author pass as someone here:
+    // the generated look and name for the id are used instead.
+    const avatar =
+      avatarNamesImage(user.avatar) || (user.avatar?.seed !== undefined && avatarSeedImpersonates(user.avatar.seed, user.id, rt.data.users))
+        ? undefined
+        : user.avatar;
+    const strippedName = stripControlAndFormatCharacters(user.displayName);
+    const assistantName = activeAssistantName(rt.appConfig.llm);
+    const displayName =
+      !displayNameComparisonForm(strippedName) || displayNameTakenByOther(strippedName, user.id, rt.data.users, assistantName)
+        ? freeGeneratedName(user.id, assistantName)
+        : strippedName;
+
     const sanitized = UserSchema.parse({
       ...user,
+      displayName,
+      avatar,
       isAdmin: false,
       roles: undefined,
       banned: undefined,
       shadowBanned: undefined,
       pending: undefined,
+      timeoutUntil: undefined, // a peer's moderator timeout, like its ban, has no force here
       identityKey: importedKey,
     });
     rt.store.transaction(() => {
@@ -741,6 +783,7 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
       try {
         const response = await fetch(`${peerUrl.replace(/\/+$/, "")}/api/attachments/${fileName}`, {
           signal: controller.signal,
+          redirect: "manual", // as in fetchPeerText: a redirect is not ok and fails below
         });
         if (!response.ok) {
           throw new Error(`Peer answered ${response.status}`);
@@ -816,8 +859,9 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
 
         // (The generation check above also covers this: a kill switch during the fetch deleted the attachments
         // dir, so nothing may recreate it and write an orphaned file the wipe was meant to destroy — docs/15 #2.)
-        await mkdir(rt.attachmentsDir, { recursive: true });
-        await writeFile(filePath, bytes);
+        // Private to the node's OS user, like a local upload.
+        await mkdir(rt.attachmentsDir, { recursive: true, mode: 0o700 });
+        await writeFile(filePath, bytes, { mode: 0o600 });
         written.push(attachment);
 
         // ...and if the wipe landed *during* the write, remove the file we just orphaned.
@@ -963,8 +1007,8 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
             continue;
           }
 
-          await mkdir(rt.attachmentsDir, { recursive: true });
-          await writeFile(filePath, bytes);
+          await mkdir(rt.attachmentsDir, { recursive: true, mode: 0o700 });
+          await writeFile(filePath, bytes, { mode: 0o600 });
 
           if (rt.wipeGeneration !== generation) {
             await rm(filePath, { force: true });
@@ -1200,6 +1244,15 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
     ) {
       return "refuse";
     }
+    // ...and the two content flags `createMessage` checks on a post or reply: a shared location while location
+    // sharing is off, and attachments while attachments are off.
+    if (
+      (message.type === "channelPost" || message.type === "channelReply") &&
+      ((message.location && !rt.appConfig.features.enableLocationSharing) ||
+        (message.attachments?.length && !rt.appConfig.features.enableAttachments))
+    ) {
+      return "refuse";
+    }
 
     // An import may only EDIT the record it names, never turn it into a different one: the checks
     // below vet the INCOMING message, so without this a peer that knows a private message's id could
@@ -1227,6 +1280,10 @@ export function createSyncEngine(rt: Runtime, mesh: MeshLayer, link?: SyncLinkHo
       // still on offer this round may simply not have landed yet — retry next round, don't remember it.
       if (!target) {
         return pending.ids.has(message.targetMessageId) && !rt.tombstones.has(message.targetMessageId) ? "defer" : "refuse";
+      }
+      // A reaction may target a post or a reply, never another reaction.
+      if (target.type === "reaction") {
+        return "refuse";
       }
       if (rt.messageAudienceUserIds(message) !== undefined) {
         return "refuse";

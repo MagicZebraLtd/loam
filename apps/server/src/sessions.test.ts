@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { LoamApp } from "./app.js";
+import { subnetIdentityFactor } from "./defaults.js";
 import { makeSessionToken, makeSessionUserId } from "./identity.js";
+import { DEFAULT_MAX_ENTRIES } from "./rate-limit.js";
 import { makeApp, newSession, sessionCookie, teardownApps } from "./test-support/app-harness.js";
 
 afterEach(teardownApps);
@@ -24,6 +27,128 @@ describe("anonymous identity minting limit", () => {
     const returning = await app.server.inject({ method: "GET", url: "/api/config", headers: { cookie } });
     expect(returning.statusCode).toBe(200);
   });
+});
+
+describe("new-identity budget by address and IPv6 /64", () => {
+  const max = 3;
+
+  /** The `n`th address (from 1) in the /64 `prefix`, e.g. `fd00:1:2:3::5`. */
+  function inSubnet(prefix: string, n: number): string {
+    return `${prefix}::${n.toString(16)}`;
+  }
+
+  /** A cookie-less `GET /api/config` from `remoteAddress`: mints an identity unless the budget refuses. */
+  async function mintFrom(app: LoamApp, remoteAddress: string): Promise<number> {
+    return (await app.server.inject({ method: "GET", url: "/api/config", remoteAddress })).statusCode;
+  }
+
+  it("stops a /64 at the subnet bound however many of its addresses mint, with the usual 429", async () => {
+    const app = await makeApp(undefined, { maxNewIdentitiesPerWindow: max });
+    const usersBefore = app.store.loadUsers().length;
+    const statuses: number[] = [];
+    for (let n = 1; n <= max * subnetIdentityFactor + 10; n += 1) {
+      // One mint per address: every address stays under its own bound.
+      statuses.push(await mintFrom(app, inSubnet("fd00:1:2:3", n)));
+    }
+
+    expect(statuses.filter((status) => status === 200)).toHaveLength(max * subnetIdentityFactor);
+    expect(statuses.slice(max * subnetIdentityFactor).every((status) => status === 429)).toBe(true);
+    expect(app.store.loadUsers().length - usersBefore).toBe(max * subnetIdentityFactor);
+
+    const refused = await app.server.inject({ method: "GET", url: "/api/config", remoteAddress: inSubnet("fd00:1:2:3", 0xffff) });
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json()).toMatchObject({ code: "rate_limited" });
+  });
+
+  it("gives each /64 its own bound", async () => {
+    const app = await makeApp(undefined, { maxNewIdentitiesPerWindow: max });
+    for (let n = 1; n <= max * subnetIdentityFactor; n += 1) {
+      expect(await mintFrom(app, inSubnet("fd00:1:2:3", n))).toBe(200);
+    }
+    expect(await mintFrom(app, inSubnet("fd00:1:2:3", 0xfff0))).toBe(429);
+
+    expect(await mintFrom(app, inSubnet("fd00:1:2:4", 1))).toBe(200);
+  });
+
+  it("counts an IPv4-mapped IPv6 address as its IPv4 form", async () => {
+    const app = await makeApp(undefined, { maxNewIdentitiesPerWindow: max });
+    expect(await mintFrom(app, "::ffff:10.0.0.5")).toBe(200);
+    expect(await mintFrom(app, "10.0.0.5")).toBe(200);
+    expect(await mintFrom(app, "::ffff:10.0.0.5")).toBe(200);
+    expect(await mintFrom(app, "10.0.0.5")).toBe(429);
+    expect(await mintFrom(app, "::ffff:10.0.0.5")).toBe(429);
+
+    expect(await mintFrom(app, "10.0.0.6")).toBe(200);
+  });
+
+  it("keeps the IPv4 bound per address, with no wider bucket", async () => {
+    const app = await makeApp(undefined, { maxNewIdentitiesPerWindow: max });
+    for (let n = 0; n < max; n += 1) {
+      expect(await mintFrom(app, "192.168.4.20")).toBe(200);
+    }
+    expect(await mintFrom(app, "192.168.4.20")).toBe(429);
+
+    // More addresses in one IPv4 /24 than an IPv6 /64 may mint for: each still has its own budget.
+    for (let n = 1; n <= max * subnetIdentityFactor + 5; n += 1) {
+      expect(await mintFrom(app, `192.168.5.${n}`)).toBe(200);
+    }
+  });
+
+  it("bounds the user rows cookie-less admin claims create from one /64", async () => {
+    const app = await makeApp({ admin: { bootstrap: "setupCode" } }, { maxNewIdentitiesPerWindow: max });
+    const usersBefore = app.store.loadUsers().length;
+    for (let n = 1; n <= max * subnetIdentityFactor + 10; n += 1) {
+      await app.server.inject({
+        method: "POST",
+        url: "/api/admin/claim",
+        payload: { secret: "wrong" },
+        remoteAddress: inSubnet("fd00:1:2:3", n),
+      });
+    }
+
+    expect(app.store.loadUsers().length - usersBefore).toBe(max * subnetIdentityFactor);
+  });
+
+  it("a /64 that has spent its bound adds no entries, so its flood can't reset another address's budget", async () => {
+    const app = await makeApp({ admin: { bootstrap: "setupCode" } }, { maxNewIdentitiesPerWindow: 1 });
+    // An IPv4 address spends its whole budget.
+    expect(await mintFrom(app, "10.0.0.9")).toBe(200);
+    expect(await mintFrom(app, "10.0.0.9")).toBe(429);
+    const usersBefore = app.store.loadUsers().length;
+
+    // The claim route counts per address, so the flood reaches the identity budget from every address.
+    for (let n = 1; n <= DEFAULT_MAX_ENTRIES + 50; n += 1) {
+      await app.server.inject({
+        method: "POST",
+        url: "/api/admin/claim",
+        payload: { secret: "wrong" },
+        remoteAddress: inSubnet("fd00:1:2:3", n),
+      });
+    }
+
+    // The /64 minted up to its bound and no further: one entry per address that minted, the /64's own, and
+    // the IPv4 address's. The refused requests after that added nothing.
+    expect(app.store.loadUsers().length - usersBefore).toBe(subnetIdentityFactor);
+    expect(app.rateLimiterEntryCounts().identity).toBe(subnetIdentityFactor + 2);
+    // So the IPv4 address's window was never evicted: it is still out of budget.
+    expect(await mintFrom(app, "10.0.0.9")).toBe(429);
+  }, 60_000);
+
+  it("keeps the budget's tables within their cap under a flood of fresh subnets", async () => {
+    const app = await makeApp({ admin: { bootstrap: "setupCode" } }, { maxNewIdentitiesPerWindow: 1 });
+    // One address in each of more /64s than a table holds: every one is allowed, and each adds an address
+    // entry and a subnet entry.
+    for (let n = 1; n <= DEFAULT_MAX_ENTRIES + 50; n += 1) {
+      await app.server.inject({
+        method: "POST",
+        url: "/api/admin/claim",
+        payload: { secret: "wrong" },
+        remoteAddress: `fd00:1:2:${n.toString(16)}::1`,
+      });
+    }
+
+    expect(app.rateLimiterEntryCounts().identity).toBe(DEFAULT_MAX_ENTRIES * 2);
+  }, 60_000);
 });
 
 describe("session identity minting", () => {

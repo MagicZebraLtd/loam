@@ -76,7 +76,10 @@ async function httpText(
   }
 
   try {
-    const response = await fetchImpl(url, { ...init, signal: controller.signal });
+    // Never follow a redirect: a peer, or someone on the path to an unpinned one, could otherwise send this
+    // node to any address it can reach, loopback included. A 3xx (or an opaque redirect, status 0) is not
+    // ok, so every caller treats it as a failed request.
+    const response = await fetchImpl(url, { ...init, signal: controller.signal, redirect: "manual" });
     const text = await readCappedText(response, maxBytes);
     return {
       status: response.status,

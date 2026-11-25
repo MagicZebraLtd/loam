@@ -160,6 +160,31 @@ describe("POST /api/access/redeem", () => {
     expect((await redeem(app, newcomer.cookie, code)).statusCode).toBe(403);
   });
 
+  it("counts bad attempts per address, so one device on an IPv6 LAN can't lock its /64 out", async () => {
+    const app = await makeApp({ access: { joinPolicy: "approval" } });
+    const guesser = "fd00:1:2:3::a";
+    const neighbour = "fd00:1:2:3::b";
+    const sessionFrom = async (remoteAddress: string): Promise<string> => {
+      const response = await app.server.inject({ method: "GET", url: "/api/config", remoteAddress });
+      const setCookie = response.headers["set-cookie"];
+      return (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(";")[0]!;
+    };
+    const redeemFrom = (remoteAddress: string, cookie: string, code: string) =>
+      app.server.inject({ method: "POST", url: "/api/access/redeem", headers: { cookie }, payload: { code }, remoteAddress });
+    const guesserCookie = await sessionFrom(guesser);
+    const neighbourCookie = await sessionFrom(neighbour);
+    const { code } = (await hostInvite(app)).json() as { code: string };
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      expect((await redeemFrom(guesser, guesserCookie, "A".repeat(22))).statusCode).toBe(403);
+    }
+
+    const admitted = await redeemFrom(neighbour, neighbourCookie, code);
+    expect(admitted.statusCode).toBe(200);
+    expect((admitted.json() as { pending?: boolean }).pending).toBe(false);
+    expect((await redeemFrom(guesser, guesserCookie, "A".repeat(22))).statusCode).toBe(429);
+  });
+
   it("stops accepting codes shown before an Emergency Reset", async () => {
     const app = await makeApp({ access: { joinPolicy: "approval" } });
     const { code } = (await hostInvite(app)).json() as { code: string };

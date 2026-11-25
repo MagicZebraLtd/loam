@@ -61,7 +61,19 @@ export const englishWordPack: WordPack = {
   creatures,
 };
 
+/**
+ * Most names one pack's cache holds before it is emptied. The server names every identity it mints, so an
+ * unbounded cache would grow for as long as the node runs; names are deterministic, so emptying it only
+ * means recomputing them.
+ */
+export const DISPLAY_NAME_CACHE_LIMIT = 4096;
+
 const cacheByPack = new WeakMap<WordPack, Map<string, DisplayNameParts>>();
+
+/** How many names a pack's cache holds now (for tests). */
+export function displayNameCacheSize(pack: WordPack = englishWordPack): number {
+  return cacheByPack.get(pack)?.size ?? 0;
+}
 
 function getCache(pack: WordPack): Map<string, DisplayNameParts> {
   let cache = cacheByPack.get(pack);
@@ -121,6 +133,9 @@ export function getDisplayNameParts(id: string, pack: WordPack = englishWordPack
     creature: pickWord(mix32(seed ^ 0x36d2e9b1), pack.creatures),
   };
 
+  if (cache.size >= DISPLAY_NAME_CACHE_LIMIT) {
+    cache.clear();
+  }
   cache.set(id, parts);
   return { ...parts };
 }

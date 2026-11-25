@@ -1,4 +1,5 @@
 
+import { rmSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -14,6 +15,7 @@ import {
   LoamConfigUpdateSchema,
   MessageSchema,
   MEMBER_RULES_VERSION,
+  sameUrlOrigin,
   UserSchema,
   type AdminBootstrapStrategy,
   type AvatarImageMimeType,
@@ -62,16 +64,16 @@ import { type ClientFiles, registerClientFiles } from "./static-files.js";
 import { createTransportServer, loamLogController, loamLoggerOptions, registerTransportHooks, registerTransportRoutes } from "./transport-server.js";
 import { createSyncEngine } from "./sync.js";
 import { resolveLanIPv4 } from "./net.js";
-import { addressKey, ipv6SubnetKey } from "./rate-limit.js";
+import { FixedWindowCounter, addressKey, ipv6SubnetKey } from "./rate-limit.js";
 
 import type { AppData, AppOptions, LoamApp, PendingUpload } from "./types.js";
 
 import { IdentityLimitError, errorBody } from "./errors.js";
-import { sessionCookieName, sessionCookieMaxAge, claimAttemptLimit, claimAttemptWindowMs, subnetAttemptFactor, defaultTombstoneHorizonMs, defaultChannels, legacyDemoUserIds } from "./defaults.js";
+import { sessionCookieName, sessionCookieMaxAge, claimAttemptLimit, claimAttemptWindowMs, subnetAttemptFactor, subnetIdentityFactor, defaultTombstoneHorizonMs, defaultChannels, legacyDemoUserIds } from "./defaults.js";
 import { defaultLoamConfig, mergeConfig, reconcileLegacyProfile, sanitizeLegacyConfigJson, withoutLauncherOwnedKeys } from "./config.js";
 
-import { makeUser, makeSessionUserId, makeSessionToken, makeAdminSetupCode, encodeCookieValue, readCookie } from "./identity.js";
-import { attachmentFileName, parseAttachmentFileName, avatarImageExtension, parseAvatarImageId } from "./media.js";
+import { avatarNamesImage, makeUser, makeSessionUserId, makeSessionToken, makeAdminSetupCode, encodeCookieValue, readCookie } from "./identity.js";
+import { attachmentFileName, parseAttachmentFileName, avatarImageExtension, isAvatarImageId, parseAvatarImageId } from "./media.js";
 import { isChannelMessage, newMessageId } from "./ids.js";
 
 export { ALL_ERROR_CODES } from "./errors.js";
@@ -185,10 +187,12 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   // in the join QR + NetworkConfig.
   let transportIdentity: TransportIdentity | undefined;
 
-  // Per-IP new-identity budget (RAM-only): bounds how many fresh anonymous users one address can mint
-  // per window, so a client discarding its cookie can't grow the user table without limit. Pruned on
-  // the reaper timer. On a LAN each device gets its own IP, so this reads as per-device.
-  const identityMintCounters = new Map<string, { count: number; resetAt: number }>();
+  // New-identity budget (RAM-only): bounds how many fresh anonymous users one address, and one IPv6 /64,
+  // can mint per window, so a client discarding its cookie or cycling addresses in its subnet can't grow
+  // the user table without limit (see `consumeIdentityBudget`). Each table is LRU-bounded and pruned on the
+  // reaper timer. Two tables, not one shared one, so address entries can never push out the /64 entry those
+  // addresses are counted against.
+  const identityMintCounters = { byAddress: new FixedWindowCounter(), bySubnet: new FixedWindowCounter() };
   const maxNewIdentitiesPerWindow = options.maxNewIdentitiesPerWindow ?? 60;
   const requireRulesAcceptance = options.requireRulesAcceptance ?? true;
   const identityWindowMs = options.identityWindowMs ?? 10 * 60_000;
@@ -222,6 +226,9 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   // Single-flight guard for `executeKillSwitch`: the in-flight wipe promise, so
   // concurrent callers reuse it instead of racing a second destructive wipe. Cleared in its `finally`.
   let wipeInFlight: Promise<KillSwitchResult> | undefined;
+  // The most recent wipe, in flight or finished (never cleared), so a caller that checked a secret while a
+  // wipe started can answer with that wipe's outcome instead of starting another.
+  let latestWipe: Promise<KillSwitchResult> | undefined;
   // The kill switch's 503 gate (see `executeKillSwitchBody`): raised synchronously at the start of every
   // wipe, lifted only when an in-process wipe has reloaded the fresh store. It stays raised for the rest
   // of this process's life when a fixed-key wipe hands off to the launcher for a restart, or when a wipe
@@ -284,8 +291,10 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     messages: [],
   };
 
-  // Private to the node's user when this call creates it (an existing dir keeps its mode): the database
-  // inside holds every message and the raw session tokens.
+  // Private to the node's user when this call creates it: the database inside holds every message and the
+  // raw session tokens. An existing dir keeps the mode its operator gave it (often 0755); what the node
+  // creates inside is private regardless: the database files and every file it writes 0600, `avatars/`,
+  // `attachments/` and recovery snapshots 0700 (store-lifecycle.ts).
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
 
   const lifecycle = createStoreLifecycle({
@@ -421,6 +430,12 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     },
     set wipeInFlight(value) {
       wipeInFlight = value;
+    },
+    get latestWipe() {
+      return latestWipe;
+    },
+    set latestWipe(value) {
+      latestWipe = value;
     },
     get awaitingWipeRestart() {
       return awaitingWipeRestart;
@@ -684,7 +699,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       // Heal configs saved before the profile became authoritative (see reconcileLegacyProfile):
       // preserve an explicitly-armed kill switch / approval / TTL by demoting the profile to custom.
       const { update: reconciled, changed } = reconcileLegacyProfile(storedUpdate);
-      config = mergeConfig(config, reconciled);
+      const fileOpenAi = config.llm.openai;
+      config = withoutFileKeyForOtherOrigin(fileOpenAi, mergeConfig(config, reconciled), reconciled);
       if (changed) {
         server.log.warn(
           "Security profile is now authoritative; kept explicit access/retention/kill-switch settings by switching this node's profile to 'custom'.",
@@ -696,28 +712,60 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     appConfig = config;
   }
 
+  /**
+   * The chat service key config.json holds belongs to the address config.json gives with it (`fileOpenAi`,
+   * defaults overlaid by the file). An admin save that moves the address to another origin without a new key
+   * stores a row with that address and no key, so layering the row over the file would pair the file's key
+   * with the new origin: here the key is dropped instead. A key the row carries, or a row that leaves the
+   * address alone or keeps its origin, is layered as usual.
+   */
+  function withoutFileKeyForOtherOrigin(fileOpenAi: LoamConfig["llm"]["openai"], merged: LoamConfig, row: LoamConfigUpdate): LoamConfig {
+    const rowOpenAi = row.llm?.openai;
+    if (
+      rowOpenAi?.baseUrl === undefined ||
+      rowOpenAi.apiKey !== undefined ||
+      merged.llm.openai.apiKey === undefined ||
+      fileOpenAi.baseUrl === merged.llm.openai.baseUrl ||
+      sameUrlOrigin(fileOpenAi.baseUrl, merged.llm.openai.baseUrl)
+    ) {
+      return merged;
+    }
+    return { ...merged, llm: { ...merged.llm, openai: { ...merged.llm.openai, apiKey: undefined } } };
+  }
+
   /** Whether any admin identity exists yet (the `firstUser` bootstrap grants admin only while none does). */
   function anyAdminExists(): boolean {
     return data.users.some((user) => user.isAdmin);
   }
 
   /**
-   * Consume one unit of a client IP's new-identity budget (fixed window). Returns false once the IP
-   * has minted `maxNewIdentitiesPerWindow` identities within `identityWindowMs`; the window then
-   * resets on its next expiry. Only reached on a genuine mint (requests with a valid session cookie
-   * return earlier), so a well-behaved client that keeps its cookie never touches this.
+   * Consume one unit of the caller's new-identity budget (fixed windows of `identityWindowMs`). Returns
+   * false once the caller is over either bound:
+   *
+   * - `maxNewIdentitiesPerWindow` per ADDRESS (`addressKey`: an IPv4-mapped IPv6 address counts as its
+   *   IPv4 form). On a LAN each device has its own address, so this reads as per-device.
+   * - `subnetIdentityFactor` times that per IPv6 /64, because a device on an IPv6 LAN can use any address
+   *   in its /64 and each fresh address would otherwise bring a fresh budget. Only mints the address bound
+   *   let through count here, so one address spends at most its own share of it. IPv4 has no such bound.
+   *
+   * A /64 that has spent its bound is refused before its address is counted. Otherwise every refused
+   * request from a fresh address would still add an entry to the address table, and enough of them would
+   * evict other callers' windows from it (an IPv4 address that had spent its budget would get a new one).
+   *
+   * Only reached on a genuine mint (requests with a valid session cookie return earlier), so a
+   * well-behaved client that keeps its cookie never touches this.
    */
   function consumeIdentityBudget(ip: string): boolean {
     const now = Date.now();
-    const entry = identityMintCounters.get(ip);
-
-    if (!entry || entry.resetAt <= now) {
-      identityMintCounters.set(ip, { count: 1, resetAt: now + identityWindowMs });
-      return true;
+    const subnet = ipv6SubnetKey(ip);
+    const subnetLimit = maxNewIdentitiesPerWindow * subnetIdentityFactor;
+    if (subnet !== undefined && identityMintCounters.bySubnet.peek(subnet, identityWindowMs, now) >= subnetLimit) {
+      return false;
     }
-
-    entry.count += 1;
-    return entry.count <= maxNewIdentitiesPerWindow;
+    if (identityMintCounters.byAddress.hit(addressKey(ip), identityWindowMs, now).count > maxNewIdentitiesPerWindow) {
+      return false;
+    }
+    return subnet === undefined || identityMintCounters.bySubnet.hit(subnet, identityWindowMs, now).count <= subnetLimit;
   }
 
   /** Resolve the caller's user id: a bound transport identity first, else the session cookie, else mint a new
@@ -843,6 +891,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       enableLLMStreaming: llmEnabled(),
       // Where the assistant's replies come from (absent while it is off), shown in its chat (docs/06).
       assistantDestination: llm.assistantDestination(),
+      // An opaque tag of it, which a DM to the assistant must repeat (absent while it is off; docs/06).
+      assistantDestinationRevision: llm.destinationRevision(),
       allowUserDisplayNameEdit: appConfig.identity.allowUserDisplayNameEdit,
       allowUserAvatarEdit: appConfig.identity.allowUserAvatarEdit,
       allowUserAvatarUpload: appConfig.identity.allowUserAvatarUpload,
@@ -915,6 +965,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
    * @returns The mutated and validated `User` object
    */
   function applyUserUpdate(user: User, update: UserUpdateRequest): User {
+    const previousAvatar = user.avatar;
     const next = UserSchema.parse({
       ...user,
       displayName: update.displayName ?? user.displayName,
@@ -922,6 +973,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     });
     store.upsertUser(next);
     Object.assign(user, next);
+    deleteUnusedAvatarImage(previousAvatar);
     broadcast({ type: "userUpserted", user });
     return user;
   }
@@ -1050,6 +1102,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
    */
   function rerollIdentity(user: User): User {
     const seed = `reroll.${randomBytes(8).toString("hex")}`;
+    const previousAvatar = user.avatar;
     const next = UserSchema.parse({
       ...user,
       displayName: generateDisplayName(seed),
@@ -1057,6 +1110,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     });
     store.upsertUser(next);
     Object.assign(user, next);
+    deleteUnusedAvatarImage(previousAvatar);
     broadcast({ type: "userUpserted", user });
     return user;
   }
@@ -1094,7 +1148,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
   /**
    * Apply moderation / role state to a user (roles, banned, shadowBanned, pending), re-validating
-   * the whole record against the schema, persisting, then broadcasting `userUpserted`. Mirrors
+   * the whole record against the schema, persisting, then broadcasting `userUpserted` when the record its
+   * owner and moderators see changed. Mirrors
    * `applyUserUpdate`: persist first, then mutate the live object and broadcast, so a failed write
    * never leaves in-memory state or a broadcast ahead of what is stored. Only the provided fields
    * change.
@@ -1103,6 +1158,9 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     user: User,
     changes: Partial<Pick<User, "roles" | "banned" | "shadowBanned" | "pending" | "timeoutUntil">>,
   ): User {
+    // The record as its owner and moderators see it before the change, parsed so its keys come in the same
+    // order as `next`'s.
+    const visibleBefore = JSON.stringify(rolesVisibleUser(UserSchema.parse(user)));
     const next = UserSchema.parse({ ...user, ...changes });
     const admitted = user.pending === true && next.pending !== true;
     store.upsertUser(next);
@@ -1115,7 +1173,15 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     // undefined-valued key, Object.assign copies it onto the live record (so `isTimedOut` reads false), and
     // JSON.stringify omits it from what's persisted/broadcast.
     Object.assign(user, next);
-    broadcast({ type: "userUpserted", user });
+    // A change no copy of the record shows (a shadow ban or its lifting: `shadowBanned` is never on the
+    // wire) sends nothing. An upsert identical to what the member already holds, arriving on their own
+    // socket just as a moderator acted, would give the shadow ban away.
+    if (JSON.stringify(rolesVisibleUser(next)) !== visibleBefore) {
+      broadcast({ type: "userUpserted", user });
+    } else if (next.shadowBanned) {
+      // What the broadcast would have done for the host phone: its notifications from this author go.
+      realtime.withdrawHostNoticesByAuthor(user.id);
+    }
     return user;
   }
 
@@ -1304,6 +1370,32 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   }
 
   /**
+   * Delete the uploaded picture a user's previous avatar named once no user record names it any more (they
+   * switched to a generated look, an admin reset it, or a new upload replaced it), so
+   * `GET /api/avatars/:fileName` stops serving it now rather than after the next restart's sweep. Called
+   * after the store write, so a failed write deletes nothing. Synchronous, so the file is gone before the
+   * caller answers. Only a genuine server-minted id is ever turned into a path. Best effort: a failure is
+   * logged without the file name, and the reaper's sweep tries again.
+   */
+  function deleteUnusedAvatarImage(previous: User["avatar"]): void {
+    const imageId = previous?.imageId;
+
+    if (!imageId || !previous.mimeType || !isAvatarImageId(imageId)) {
+      return;
+    }
+
+    if (data.users.some((candidate) => candidate.avatar?.imageId === imageId)) {
+      return;
+    }
+
+    try {
+      rmSync(avatarImagePath(imageId, previous.mimeType), { force: true });
+    } catch (error) {
+      server.log.warn({ code: (error as NodeJS.ErrnoException).code }, "Could not delete a replaced avatar picture");
+    }
+  }
+
+  /**
    * Finds the in-memory channel matching the provided id.
    */
   function ensureChannel(id: string): Channel | undefined {
@@ -1480,6 +1572,15 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       return { code: 403, error: accessError };
     }
 
+    // Someone outside the message's audience (a DM they're not in, a private channel they're not a member
+    // of) gets the answer for an unknown id, before any other check could confirm the message exists.
+    // An admin's delete keeps the moderation override.
+    const audience = messageAudienceUserIds(target);
+
+    if (!opts.adminOverride && audience && !audience.has(actor.id)) {
+      return { code: 404, error: "Message does not exist" };
+    }
+
     if (!opts.adminOverride) {
       const actorTimeout = timeoutError(actor);
 
@@ -1638,9 +1739,13 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     }
 
     // Channel messages: a private channel's messages (and, via the reaction recursion above, the
-    // reactions on them) are only ever for its members. Public channels have no audience limit.
+    // reactions on them) are only ever for its members. Public channels have no audience limit. A message
+    // whose channel record is missing has nobody: nothing says it was ever public, so it goes to no one.
     const channel = ensureChannel(message.channelId);
-    return channel?.visibility === "private" ? channelMemberIds(channel) : undefined;
+    if (!channel) {
+      return new Set();
+    }
+    return channel.visibility === "private" ? channelMemberIds(channel) : undefined;
   }
 
   /** Whether the node-wide channel flag leaves `channel` open to posts and edits: `enablePublicChannels`
@@ -1751,13 +1856,11 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
       // Threads are one level deep: a reply hangs off a channel POST. A reply to a reply is never rendered
       // by any client and would be orphaned when the middle reply is deleted, so it is refused like a
-      // missing parent (the sync importer applies the same rule to a peer's replies).
-      if (!parent || parent.type !== "channelPost") {
+      // missing parent (the sync importer applies the same rule to a peer's replies). A post in another
+      // channel is answered the same way, so a reply can't test whether an id exists in a channel the
+      // caller can't see.
+      if (!parent || parent.type !== "channelPost" || parent.channelId !== input.channelId) {
         return { error: "Parent message does not exist" };
-      }
-
-      if (parent.channelId !== input.channelId) {
-        return { error: "Parent message belongs to a different channel" };
       }
 
       // A moderator-removed post is a tombstone, not a live thread: no new replies under it.
@@ -1769,15 +1872,18 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     if (input.type === "reaction") {
       const target = data.messages.find((message) => message.id === input.targetMessageId);
 
-      if (!target) {
+      // A reaction targets a message, never another reaction: one stacked under a reaction would slip past
+      // the DM block check (dmCounterpart looks one level up). Answered like a missing target.
+      if (!target || target.type === "reaction") {
         return { error: "Target message does not exist" };
       }
 
-      // DM (and DM-reaction) targets are only reactable by their participants.
+      // DM and private-channel targets are only reactable by their audience. Anyone else gets the answer for
+      // a missing target, so a reaction can't confirm that a message they can't see exists.
       const audience = messageAudienceUserIds(target);
 
       if (audience && !audience.has(authorId)) {
-        return { error: "Cannot react to this message" };
+        return { error: "Target message does not exist" };
       }
 
       // A channel-scoped target is only reactable while the reactor can still write there: the
@@ -1843,7 +1949,9 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     if (input.type === "dm") {
       const recipient = data.users.find((user) => user.id === input.recipientUserId);
 
-      if (!recipient) {
+      // A mesh sender's display record exists only for the people it mailed (`visibleUsers`): to anyone
+      // else it answers like an id nobody has, so a DM can't probe which senders have mailed this node.
+      if (!recipient || (isMeshSentinelUser(recipient.id) && !meshSenderVisibleTo(recipient.id, authorId))) {
         return { error: "Recipient user does not exist" };
       }
 
@@ -1880,10 +1988,15 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     };
     // Each attachment is the upload's own record (checked above to be the author's pending upload), never
     // the client's copy: a message that claimed another type, name or size for a file would point readers
-    // at a file that isn't there, and its deletion would remove the wrong path and leave the real one.
+    // at a file that isn't there, and its deletion would remove the wrong path and leave the real one. An
+    // upload named more than once is one file, so only its first mention is kept.
     const pinnedAttachments =
       input.type !== "reaction" && input.attachments?.length
-        ? { attachments: input.attachments.map((attachment) => attachmentOwners.get(attachment.id)?.attachment ?? attachment) }
+        ? {
+            attachments: input.attachments
+              .filter((attachment, index, all) => all.findIndex((other) => other.id === attachment.id) === index)
+              .map((attachment) => attachmentOwners.get(attachment.id)?.attachment ?? attachment),
+          }
         : {};
     const message = MessageSchema.parse({ ...input, ...pinnedAttachments, ...base });
     store.insertMessage(message);
@@ -2065,6 +2178,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
 
     ensureBotUser();
     ensureAllMeshIdentities();
+    stripSyncedAvatarImages();
 
     // A bot record left behind by a legacy bot-id repair is no longer the assistant: `visibleUsers` hides
     // it (only the configured bot is listed). It stays in the database with its DM history; say so once.
@@ -2074,6 +2188,37 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       }
     }
     legacyBotIds.clear();
+  }
+
+  /**
+   * Drop the uploaded-picture avatar from every user record a sync import created. Avatar files never sync,
+   * so such a record can only name a missing file or one of this node's own, and while it names one the
+   * avatar cleanup (`deleteUnusedAvatarImage`, `reapOrphanedAvatars`) keeps that file on disk and served
+   * after its owner has changed their picture. Imports no longer keep one (sync.ts `importPeerAuthor`);
+   * this repairs rows an earlier build imported. Runs after the synced-users backfill so its rows count.
+   */
+  function stripSyncedAvatarImages(): void {
+    const repaired = data.users.flatMap((user) => {
+      if (!avatarNamesImage(user.avatar) || !store.isUserSynced(user.id)) {
+        return [];
+      }
+      return [{ live: user, next: UserSchema.parse({ ...user, avatar: undefined }) }];
+    });
+
+    if (!repaired.length) {
+      return;
+    }
+
+    // Persist first, then mirror in memory. Nothing is connected at load, so there is nothing to broadcast.
+    store.transaction(() => {
+      for (const { next } of repaired) {
+        store.upsertUser(next);
+      }
+    });
+
+    for (const { live } of repaired) {
+      delete live.avatar;
+    }
   }
 
   /**
@@ -2125,7 +2270,8 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
    *   included, out for the window, renewably.
    * - `subnetAttemptFactor` times that per /64, so cycling addresses inside a subnet still doesn't buy
    *   unlimited guesses. Only attempts the address bound let through count here, so one address can spend
-   *   at most its own share of it; locking a /64 out takes many addresses.
+   *   at most its own share of it; locking a /64 out takes many addresses. A /64 that has spent its bound is
+   *   refused before its address is looked at, so new addresses inside it add no entries to `attempts`.
    */
   function attemptRateLimited(attempts: Map<string, { count: number; resetAt: number }>, ip: string): boolean {
     const now = Date.now();
@@ -2139,11 +2285,18 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       }
     }
 
+    const subnet = ipv6SubnetKey(ip);
+    const subnetKey = subnet === undefined ? undefined : `subnet:${subnet}`;
+    const subnetLimit = claimAttemptLimit * subnetAttemptFactor;
+    const subnetEntry = subnetKey === undefined ? undefined : attempts.get(subnetKey);
+
+    if (subnetEntry && subnetEntry.resetAt > now && subnetEntry.count >= subnetLimit) {
+      return true;
+    }
     if (countAttempt(attempts, `address:${addressKey(ip)}`, claimAttemptLimit, now)) {
       return true;
     }
-    const subnet = ipv6SubnetKey(ip);
-    return subnet !== undefined && countAttempt(attempts, `subnet:${subnet}`, claimAttemptLimit * subnetAttemptFactor, now);
+    return subnetKey !== undefined && countAttempt(attempts, subnetKey, subnetLimit, now);
   }
 
   /** Count one attempt against `key`'s window and report whether that puts it over `limit`. */
@@ -2169,13 +2322,15 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
    */
   function pruneExpiredRateLimiters(): void {
     const now = Date.now();
-    for (const counters of [claimAttempts, panicAttempts, identityMintCounters]) {
+    for (const counters of [claimAttempts, panicAttempts]) {
       for (const [key, entry] of counters) {
         if (entry.resetAt <= now) {
           counters.delete(key);
         }
       }
     }
+    identityMintCounters.byAddress.prune(identityWindowMs, now);
+    identityMintCounters.bySubnet.prune(identityWindowMs, now);
   }
 
   /**
@@ -2375,12 +2530,14 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   }
 
   /**
-   * Boot-time sweep of avatar image files no user record references. Avatars are
-   * written to disk on upload and only ever removed with their user or by the kill switch — so any path
-   * that drops user rows without touching the files (an ephemeral-mode restart deleting the DB, a
-   * preserve-and-start-fresh recovery, a crash between the file write and the user upsert) strands
-   * plaintext images on disk indefinitely. Mirrors `reapOrphanedAttachments`; runs once at boot, after
-   * the store is loaded, so `data.users` is authoritative. Best-effort — a delete failure is logged.
+   * Sweep of avatar image files no user record references. A changed avatar deletes its old file at once
+   * (`deleteUnusedAvatarImage`), but any path that drops user rows without touching the files (an
+   * ephemeral-mode restart deleting the DB, a preserve-and-start-fresh recovery, a crash between the file
+   * write and the user upsert, a failed delete) strands plaintext images on disk. Mirrors
+   * `reapOrphanedAttachments`; runs at boot, after the store is loaded, and on the reaper timer. Two guards
+   * keep it off an upload in flight: a file younger than the grace window is skipped (an upload writes its
+   * file before the user record names it), and the decision is made again against the live `data.users`
+   * right before each delete, with no await in between. Best-effort: a delete failure is logged.
    */
   async function reapOrphanedAvatars(): Promise<void> {
     let files: string[];
@@ -2417,6 +2574,11 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
         continue;
       }
 
+      // Re-decide against live state now that the stat await is over: nothing awaits between here and rm.
+      if (data.users.some((user) => user.avatar?.imageId === parsed.imageId)) {
+        continue;
+      }
+
       await rm(path, { force: true }).catch((error: unknown) => server.log.warn(error));
     }
   }
@@ -2444,10 +2606,17 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       }
     }
 
-    const reactionTargets = new Set(set.keys());
-    for (const message of data.messages) {
-      if (message.type === "reaction" && reactionTargets.has(message.targetMessageId)) {
-        set.set(message.id, message);
+    // Reactions on anything in the set, and on those reactions, to any depth: new reactions only target a
+    // message (`createMessage`), but an older version stored reactions on reactions, which must go with
+    // their root rather than survive it.
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const message of data.messages) {
+        if (message.type === "reaction" && set.has(message.targetMessageId) && !set.has(message.id)) {
+          set.set(message.id, message);
+          grew = true;
+        }
       }
     }
 
@@ -2681,6 +2850,22 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
   void reapOrphanedAttachments();
   void reapOrphanedAvatars().catch((error: unknown) => server.log.error(error));
 
+  /**
+   * Delete each resolved report once its resolution is older than the node's retention (`messageTtlMs`), or
+   * 30 days when the node keeps messages for ever. A resolved report holds who reported whom, the reporter's
+   * note and the moderator's, and nothing reads it any more. Open and escalated reports are never touched.
+   * Reports live only in the database (never mirrored in memory), so deleting the row is the whole job.
+   */
+  function reapResolvedReports(): void {
+    const horizon = appConfig.retention.messageTtlMs || 30 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - horizon;
+    for (const { id, resolvedAt } of store.loadResolvedReportTimes()) {
+      if (resolvedAt < cutoff) {
+        store.deleteReport(id);
+      }
+    }
+  }
+
   const reaperTimer = setInterval(() => {
     // While a kill-switch wipe is in flight or has handed off to the launcher for a restart
     // (`awaitingWipeRestart`), `store` may be closed and its files being (or already) deleted, and the
@@ -2703,11 +2888,18 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
       server.log.error(error);
     }
 
+    try {
+      reapResolvedReports();
+    } catch (error) {
+      server.log.error(error);
+    }
+
     // Drop expired per-IP rate-limit entries (identity budget + claim/panic attempt limiters) so the
     // maps can't grow unbounded across many source IPs (docs/15 #9).
     pruneExpiredRateLimiters();
 
     void reapOrphanedAttachments().catch((error: unknown) => server.log.error(error));
+    void reapOrphanedAvatars().catch((error: unknown) => server.log.error(error));
     void retryMissingAttachments().catch((error: unknown) => server.log.error(error));
   }, 30_000);
 
@@ -2783,7 +2975,7 @@ export async function buildApp(options: AppOptions): Promise<LoamApp> {
     rateLimiterEntryCounts: () => ({
       claim: claimAttempts.size,
       panic: panicAttempts.size,
-      identity: identityMintCounters.size,
+      identity: identityMintCounters.byAddress.size + identityMintCounters.bySubnet.size,
     }),
     sockets,
     getTransportPublicKey: () =>

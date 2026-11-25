@@ -1,7 +1,8 @@
 // Boot-time care of the data dir in store-lifecycle.ts: an ephemeral-key node booting a
 // second time over its own previous database, the refusal to destroy a persistent database under an
 // ephemeral key, the `.loam-db-ephemeral` marker contract shared with the Android launcher, and the file
-// modes the node keeps on a shared computer (data dir 0700, database files and config writes 0600).
+// modes the node keeps on a shared computer (a new data dir and the media dirs 0700; database files,
+// media files and config writes 0600).
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp, type LoamApp } from "./app.js";
+import { defaultLoamConfig } from "./config.js";
 import { DbEphemeralExistingDatabaseError, DbEphemeralMarkerUnremovableError, DbEphemeralMarkerUnwritableError } from "./errors.js";
 import { createStoreLifecycle } from "./store-lifecycle.js";
 import type { AppOptions } from "./types.js";
@@ -350,6 +352,86 @@ describe.skipIf(process.platform === "win32")("file modes on a shared computer",
       if (existsSync(join(dataDir, sidecar))) {
         expect(statSync(join(dataDir, sidecar)).mode & 0o777, sidecar).toBe(0o600);
       }
+    }
+  });
+
+  it("keeps media private in an operator's 0755 data dir: avatars/ and attachments/ 0700, every file 0600", async () => {
+    const previousUmask = process.umask(0o022);
+    try {
+      const dataDir = join(tempDir(), "operator-made");
+      const avatarsDir = join(dataDir, "avatars");
+      const attachmentsDir = join(dataDir, "attachments");
+      // What `mkdir data` and an older version's uploads leave behind.
+      for (const dir of [dataDir, avatarsDir, attachmentsDir]) {
+        mkdirSync(dir, { recursive: true });
+        chmodSync(dir, 0o755);
+      }
+      writeFileSync(join(dataDir, "config.json"), JSON.stringify({ identity: { allowUserAvatarEdit: true, allowUserAvatarUpload: true } }));
+      const { app } = await boot(dataDir);
+
+      // The boot tightened the media dirs and left the operator's own dir alone.
+      expect(statSync(avatarsDir).mode & 0o777).toBe(0o700);
+      expect(statSync(attachmentsDir).mode & 0o777).toBe(0o700);
+      expect(statSync(dataDir).mode & 0o777).toBe(0o755);
+
+      const cookie = await sessionCookie(app);
+      const uploadBoth = async (): Promise<{ avatar: string; attachment: string }> => {
+        const avatar = await app.server.inject({
+          method: "PUT",
+          url: "/api/users/me/avatar-image",
+          headers: { cookie },
+          payload: { mimeType: "image/webp", data: Buffer.from("RIFF\0\0\0\0WEBP").toString("base64") },
+        });
+        expect(avatar.statusCode).toBe(200);
+        const attachment = await app.server.inject({
+          method: "POST",
+          url: "/api/attachments",
+          headers: { cookie },
+          payload: { mimeType: "text/plain", name: "notes.txt", data: Buffer.from("private notes").toString("base64") },
+        });
+        expect(attachment.statusCode).toBe(201);
+        return {
+          avatar: join(avatarsDir, `${(avatar.json() as { avatar: { imageId: string } }).avatar.imageId}.webp`),
+          attachment: join(attachmentsDir, `${(attachment.json() as { id: string }).id}.bin`),
+        };
+      };
+
+      const first = await uploadBoth();
+      expect(statSync(first.avatar).mode & 0o777).toBe(0o600);
+      expect(statSync(first.attachment).mode & 0o777).toBe(0o600);
+
+      // Directories the writers create themselves (after a reset removed them, say) are 0700 from the start.
+      rmSync(avatarsDir, { recursive: true, force: true });
+      rmSync(attachmentsDir, { recursive: true, force: true });
+      const second = await uploadBoth();
+      expect(statSync(avatarsDir).mode & 0o777).toBe(0o700);
+      expect(statSync(attachmentsDir).mode & 0o777).toBe(0o700);
+      expect(statSync(second.avatar).mode & 0o777).toBe(0o600);
+      expect(statSync(second.attachment).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
+  it("writes a config.json it creates 0600 (it carries the whole config)", () => {
+    const previousUmask = process.umask(0o022);
+    try {
+      const dataDir = tempDir();
+      const configPath = join(dataDir, "config.json");
+      const lifecycle = createStoreLifecycle({
+        dataDir,
+        avatarsDir: join(dataDir, "avatars"),
+        attachmentsDir: join(dataDir, "attachments"),
+        options: { dataDir },
+        log: Fastify({ logger: false }).log,
+        configPath,
+        markAwaitingWipeRestart: () => {},
+      });
+
+      expect(lifecycle.persistConfigForRestart(defaultLoamConfig())).toBe(true);
+      expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(previousUmask);
     }
   });
 

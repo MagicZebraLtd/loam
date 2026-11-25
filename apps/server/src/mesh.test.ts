@@ -1,7 +1,10 @@
+import { randomBytes } from "node:crypto";
+import { createRequire } from "node:module";
+
 import { afterEach, describe, expect, it } from "vitest";
 
-import { currentEpoch, mailboxTag } from "@loam/crypto";
-import { MeshIdentityCardSchema, type MeshIdentityCard } from "@loam/schema";
+import { createMeshIdentity, currentEpoch, mailboxTag } from "@loam/crypto";
+import { MEMBER_RULES_VERSION, MeshIdentityCardSchema, type MeshIdentityCard } from "@loam/schema";
 
 import type { LoamApp } from "./app.js";
 import { type InjectResponse, makeApp, newSession, teardownApps } from "./test-support/app-harness.js";
@@ -122,6 +125,32 @@ describe("opportunistic mesh: sealed mailbox", () => {
     expect((await roster(app, bob.cookie)).some((entry) => entry.id.startsWith("mesh."))).toBe(true);
     // ...but Carol never learns a mesh sender appeared (no leak that Bob received sealed mail).
     expect((await roster(app, carol.cookie)).some((entry) => entry.id.startsWith("mesh."))).toBe(false);
+  });
+
+  it("refuses mesh mail and broadcasts from someone who hasn't agreed to the rules, as a post is refused", async () => {
+    const app = await makeApp({ mesh: MESH }, { requireRulesAcceptance: true });
+    const alice = await newSession(app);
+    const bob = await newSession(app);
+    const bobCard = await meshCard(app, bob.cookie);
+    expect((await addContact(app, alice.cookie, bobCard)).statusCode).toBe(200);
+    const asAlice = (url: string, payload: Record<string, unknown>) =>
+      app.server.inject({ method: "POST", url, headers: { cookie: alice.cookie }, payload });
+    const answer = (response: InjectResponse) => ({ status: response.statusCode, body: response.json() as unknown });
+
+    const posted = answer(await asAlice("/api/messages", { type: "channelPost", channelId: "general", body: "hello" }));
+    expect(posted).toMatchObject({ status: 403, body: { code: "rules_not_accepted" } });
+    expect(answer(await asAlice("/api/mesh/messages", { toMeshId: bobCard.meshId, body: "hi" }))).toEqual(posted);
+    expect(answer(await asAlice("/api/mesh/broadcast", { toMeshIds: [bobCard.meshId], body: "hi all" }))).toEqual(posted);
+    expect((await roster(app, bob.cookie)).some((entry) => entry.id.startsWith("mesh."))).toBe(false);
+
+    const agreed = await app.server.inject({
+      method: "POST",
+      url: "/api/users/me/rules",
+      headers: { cookie: alice.cookie },
+      payload: { version: MEMBER_RULES_VERSION },
+    });
+    expect(agreed.statusCode).toBe(200);
+    expect((await asAlice("/api/mesh/messages", { toMeshId: bobCard.meshId, body: "hi" })).statusCode).toBe(200);
   });
 
   it("404s a send to a mesh id that isn't a contact (sealing requires an added card)", async () => {
@@ -480,5 +509,91 @@ describe("mesh mail gating", () => {
         })
       ).statusCode,
     ).toBe(404);
+  });
+});
+
+describe("mesh mail addressing", () => {
+  const MESH = { enabled: true, relay: true, ttlMs: 3_600_000, hopLimit: 6, maxCarried: 1000, maxContacts: 1000 };
+  const HOST_TOKEN = "host-token-for-tests-0123456789abcdefghijklmn";
+
+  // The envelope primitives @loam/crypto is built on, loaded through that package (the server has no direct
+  // dependency on them), so the test can open and re-seal an envelope the way an attacker would.
+  const requireFromCrypto = createRequire(createRequire(import.meta.url).resolve("@loam/crypto"));
+  const { x25519 } = requireFromCrypto("@noble/curves/ed25519") as {
+    x25519: { getPublicKey(secret: Uint8Array): Uint8Array; getSharedSecret(secret: Uint8Array, pub: Uint8Array): Uint8Array; utils: { randomPrivateKey(): Uint8Array } };
+  };
+  const { xchacha20poly1305 } = requireFromCrypto("@noble/ciphers/chacha") as {
+    xchacha20poly1305(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array): { encrypt(data: Uint8Array): Uint8Array; decrypt(data: Uint8Array): Uint8Array };
+  };
+  const { hkdf } = requireFromCrypto("@noble/hashes/hkdf") as {
+    hkdf(hash: unknown, ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, length: number): Uint8Array;
+  };
+  const { sha256 } = requireFromCrypto("@noble/hashes/sha256") as { sha256: unknown };
+  const text = new TextEncoder();
+
+  /** The envelope key `sealMailbox` derives (HKDF over the ECDH secret, salted with both public keys). */
+  function envelopeKey(shared: Uint8Array, ephemeralPublic: Uint8Array, recipientKxPublic: Uint8Array): Uint8Array {
+    return hkdf(sha256, shared, new Uint8Array([...ephemeralPublic, ...recipientKxPublic]), text.encode("loam.mesh.seal.v1"), 32);
+  }
+
+  it("does not deliver mail a contact opened and re-sealed to another person under that person's tag", async () => {
+    const nodeA = await makeApp({ mesh: MESH }, { hostToken: HOST_TOKEN });
+    const nodeC = await makeApp({ mesh: MESH }, { hostToken: HOST_TOKEN });
+    const alice = await newSession(nodeA);
+    const carol = await newSession(nodeC);
+    const identity = async (app: LoamApp, cookie: string) =>
+      MeshIdentityCardSchema.parse((await app.server.inject({ method: "GET", url: "/api/mesh/identity", headers: { cookie } })).json());
+    const aliceCard = await identity(nodeA, alice.cookie);
+    const carolCard = await identity(nodeC, carol.cookie);
+
+    // Mallory is a contact of Carol (so holds her token) and gives Alice a card with Mallory's own keys and
+    // Carol's token. Every key on it is Mallory's, so it passes the card checks.
+    const mallory = createMeshIdentity();
+    const forged: MeshIdentityCard = {
+      meshId: mallory.meshId,
+      alg: "ed25519",
+      sign: mallory.signPublic,
+      kx: mallory.kxPublic,
+      kxSig: mallory.kxSig,
+      mailboxToken: carolCard.mailboxToken,
+      displayName: "Mallory",
+    };
+    expect((await nodeA.server.inject({ method: "POST", url: "/api/mesh/contacts", headers: { cookie: alice.cookie }, payload: forged })).statusCode).toBe(200);
+    const send = await nodeA.server.inject({
+      method: "POST",
+      url: "/api/mesh/messages",
+      headers: { cookie: alice.cookie },
+      payload: { toMeshId: mallory.meshId, body: "meant for Mallory" },
+    });
+    expect(send.statusCode).toBe(200);
+
+    const outbound = await nodeA.server.inject({ method: "GET", url: "/api/mesh/outbound", headers: { "x-loam-host-token": HOST_TOKEN } });
+    const [sealed] = (outbound.json() as { messages: { sealed: string; toTag: string; ttlExpiresAt: number }[] }).messages;
+    expect(sealed).toBeDefined();
+
+    // Mallory opens Alice's mail with her own key and seals Alice's exact inner payload to Carol's key,
+    // keeping the tag and expiry (and so the aad).
+    const aad = text.encode(`${sealed.toTag}|${sealed.ttlExpiresAt}`);
+    const raw = new Uint8Array(Buffer.from(sealed.sealed, "base64url"));
+    const malloryKx = new Uint8Array(Buffer.from(mallory.kxSecret, "base64url"));
+    const openKey = envelopeKey(x25519.getSharedSecret(malloryKx, raw.slice(0, 32)), raw.slice(0, 32), x25519.getPublicKey(malloryKx));
+    const inner = xchacha20poly1305(openKey, raw.slice(32, 56), aad).decrypt(raw.slice(56));
+    expect((JSON.parse(new TextDecoder().decode(inner)) as { from: string }).from).toBe(aliceCard.meshId);
+    const carolKx = new Uint8Array(Buffer.from(carolCard.kx, "base64url"));
+    const ephemeralSecret = x25519.utils.randomPrivateKey();
+    const ephemeralPublic = x25519.getPublicKey(ephemeralSecret);
+    const sealKey = envelopeKey(x25519.getSharedSecret(ephemeralSecret, carolKx), ephemeralPublic, carolKx);
+    const nonce = new Uint8Array(randomBytes(24));
+    const resealed = Buffer.from([...ephemeralPublic, ...nonce, ...xchacha20poly1305(sealKey, nonce, aad).encrypt(inner)]).toString("base64url");
+
+    const inbound = await nodeC.server.inject({
+      method: "POST",
+      url: "/api/mesh/inbound",
+      headers: { "x-loam-host-token": HOST_TOKEN },
+      payload: { messages: [{ ...sealed, sealed: resealed }] },
+    });
+    expect(inbound.statusCode).toBe(200);
+    const dms = await nodeC.server.inject({ method: "GET", url: `/api/dms/${aliceCard.meshId}`, headers: { cookie: carol.cookie } });
+    expect(dms.json()).toEqual([]);
   });
 });

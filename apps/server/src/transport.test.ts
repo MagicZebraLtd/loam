@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1151,6 +1152,43 @@ describe("transport encryption WebSocket frames", () => {
     }
   });
 
+  it("repeats the client's cn inside the sealed challenge, and leaves out one that is malformed", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+    const session = await openTransport08(app);
+    await resumeIdentity(app, session, 1);
+
+    /** Open a socket with `query` appended and return the challenge it is sent, opened. */
+    async function challengeFor(query: string): Promise<Record<string, unknown>> {
+      const socket = openWs(`${baseUrl.replace("http", "ws")}/ws?enc=${session.sessionId}${query}`);
+      try {
+        return await new Promise<Record<string, unknown>>((resolve, reject) => {
+          socket.addEventListener("error", () => reject(new Error("ws failed to connect")));
+          socket.addEventListener("message", (event) => {
+            const opened = openTransport(session.key, String((event as MessageEvent).data), WS_CHALLENGE_AAD);
+            if (opened) {
+              resolve(JSON.parse(opened) as Record<string, unknown>);
+            }
+          });
+        });
+      } finally {
+        socket.close();
+      }
+    }
+
+    const cn = "Abc-_0123456789xyzABCD"; // 22 base64url characters, as the client sends
+    expect((await challengeFor(`&cn=${cn}`)).cn).toBe(cn);
+    expect((await challengeFor(`&cn=${"a".repeat(64)}`)).cn).toBe("a".repeat(64));
+    // Too short, too long, or outside base64url: not repeated (the client then refuses the challenge).
+    for (const malformed of ["a".repeat(15), "a".repeat(65), `${"a".repeat(20)}.!`, `${"a".repeat(20)}%3D%3D`]) {
+      const challenge = await challengeFor(`&cn=${malformed}`);
+      expect(challenge.type).toBe("challenge");
+      expect("cn" in challenge).toBe(false);
+    }
+    // An older client sends none and gets a challenge without one, as before.
+    expect("cn" in (await challengeFor(""))).toBe(false);
+  });
+
   it("a ban closes a socket that is still mid-challenge", async () => {
     const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
     const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
@@ -1778,5 +1816,318 @@ describe("tunnelled requests count against the claim and panic caps", () => {
     const fired = await tunnelInner(app, session, 12, { m: "POST", p: "/api/panic", body: { token: panicToken } });
     expect(fired.status).toBe(404);
     expect(app.store.loadMessages().some((message) => message.type === "channelPost" && message.body === "keep me")).toBe(true);
+  });
+});
+
+describe("a sealed reply reads only as the answer it is (review 2026-11-18)", () => {
+  /** The v2 aad of a reply to a request that asked with `r: 2`. */
+  function responseAadV2(method: string, url: string, seq: number, status: number): string {
+    return `loam.transport.response.v2 ${JSON.stringify([method, url, seq, status])}`;
+  }
+  /** The v2 aad of a refusal sent before the request's sequence was authenticated. */
+  function refusalAadV2(method: string, url: string, status: number): string {
+    return `loam.transport.refusal.v2 ${JSON.stringify([method, url, status])}`;
+  }
+
+  /**
+   * Send one raw HTTP/1.1 request over a real socket, so the request target reaches the server exactly as
+   * written (an `inject` or a `fetch` would drop a `#` and what follows).
+   */
+  async function rawRequest(
+    baseUrl: string,
+    method: string,
+    target: string,
+    headers: Record<string, string>,
+    body?: string,
+  ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+    const { hostname, port } = new URL(baseUrl);
+    const lines = [`${method} ${target} HTTP/1.1`, `Host: ${hostname}:${port}`, "Connection: close"];
+    for (const [name, value] of Object.entries(headers)) {
+      lines.push(`${name}: ${value}`);
+    }
+    if (body !== undefined) {
+      lines.push(`Content-Length: ${Buffer.byteLength(body)}`);
+    }
+    const text = `${lines.join("\r\n")}\r\n\r\n${body ?? ""}`;
+    const raw = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(port), hostname, () => socket.write(text));
+      const chunks: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+      socket.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      socket.on("error", reject);
+    });
+    const [head = "", ...rest] = raw.split("\r\n\r\n");
+    const [statusLine = "", ...headerLines] = head.split("\r\n");
+    const parsed: Record<string, string> = {};
+    for (const line of headerLines) {
+      const at = line.indexOf(":");
+      parsed[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim();
+    }
+    let responseBody = rest.join("\r\n\r\n");
+    if (parsed["transfer-encoding"] === "chunked") {
+      // One chunk is plenty for these small answers: `<size>\r\n<data>\r\n0\r\n\r\n`.
+      const [, data = ""] = /^[0-9a-f]+\r\n([\s\S]*?)\r\n0\r\n/i.exec(responseBody) ?? [];
+      responseBody = data;
+    }
+    return { status: Number(statusLine.split(" ")[1]), headers: parsed, body: responseBody };
+  }
+
+  it("refuses a request target carrying a # with an unsealed 400, whatever session it names", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const baseUrl = await app.server.listen({ port: 0, host: "127.0.0.1" });
+    const victim = await openTransport08(app);
+    const user = await newSession(app);
+
+    // The reviewer's case: the victim's session id and an unsealed body. Before the fix the node sealed its
+    // 400 under the bare aad `POST /api/session/resume#1#401`, the bound form of a 401 to a real resume.
+    const resume = await rawRequest(
+      baseUrl,
+      "POST",
+      "/api/session/resume#1#401",
+      { "content-type": "application/json", "x-loam-enc": victim.sessionId },
+      "{}",
+    );
+    expect(resume.status).toBe(400);
+    expect(resume.headers["x-loam-enc"]).toBeUndefined();
+    expect(JSON.parse(resume.body)).toEqual({ error: "Invalid request", code: "invalid_request" });
+
+    // A GET with the caller's own cookie is refused the same way, so no answer is sealed under a bare
+    // `GET /api/config#7#200`.
+    const config = await rawRequest(baseUrl, "GET", "/api/config#7#200", { cookie: user.cookie, "x-loam-enc": victim.sessionId });
+    expect(config.status).toBe(400);
+    expect(config.headers["x-loam-enc"]).toBeUndefined();
+
+    // Refused before the session lookup: an unknown session id gets the same 400, not the expired-session 401.
+    const unknown = await rawRequest(baseUrl, "GET", "/api/config#x", { "x-loam-enc": "no-such-session" });
+    expect(unknown.status).toBe(400);
+    expect(unknown.headers["x-loam-enc"]).toBeUndefined();
+
+    // An ordinary target over the same raw socket still works.
+    const plain = await rawRequest(baseUrl, "GET", "/api/health", {});
+    expect(plain.status).toBe(200);
+  });
+
+  it("answers r: 2 under the v2 response form only, and keeps answering r: 1 under the old one", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const user = await newSession(app);
+    const session = await openTransport08(app);
+    const headers = { cookie: user.cookie, "x-loam-enc": session.sessionId, "content-type": "application/json" };
+    const enc = (res: InjectResponse) => (res.json() as { enc: string }).enc;
+
+    const getAad = "GET /api/channels";
+    const listed = await app.server.inject({
+      method: "GET",
+      url: "/api/channels",
+      headers: { ...headers, "x-loam-seq": sealTransport(session.key, JSON.stringify({ s: 1, r: 2 }), getAad) },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(openTransport(session.key, enc(listed), responseAadV2("GET", "/api/channels", 1, 200))).not.toBeNull();
+    expect(openTransport(session.key, enc(listed), `${getAad}#1#200`)).toBeNull();
+    expect(openTransport(session.key, enc(listed), getAad)).toBeNull();
+    expect(openTransport(session.key, enc(listed), responseAadV2("GET", "/api/channels", 1, 404))).toBeNull();
+    expect(openTransport(session.key, enc(listed), responseAadV2("GET", "/api/channels", 2, 200))).toBeNull();
+
+    const postAad = "POST /api/messages";
+    const posted = await app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers,
+      payload: { enc: sealTransport(session.key, JSON.stringify({ s: 2, r: 2, b: { type: "channelPost", channelId: "general", body: "v2" } }), postAad) },
+    });
+    expect(posted.statusCode).toBe(201);
+    expect(openTransport(session.key, enc(posted), responseAadV2("POST", "/api/messages", 2, 201))).not.toBeNull();
+    expect(openTransport(session.key, enc(posted), `${postAad}#2#201`)).toBeNull();
+
+    // A bodyless answer is an empty sealed 200 for r: 2 too.
+    const typing = await app.server.inject({
+      method: "POST",
+      url: "/api/typing",
+      headers,
+      payload: { enc: sealTransport(session.key, JSON.stringify({ s: 3, r: 2, b: { channelId: "general" } }), "POST /api/typing") },
+    });
+    expect(typing.statusCode).toBe(200);
+    expect(openTransport(session.key, enc(typing), responseAadV2("POST", "/api/typing", 3, 200))).toBe("");
+
+    // A tab left open across the update still asks with r: 1 and still gets `METHOD url#seq#status`.
+    const legacy = await app.server.inject({
+      method: "GET",
+      url: "/api/channels",
+      headers: { ...headers, "x-loam-seq": sealTransport(session.key, JSON.stringify({ s: 4, r: 1 }), getAad) },
+    });
+    expect(openTransport(session.key, enc(legacy), `${getAad}#4#200`)).not.toBeNull();
+    expect(openTransport(session.key, enc(legacy), responseAadV2("GET", "/api/channels", 4, 200))).toBeNull();
+  });
+
+  it("seals a refusal made before the sequence was read three ways, the v2 refusal form among them", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const user = await newSession(app);
+    const session = await openTransport08(app);
+    const headers = { cookie: user.cookie, "x-loam-enc": session.sessionId, "content-type": "application/json" };
+    const getAad = "GET /api/channels";
+    const seqHeader = sealTransport(session.key, JSON.stringify({ s: 1, r: 2 }), getAad);
+    await app.server.inject({ method: "GET", url: "/api/channels", headers: { ...headers, "x-loam-seq": seqHeader } });
+
+    const replayed = await app.server.inject({ method: "GET", url: "/api/channels", headers: { ...headers, "x-loam-seq": seqHeader } });
+    expect(replayed.statusCode).toBe(409);
+    const body = replayed.json() as { enc: string; encStatus: string; encStatus2: string };
+    expect(openTransport(session.key, body.enc, getAad)).not.toBeNull();
+    expect(openTransport(session.key, body.encStatus, `${getAad}!409`)).not.toBeNull();
+    expect(openTransport(session.key, body.encStatus2, refusalAadV2("GET", "/api/channels", 409))).not.toBeNull();
+    expect(openTransport(session.key, body.encStatus2, refusalAadV2("GET", "/api/channels", 200))).toBeNull();
+    expect(openTransport(session.key, body.encStatus2, `${getAad}!409`)).toBeNull();
+  });
+
+  it("answers a resume that asks with r: 2 under the v2 form, a refused token's 401 included", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const session = await openTransport08(app);
+    const aad = "POST /api/session/resume";
+    const refused = await app.server.inject({
+      method: "POST",
+      url: "/api/session/resume",
+      headers: { "x-loam-enc": session.sessionId, "content-type": "application/json" },
+      payload: { enc: sealTransport(session.key, JSON.stringify({ s: 1, r: 2, b: { token: "not-a-real-token" } }), aad) },
+    });
+    expect(refused.statusCode).toBe(401);
+    const enc = (refused.json() as { enc: string }).enc;
+    expect(openTransport(session.key, enc, responseAadV2("POST", "/api/session/resume", 1, 401))).not.toBeNull();
+    expect(openTransport(session.key, enc, `${aad}#1#401`)).toBeNull();
+  });
+});
+
+describe("a sealed envelope is parsed as strictly as a plain body (review 2026-11-18)", () => {
+  it("refuses a direct sealed body carrying __proto__ or constructor.prototype, and it reaches no handler", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const user = await newSession(app);
+    const session = await openTransport08(app);
+    const headers = { cookie: user.cookie, "x-loam-enc": session.sessionId, "content-type": "application/json" };
+    const aad = "POST /api/messages";
+    // The envelope is sealed as raw JSON text, so a `__proto__` key survives exactly as written.
+    const send = (text: string) => app.server.inject({ method: "POST", url: "/api/messages", headers, payload: { enc: sealTransport(session.key, text, aad) } });
+
+    const poisoned = await send('{"s":1,"r":2,"b":{"type":"channelPost","channelId":"general","body":"poisoned","__proto__":{"isAdmin":true}}}');
+    expect(poisoned.statusCode).toBe(400);
+    const nested = await send('{"s":2,"r":2,"b":{"type":"channelPost","channelId":"general","body":"nested","meta":{"x":[{"__proto__":{}}]}}}');
+    expect(nested.statusCode).toBe(400);
+    const ctor = await send('{"s":3,"r":2,"b":{"type":"channelPost","channelId":"general","body":"ctor","constructor":{"prototype":{"isAdmin":true}}}}');
+    expect(ctor.statusCode).toBe(400);
+    const envelopeLevel = await send('{"s":4,"r":2,"__proto__":{"r":1},"b":{"type":"channelPost","channelId":"general","body":"envelope"}}');
+    expect(envelopeLevel.statusCode).toBe(400);
+    const refusal = (poisoned.json() as { encStatus: string }).encStatus;
+    expect(JSON.parse(openTransport(session.key, refusal, `${aad}!400`)!)).toEqual({ error: "Malformed encrypted request", code: "invalid_request" });
+
+    const bodies = app.store.loadMessages().map((message) => ("body" in message ? message.body : ""));
+    expect(bodies).not.toContain("poisoned");
+    expect(bodies).not.toContain("nested");
+    expect(bodies).not.toContain("ctor");
+    expect(bodies).not.toContain("envelope");
+
+    // An ordinary body still works.
+    const ordinary = await send('{"s":5,"r":2,"b":{"type":"channelPost","channelId":"general","body":"an ordinary constructor"}}');
+    expect(ordinary.statusCode).toBe(201);
+  });
+
+  it("refuses the same in a GET's sealed sequence header", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "optional" } });
+    const user = await newSession(app);
+    const session = await openTransport08(app);
+    const res = await app.server.inject({
+      method: "GET",
+      url: "/api/channels",
+      headers: { cookie: user.cookie, "x-loam-enc": session.sessionId, "x-loam-seq": sealTransport(session.key, '{"s":1,"r":2,"__proto__":{}}', "GET /api/channels") },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("refuses a tunnel descriptor or inner body carrying __proto__, and an ordinary tunnelled body still works", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const session = await openTransport08(app);
+    expect((await resumeIdentity(app, session, 1)).status).toBe(200);
+    const aad = "POST /api/transport/tunnel";
+    const send = (text: string) =>
+      app.server.inject({
+        method: "POST",
+        url: "/api/transport/tunnel",
+        headers: { "x-loam-enc": session.sessionId, "content-type": "application/json" },
+        payload: { enc: sealTransport(session.key, text, aad) },
+      });
+
+    const inner = await send('{"s":2,"b":{"m":"POST","p":"/api/messages","body":{"type":"channelPost","channelId":"general","body":"tunnel poisoned","__proto__":{"x":1}}}}');
+    expect(inner.statusCode).toBe(400);
+    const descriptor = await send('{"s":3,"b":{"m":"POST","p":"/api/messages","__proto__":{"m":"DELETE"},"body":{"type":"channelPost","channelId":"general","body":"descriptor poisoned"}}}');
+    expect(descriptor.statusCode).toBe(400);
+    const ctor = await send('{"s":4,"b":{"m":"POST","p":"/api/messages","body":{"type":"channelPost","channelId":"general","body":"tunnel ctor","constructor":{"prototype":{}}}}}');
+    expect(ctor.statusCode).toBe(400);
+    const bodies = app.store.loadMessages().map((message) => ("body" in message ? message.body : ""));
+    expect(bodies).not.toContain("tunnel poisoned");
+    expect(bodies).not.toContain("descriptor poisoned");
+    expect(bodies).not.toContain("tunnel ctor");
+
+    const ordinary = await send('{"s":5,"b":{"m":"POST","p":"/api/messages","body":{"type":"channelPost","channelId":"general","body":"tunnel ordinary"}}}');
+    expect(ordinary.statusCode).toBe(200);
+    expect(app.store.loadMessages().some((message) => "body" in message && message.body === "tunnel ordinary")).toBe(true);
+  });
+});
+
+describe("a tunnel request that asks with r: 2 gets its answer bound to its sequence and status", () => {
+  const TUNNEL_AAD = "POST /api/transport/tunnel";
+  /** The v2 aad of a reply to a tunnel request at `seq` that carried `status`. */
+  function tunnelResponseAad(seq: number, status: number): string {
+    return `loam.transport.response.v2 ${JSON.stringify(["POST", "/api/transport/tunnel", seq, status])}`;
+  }
+  /** Seal a tunnel envelope `{ s, r: 2, b }` for `inner`. */
+  function sealTunnel(key: string, seq: number, inner: unknown): string {
+    return sealTransport(key, JSON.stringify({ s: seq, r: 2, b: inner }), TUNNEL_AAD);
+  }
+  /** POST one sealed tunnel envelope on `sessionId`. */
+  function postTunnel(app: LoamApp, sessionId: string, enc: string): Promise<InjectResponse> {
+    return app.server.inject({
+      method: "POST",
+      url: "/api/transport/tunnel",
+      headers: { "x-loam-enc": sessionId, "content-type": "application/json" },
+      payload: { enc },
+    });
+  }
+
+  it("seals the descriptor under the v2 form for its own sequence and status, never the bare aad", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const session = await openTransport08(app);
+    expect((await resumeIdentity(app, session, 1)).status).toBe(200);
+
+    const res = await postTunnel(app, session.sessionId, sealTunnel(session.key, 2, { m: "GET", p: "/api/channels" }));
+    expect(res.statusCode).toBe(200);
+    const enc = (res.json() as { enc: string }).enc;
+    const opened = openTransport(session.key, enc, tunnelResponseAad(2, 200));
+    expect(opened).not.toBeNull();
+    expect(JSON.parse(opened!)).toMatchObject({ s: 2, m: "GET", p: "/api/channels", status: 200 });
+    expect(openTransport(session.key, enc, TUNNEL_AAD)).toBeNull();
+    expect(openTransport(session.key, enc, tunnelResponseAad(3, 200))).toBeNull();
+  });
+
+  it("seals the route's own refusal the same way, with its real status", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    // Never resumed: the tunnel route refuses an anonymous session on a required node with a 401.
+    const session = await openTransport08(app);
+
+    const res = await postTunnel(app, session.sessionId, sealTunnel(session.key, 1, { m: "GET", p: "/api/channels" }));
+    expect(res.statusCode).toBe(401);
+    const enc = (res.json() as { enc: string }).enc;
+    expect(openTransport(session.key, enc, tunnelResponseAad(1, 401))).not.toBeNull();
+    expect(openTransport(session.key, enc, tunnelResponseAad(1, 400))).toBeNull();
+    expect(openTransport(session.key, enc, TUNNEL_AAD)).toBeNull();
+  });
+
+  it("carries encStatus2 on a refusal made before the sequence was read", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const session = await openTransport08(app);
+    expect((await resumeIdentity(app, session, 1)).status).toBe(200);
+    const enc = sealTunnel(session.key, 2, { m: "GET", p: "/api/channels" });
+    expect((await postTunnel(app, session.sessionId, enc)).statusCode).toBe(200);
+
+    const replayed = await postTunnel(app, session.sessionId, enc);
+    expect(replayed.statusCode).toBe(409);
+    const body = replayed.json() as { encStatus2?: string };
+    expect(typeof body.encStatus2).toBe("string");
+    const refusalAad = `loam.transport.refusal.v2 ${JSON.stringify(["POST", "/api/transport/tunnel", 409])}`;
+    expect(openTransport(session.key, body.encStatus2!, refusalAad)).not.toBeNull();
   });
 });

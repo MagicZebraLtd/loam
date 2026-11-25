@@ -11,6 +11,7 @@ import type { InviteIssuer } from "./invites.js";
 import type { KillSwitchResult } from "./kill-switch.js";
 import { createLlmLayer } from "./llm.js";
 import type { MeshLayer } from "./mesh.js";
+import type { FixedWindowCounter } from "./rate-limit.js";
 import type { Runtime } from "./runtime.js";
 import type { LinkCodes } from "./sync-links.js";
 import { type DbKeyState, createStoreLifecycle } from "./store-lifecycle.js";
@@ -54,7 +55,8 @@ export type AppContext = {
   transportRequestSeq: WeakMap<FastifyRequest, number>;
   transportRequestSyncToken: WeakMap<FastifyRequest, string>;
   internalTunnelToken: string;
-  identityMintCounters: Map<string, { count: number; resetAt: number }>;
+  /** The new-identity budget's windows: per address, and per IPv6 /64 (see `consumeIdentityBudget`). */
+  identityMintCounters: { byAddress: FixedWindowCounter; bySubnet: FixedWindowCounter };
   maxNewIdentitiesPerWindow: number;
   identityWindowMs: number;
   tombstoneHorizonMs: number;
@@ -75,6 +77,8 @@ export type AppContext = {
   wipeGeneration: number;
   wipeInProgress: boolean;
   wipeInFlight: Promise<KillSwitchResult> | undefined;
+  /** The most recent `executeKillSwitch` attempt, in flight or finished; never cleared. */
+  latestWipe: Promise<KillSwitchResult> | undefined;
   awaitingWipeRestart: boolean;
   staticFilesRegistered: boolean;
   appConfig: LoamConfig;
@@ -160,6 +164,8 @@ export type AppContext = {
   broadcastPresence(force?: boolean): boolean;
   closeUnboundSockets(): void;
   sendEventToUsers(audience: Set<string>, event: ClientEvent): void;
+  /** Forget which messages the host phone was notified of (realtime.ts); the kill switch calls it. */
+  forgetHostNotices(): void;
   broadcastStreamEvent(audience: Set<string>, event: StreamEvent): void;
   createMessage(
   input: MessageCreateRequest,

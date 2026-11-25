@@ -325,6 +325,13 @@ export interface LoamStore {
   /** How many reports are still open (open or escalated): node-wide, or filed by one reporter. */
   countOpenReports(reporterUserId?: string): number;
   /**
+   * Every resolved report's id and when it was resolved, for the reaper's expiry of resolved reports. A row
+   * whose stored JSON has no numeric `resolvedAt` (or doesn't parse) gives its filing time instead.
+   */
+  loadResolvedReportTimes(): { id: string; resolvedAt: number }[];
+  /** Delete one report by id (the reaper's expiry of a resolved report). Its indexed columns go with the row. */
+  deleteReport(id: string): void;
+  /**
    * Record that a channel was IMPORTED from a sync peer (provenance) — local-only, never exported.
    * Only channels marked here are eligible for peer-driven metadata re-sync; a locally-created channel
    * (including the seeded defaults, which every node shares an id for) is never in this set, so a peer
@@ -397,7 +404,8 @@ export interface LoamStore {
   /** True when no users, channels, messages, or sessions exist (config is ignored). */
   isEmpty(): boolean;
   /** Delete all users, channels, messages, and sessions in one transaction. Config is preserved, except the
-   * assistant's destination record (`ASSISTANT_DESTINATION_CONFIG_KEY`), which is activity. */
+   * assistant's destination record (`ASSISTANT_DESTINATION_CONFIG_KEY`), which is activity, and the host's
+   * stored transport keypair, which the reset replaces. */
   wipeAll(): void;
   /**
    * Rebuild the database file (`VACUUM`), so no page of it holds anything but live rows. The plaintext
@@ -817,6 +825,11 @@ function buildStore(db: SqliteConnection, pragma?: (source: string) => unknown):
 
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
+  // Keep SQLite's temporary storage (the spill of a large sort, such as the message load's ORDER BY) in
+  // memory. The SQLCipher driver is built to put it in files in the OS temp directory, and the cipher does
+  // not encrypt them: past about 16 MB of messages the load wrote whole rows there in the clear, outside the
+  // data folder, where no Emergency Reset reaches. Set on every driver, so none depends on its build default.
+  db.exec("PRAGMA temp_store = MEMORY");
   if (!pragma) {
     // A plaintext store has only the logical wipe (`wipeAll`) for Emergency Reset, so have SQLite overwrite
     // deleted content with zeros instead of leaving it in free pages and freed cell space, where a copy of
@@ -1008,6 +1021,12 @@ function buildStore(db: SqliteConnection, pragma?: (source: string) => unknown):
   const countOpenReportsByReporterStmt = db.prepare(
     "SELECT COUNT(*) AS total FROM reports WHERE reporter_user_id = ? AND status IN ('open', 'escalated')",
   );
+  // `json_valid` first: `json_extract` throws on malformed JSON, which would fail the whole scan.
+  const loadResolvedReportTimesStmt = db.prepare(
+    "SELECT id, created_at, CASE WHEN json_valid(data) THEN json_extract(data, '$.resolvedAt') END AS resolved_at " +
+      "FROM reports WHERE status = 'resolved'",
+  );
+  const deleteReportStmt = db.prepare("DELETE FROM reports WHERE id = ?");
   const markChannelSyncedStmt = db.prepare(
     "INSERT INTO synced_channels (channel_id) VALUES (?) ON CONFLICT(channel_id) DO NOTHING",
   );
@@ -1370,6 +1389,15 @@ function buildStore(db: SqliteConnection, pragma?: (source: string) => unknown):
         : countOpenReportsByReporterStmt.get(reporterUserId)) as { total: number } | undefined;
       return Number(row?.total ?? 0);
     },
+    loadResolvedReportTimes() {
+      return loadResolvedReportTimesStmt.all().map((row) => ({
+        id: row.id as string,
+        resolvedAt: typeof row.resolved_at === "number" ? row.resolved_at : Number(row.created_at),
+      }));
+    },
+    deleteReport(id) {
+      deleteReportStmt.run(id);
+    },
     markChannelSynced(channelId) {
       markChannelSyncedStmt.run(channelId);
     },
@@ -1452,6 +1480,11 @@ function buildStore(db: SqliteConnection, pragma?: (source: string) => unknown):
         db.exec("DELETE FROM user_blocks");
         db.exec("DELETE FROM sealed_offers_seen");
         db.prepare("DELETE FROM config WHERE key = ?").run(ASSISTANT_DESTINATION_CONFIG_KEY);
+        // The host's transport keypair (transport-server.ts `ensureTransportIdentity`) goes too. The reset
+        // writes a fresh one only after its checkpoint, into the unsynced WAL: kept here, a power cut after
+        // "reset complete" would roll that write back and boot the node with the old key, so the old join QR
+        // would still work. With no row, whoever reads the key next mints a new one.
+        db.prepare("DELETE FROM config WHERE key = ?").run("transportIdentity");
       });
       // Quarantined rows are ordinary rows: the DELETEs above removed them, so nothing is held any more.
       quarantinedUsers.clear();

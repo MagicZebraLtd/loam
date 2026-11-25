@@ -7,7 +7,14 @@ import type { AppContext } from "./app-context.js";
 import { errorBody } from "./errors.js";
 import { addressKey, ipv6SubnetKey } from "./rate-limit.js";
 import { originMatchesHost } from "./transport-server.js";
-import type { ClientEvent, HostMessageNotice, PendingSocket, SocketClient, SocketSession } from "./types.js";
+import type {
+  ClientEvent,
+  HostMessageNotice,
+  HostNoticeWithdrawal,
+  PendingSocket,
+  SocketClient,
+  SocketSession,
+} from "./types.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 /** Direction-separated AADs for the reflection-safe WS key-confirmation (docs/20 §7): the challenge
@@ -16,6 +23,11 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 const WS_CHALLENGE_AAD = "loam.ws.challenge.v1";
 const WS_PROOF_AAD = "loam.ws.proof.v1";
 const WS_FRAME_AAD_PREFIX = "loam.ws.frame.v1";
+/** The client's own random value for a new socket (`/ws?…&cn=`), repeated inside the sealed challenge so the
+ * client can tell this socket's challenge from an earlier connection's replayed onto it. Only a value of 16 to
+ * 64 base64url characters is repeated; anything else is ignored, as if the client had sent none (an older
+ * client sends none and gets the challenge as before). */
+const WS_CLIENT_NONCE_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 /** How long an encrypted socket has to answer the key-confirmation challenge before it's dropped. */
 const WS_CHALLENGE_TIMEOUT_MS = 10_000;
 /** Cap on simultaneously-unconfirmed encrypted sockets (anti-flood on the pre-auth path, docs/20 §7). */
@@ -67,6 +79,13 @@ const WS_HEARTBEAT_FRAME = JSON.stringify({ type: "ping" });
 /** How much of a message's text the host phone's notification gets: enough for a lock-screen preview. */
 export const HOST_NOTICE_BODY_MAX_LENGTH = 280;
 
+/**
+ * How many notified messages the server remembers so it can take their notifications back. Only these ids
+ * cross the launcher bridge when they change or go: a retention sweep can delete thousands of messages in
+ * one tick, and the host phone shows at most one notification per conversation anyway.
+ */
+export const HOST_NOTICE_RECORD_MAX = 256;
+
 /** Build the live-event layer over the app context: socket set, audience filtering, sealed frames, presence, `/ws`. */
 export function createRealtime(ctx: AppContext) {
   const sockets = new Set<SocketSession>();
@@ -84,6 +103,11 @@ export function createRealtime(ctx: AppContext) {
 
   // The online set last announced (sorted ids, joined), so presence goes out only when it changed.
   let lastPresenceKey: string | undefined;
+
+  // Messages handed to the host phone's notifications (`notifyHostDevice`), oldest first, capped at
+  // `HOST_NOTICE_RECORD_MAX`: id → its conversation key and author, so a delete, edit, lost channel or
+  // shadow ban can take the notification back. In memory only; the kill switch empties it.
+  const hostNotices = new Map<string, { conversation: string; authorId: string }>();
 
   /**
    * Whether a new socket for `userId` from `ip` would pass the admitted-socket caps (see
@@ -190,6 +214,12 @@ export function createRealtime(ctx: AppContext) {
   /** Whether the socket of `userId` may receive `event` — the single audience/privacy filter for every broadcast. */
   function socketCanReceiveEvent(userId: string, event: ClientEvent): boolean {
     const recipient = ctx.data.users.find((candidate) => candidate.id === userId);
+
+    // A recipient with no user record skipped every gate below (banned, pending), so it would hear the
+    // public feed while appearing nowhere. It hears only the wipe notice, which tells it to drop its cache.
+    if (!recipient) {
+      return event.type === "wipe";
+    }
 
     // A banned recipient hears nothing (their sockets are closed on ban; this also covers a racing
     // reconnect). A pending (unapproved) recipient only hears about their own approval and
@@ -353,6 +383,11 @@ export function createRealtime(ctx: AppContext) {
         const seesRoles = session.userId === subject.id || (!!recipient && ctx.canModerate(recipient));
         wsSend(session, seesRoles ? rolesPayload : strippedPayload);
       }
+      // A shadow-banned author's messages are hidden from the host's person from now on (the same filter
+      // `socketCanReceiveEvent` applies), so their notifications go too.
+      if (subject.shadowBanned) {
+        withdrawHostNoticesByAuthor(subject.id);
+      }
       return;
     }
 
@@ -365,6 +400,10 @@ export function createRealtime(ctx: AppContext) {
 
     if (event.type === "messageCreated") {
       notifyHostDevice(event.message);
+    } else if (event.type === "messageDeleted" || event.type === "messageUpdated") {
+      // Every delete (author, admin, retention, cascades, a deleted channel) and every change (an edit, a
+      // moderator's removal, a sync-imported edit) arrives here: a notification never outlives its text.
+      withdrawNotifiedMessage(event.message.id);
     }
   }
 
@@ -395,6 +434,7 @@ export function createRealtime(ctx: AppContext) {
       }
       const body = message.body.trim();
       const notice: HostMessageNotice = {
+        messageId: message.id,
         conversation: message.type === "dm" ? `dm:${author.id}` : `channel:${message.channelId}`,
         direct: message.type === "dm",
         author: author.displayName,
@@ -406,9 +446,103 @@ export function createRealtime(ctx: AppContext) {
         notice.channel = ctx.ensureChannel(message.channelId)?.name ?? message.channelId;
       }
       hook(notice);
+      rememberHostNotice(message.id, notice.conversation, author.id);
     } catch (error) {
       ctx.server.log.warn({ err: error }, "Couldn't pass a new message to the host phone's notifications");
     }
+  }
+
+  /**
+   * Record a message handed to the host phone's notifications, keeping at most `HOST_NOTICE_RECORD_MAX`. The
+   * phone shows one notification per conversation, with the newest notified message's text, so a record a
+   * newer one in its conversation has superseded backs nothing on screen: the oldest such record goes first.
+   * When every record is the newest of its conversation, the oldest goes and its conversation's notification
+   * is taken back with it, so no notification stays on screen that a later delete or edit couldn't reach.
+   */
+  function rememberHostNotice(messageId: string, conversation: string, authorId: string): void {
+    hostNotices.delete(messageId);
+    hostNotices.set(messageId, { conversation, authorId });
+    while (hostNotices.size > HOST_NOTICE_RECORD_MAX) {
+      const superseded = oldestSupersededHostNotice();
+      if (superseded !== undefined) {
+        hostNotices.delete(superseded);
+        continue;
+      }
+      const oldest = hostNotices.values().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      withdrawHostConversation(oldest.conversation);
+    }
+  }
+
+  /**
+   * The oldest remembered message whose conversation has a newer remembered message, or undefined. The
+   * first record met in insertion order for a conversation counted more than once is that conversation's
+   * oldest, so a newer one exists.
+   */
+  function oldestSupersededHostNotice(): string | undefined {
+    const perConversation = new Map<string, number>();
+    for (const { conversation } of hostNotices.values()) {
+      perConversation.set(conversation, (perConversation.get(conversation) ?? 0) + 1);
+    }
+    for (const [messageId, { conversation }] of hostNotices) {
+      if ((perConversation.get(conversation) ?? 0) > 1) {
+        return messageId;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Ask the Android launcher to take a host phone notification back (`globalThis.__loamWithdrawHostNotice`,
+   * main.js), so text that was deleted, changed or put out of the host's reach doesn't stay readable in the
+   * notification shade. A no-op without the hook (every node but the Android host) or without a host
+   * phone person. Never throws into the caller.
+   */
+  function withdrawHostNotice(withdrawal: HostNoticeWithdrawal): void {
+    const hook = (globalThis as { __loamWithdrawHostNotice?: (withdrawal: HostNoticeWithdrawal) => void })
+      .__loamWithdrawHostNotice;
+    if (typeof hook !== "function" || !ctx.hostDeviceUserId) {
+      return;
+    }
+    try {
+      hook(withdrawal);
+    } catch (error) {
+      ctx.server.log.warn({ err: error }, "Couldn't take a message notification back on the host phone");
+    }
+  }
+
+  /** Take back the notification for `messageId` if it was one handed to the host phone (and forget it). */
+  function withdrawNotifiedMessage(messageId: string): void {
+    if (!hostNotices.delete(messageId)) {
+      return;
+    }
+    withdrawHostNotice({ messageId });
+  }
+
+  /** Take back the notifications of every remembered message by `authorId`. */
+  function withdrawHostNoticesByAuthor(authorId: string): void {
+    for (const [messageId, notice] of [...hostNotices]) {
+      if (notice.authorId === authorId) {
+        withdrawNotifiedMessage(messageId);
+      }
+    }
+  }
+
+  /** Take back a whole conversation's notification (the host's person lost the channel), forgetting its messages. */
+  function withdrawHostConversation(conversation: string): void {
+    for (const [messageId, notice] of [...hostNotices]) {
+      if (notice.conversation === conversation) {
+        hostNotices.delete(messageId);
+      }
+    }
+    withdrawHostNotice({ conversation });
+  }
+
+  /** Forget every notified message (an Emergency Reset: the launcher clears all the notifications itself). */
+  function forgetHostNotices(): void {
+    hostNotices.clear();
   }
 
   /** User ids with at least one open socket, restricted to visible (non-banned/-pending) users. */
@@ -468,7 +602,8 @@ export function createRealtime(ctx: AppContext) {
   /**
    * Send an event to the sockets of the given users only, bypassing the broadcast audience filter.
    * Used for targeted notices such as `channelRemoved`, whose recipient is by definition no longer
-   * in the event's natural audience.
+   * in the event's natural audience. A `channelRemoved` that reaches the host phone's person (removed from
+   * or leaving a private channel, or the channel deleted) also takes back that channel's notification.
    */
   function sendEventToUsers(audience: Set<string>, event: ClientEvent): void {
     const payload = JSON.stringify(event);
@@ -477,6 +612,10 @@ export function createRealtime(ctx: AppContext) {
       if (session.socket.readyState === session.socket.OPEN && audience.has(session.userId)) {
         wsSend(session, payload);
       }
+    }
+
+    if (event.type === "channelRemoved" && ctx.hostDeviceUserId && audience.has(ctx.hostDeviceUserId)) {
+      withdrawHostConversation(`channel:${event.channelId}`);
     }
   }
 
@@ -565,7 +704,15 @@ export function createRealtime(ctx: AppContext) {
       // Pending users may connect: the broadcast filter limits them to their own approval notice.
       const user = ctx.data.users.find((candidate) => candidate.id === userId);
 
-      if (user?.banned) {
+      // A session that names no user record is nobody: it would sit in no roster or approval queue while
+      // receiving the public feed. Refused like a socket with no session at all.
+      if (!user) {
+        connection.send(JSON.stringify({ type: "error", ...errorBody("Unauthenticated websocket") }));
+        connection.close();
+        return;
+      }
+
+      if (user.banned) {
         connection.send(JSON.stringify({ type: "error", ...errorBody("This session is no longer valid") }));
         connection.close();
         return;
@@ -740,10 +887,15 @@ export function createRealtime(ctx: AppContext) {
         broadcastPresence();
       });
 
-      // Kick off the challenge. Sealed under the challenge aad; the client replies under the proof aad.
-      connection.send(
-        sealTransport(transportKey, JSON.stringify({ type: "challenge", connectionId, nonce }), WS_CHALLENGE_AAD),
-      );
+      // Kick off the challenge. Sealed under the challenge aad; the client replies under the proof aad. It
+      // repeats the client's `cn` when that is well formed, which is the client's proof that the challenge
+      // (and every frame after it) belongs to the socket it just opened.
+      const clientNonce = wsParams.get("cn");
+      const challenge =
+        clientNonce !== null && WS_CLIENT_NONCE_PATTERN.test(clientNonce)
+          ? { type: "challenge", connectionId, nonce, cn: clientNonce }
+          : { type: "challenge", connectionId, nonce };
+      connection.send(sealTransport(transportKey, JSON.stringify(challenge), WS_CHALLENGE_AAD));
     });
   }
 
@@ -760,6 +912,8 @@ export function createRealtime(ctx: AppContext) {
     closeUnboundSockets,
     unconfirmedByIp,
     broadcast,
+    withdrawHostNoticesByAuthor,
+    forgetHostNotices,
     registerWebSocketRoute,
   };
 }

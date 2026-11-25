@@ -4,6 +4,26 @@ import type { AppContext } from "./app-context.js";
 import { sessionCookieName } from "./defaults.js";
 import { readCookie } from "./identity.js";
 
+/**
+ * Close the sockets of `userId` that rode its cookie session, admitted or mid-challenge, once no cookie
+ * session maps to that user any more: without this they kept receiving every event after the session ended.
+ * Sockets on a bound transport session are kept, since their credential is the session key, not the cookie.
+ * Closes them the way a ban does (`invalidateUserSessions`); each close handler then updates presence.
+ */
+function closeCookieSockets(ctx: AppContext, userId: string): void {
+  for (const socketSession of [...ctx.sockets]) {
+    if (socketSession.userId === userId && !socketSession.bound) {
+      socketSession.socket.close();
+      ctx.sockets.delete(socketSession);
+    }
+  }
+  for (const pending of [...ctx.pendingSockets]) {
+    if (pending.userId === userId && !pending.bound) {
+      pending.close();
+    }
+  }
+}
+
 /** Register liveness, public bootstrap, authenticated config, and cookie session end. */
 export function registerSessionRoutes(ctx: AppContext): void {
   // Liveness probe that mints NO identity — the Android host launcher polls this before loading the
@@ -53,12 +73,16 @@ export function registerSessionRoutes(ctx: AppContext): void {
   ctx.server.post("/api/session/end", async (request, reply) => {
     const token = readCookie(request.headers.cookie, sessionCookieName);
     if (token) {
+      const userId = ctx.sessions.get(token);
       // The host phone forgetting its own identity: stop notifying it for that person.
-      if (ctx.hostDeviceUserId !== undefined && ctx.sessions.get(token) === ctx.hostDeviceUserId) {
+      if (ctx.hostDeviceUserId !== undefined && userId === ctx.hostDeviceUserId) {
         ctx.hostDeviceUserId = undefined;
       }
       ctx.sessions.delete(token);
       ctx.store.deleteSession(token);
+      if (userId !== undefined && ![...ctx.sessions.values()].includes(userId)) {
+        closeCookieSockets(ctx, userId);
+      }
     }
     // Match the mint path's attributes (incl. conditional Secure over TLS) so the browser reliably
     // delete-matches and clears the cookie.

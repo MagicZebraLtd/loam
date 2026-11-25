@@ -1,13 +1,15 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createMeshIdentity } from "@loam/crypto";
+import { createMeshIdentity, createTransportIdentity, transportServerAccept } from "@loam/crypto";
+import { generateDisplayName } from "@loam/display-name";
 
 import type { LoamApp } from "./app.js";
+import { makeUser } from "./identity.js";
 import {
   cleanups,
   type InjectResponse,
@@ -220,6 +222,29 @@ describe("node-to-node sync", () => {
     expect(bodies).not.toContain("private words");
     expect(bodies).not.toContain("dm words");
     expect(bodies).not.toContain("shadow words");
+  });
+
+  it("exports a banned author's record without the banned or pending property", async () => {
+    const source = await makeApp({ sync: { enabled: true, peers: [], intervalMs: 3_600_000 } });
+    const admin = await newSession(source);
+    const author = await newSession(source);
+    const postId = await post(source, author.cookie, "general", "said before the ban");
+    const ban = await source.server.inject({
+      method: "PATCH",
+      url: `/api/moderation/users/${author.userId}`,
+      headers: { cookie: admin.cookie },
+      payload: { banned: true },
+    });
+    expect(ban.statusCode).toBe(200);
+
+    const fetched = (
+      await source.server.inject({ method: "POST", url: "/api/sync/messages", payload: { ids: [postId] } })
+    ).json() as { messages: { id: string }[]; users: Record<string, unknown>[] };
+    expect(fetched.messages.map((message) => message.id)).toEqual([postId]);
+    const exported = fetched.users.find((user) => user.id === author.userId);
+    expect(exported).toBeDefined();
+    expect(exported).not.toHaveProperty("banned");
+    expect(exported).not.toHaveProperty("pending");
   });
 
   it("a locally deleted channel is tombstoned and never re-imported from a peer that still has it", async () => {
@@ -957,6 +982,43 @@ describe("missing-attachment retries", () => {
     expect(existsSync(pullerFilePath)).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32")("writes synced attachment copies 0600 in a 0700 attachments dir, on the round and on a retry", async () => {
+    const previousUmask = process.umask(0o022);
+    try {
+      const source = await makeApp({ sync: { enabled: true, peers: [], intervalMs: 3_600_000 } });
+      const sourceAdmin = await newSession(source);
+      const copiedOnRound = await uploadAttachment(source, sourceAdmin.cookie);
+      const copiedOnRetry = await uploadAttachment(source, sourceAdmin.cookie);
+      await source.server.inject({
+        method: "POST",
+        url: "/api/messages",
+        headers: { cookie: sourceAdmin.cookie },
+        payload: { type: "channelPost", channelId: "general", body: "", attachments: [copiedOnRound, copiedOnRetry] },
+      });
+      // The second file is missing during the round, so only the retry pass copies it.
+      const retryFilePath = join(source.dataDir, "attachments", `${copiedOnRetry.id}.png`);
+      const retryBytes = readFileSync(retryFilePath);
+      rmSync(retryFilePath);
+
+      const sourceUrl = await source.server.listen({ port: 0, host: "127.0.0.1" });
+      const puller = await makeApp({ sync: { enabled: true, peers: [{ url: sourceUrl }], intervalMs: 3_600_000 } });
+      const pullerAdmin = await newSession(puller);
+      await puller.server.inject({ method: "POST", url: "/api/admin/sync/run", headers: { cookie: pullerAdmin.cookie } });
+      expect(puller.store.loadMissingAttachments()).toHaveLength(1);
+      writeFileSync(retryFilePath, retryBytes);
+      await puller.retryMissingAttachments();
+      expect(puller.store.loadMissingAttachments()).toEqual([]);
+
+      const pullerAttachments = join(puller.dataDir, "attachments");
+      expect(statSync(pullerAttachments).mode & 0o777).toBe(0o700);
+      for (const attachment of [copiedOnRound, copiedOnRetry]) {
+        expect(statSync(join(pullerAttachments, `${attachment.id}.png`)).mode & 0o777, attachment.id).toBe(0o600);
+      }
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
   it("backs off between attempts, so a work item survives far more than the old fixed attempt cap without hitting its age bound", async () => {
     const source = await makeApp({ sync: { enabled: true, peers: [], intervalMs: 3_600_000 } });
     const sourceAdmin = await newSession(source);
@@ -1379,5 +1441,254 @@ describe("sync import honours a local moderator removal for new replies and reac
     const ids = puller.store.loadMessages().map((message) => message.id);
     expect(ids).not.toContain(replyId);
     expect(ids).not.toContain(reactionId);
+  });
+});
+
+describe("peer requests follow no redirect", () => {
+  const PEER_AUTHOR = { id: "user.peerauthor", type: "human", isAdmin: false, ephemeral: true, createdAt: 1, displayName: "Peer" };
+  const ATTACHMENT = { id: "att_0123456789abcdef", mimeType: "image/png", width: 1, height: 1 };
+  const PEER_POST = { id: "peer_post_redirect", type: "channelPost", authorId: PEER_AUTHOR.id, channelId: "general", createdAt: 1_000, body: "with picture", attachments: [ATTACHMENT] };
+
+  /** A local server that records every request it gets: where a followed redirect would land. */
+  async function redirectTarget(): Promise<{ url: string; hits: string[] }> {
+    const hits: string[] = [];
+    const server = createServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ channels: [], messages: [] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits };
+  }
+
+  /**
+   * A scripted peer. `plaintext` advertises no encryption and redirects the digest; `encrypted` completes
+   * the transport handshake and redirects the sealed digest; `posture` redirects every request, the
+   * transport posture read first; `attachment` serves one post normally and redirects its picture.
+   */
+  async function redirectingPeer(mode: "plaintext" | "encrypted" | "posture" | "attachment", location: string): Promise<string> {
+    const identity = createTransportIdentity();
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const path = (req.url ?? "").split("?")[0];
+        const json = (status: number, body: unknown) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        };
+        const redirect = () => {
+          res.writeHead(302, { location: `${location}${path}` });
+          res.end();
+        };
+        if (mode === "posture") {
+          redirect();
+        } else if (path === "/api/bootstrap") {
+          json(200, {
+            networkConfig:
+              mode === "encrypted" ? { transportEncryption: "optional", transportPublicKey: identity.publicKey } : { transportEncryption: "off" },
+          });
+        } else if (path === "/api/transport/handshake" && mode === "encrypted") {
+          const hello = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { clientEphemeralPublic: string };
+          const accepted = transportServerAccept({ hostSecret: identity.secretKey, clientEphemeralPublic: hello.clientEphemeralPublic });
+          json(200, { sessionId: "redirect-session", hostEphemeralPublic: accepted.hostEphemeralPublic, hostPublicKey: identity.publicKey });
+        } else if (mode === "attachment" && path === "/api/sync/digest") {
+          json(200, { channels: [], messages: [{ id: PEER_POST.id }] });
+        } else if (mode === "attachment" && path === "/api/sync/messages") {
+          json(200, { messages: [PEER_POST], users: [PEER_AUTHOR] });
+        } else {
+          redirect();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  /** Run one sync round against `peerUrl` and return that peer's reported status. */
+  async function roundAgainst(peerUrl: string): Promise<{ lastError?: string } | undefined> {
+    const app = await makeApp({ sync: { enabled: true, peers: [{ url: peerUrl }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    const run = await app.server.inject({ method: "POST", url: "/api/admin/sync/run", headers: { cookie: admin.cookie } });
+    expect(run.statusCode).toBe(200);
+    const report = (await app.server.inject({ method: "GET", url: "/api/admin/sync", headers: { cookie: admin.cookie } })).json() as {
+      peers: { url: string; status?: { lastError?: string } }[];
+    };
+    return report.peers.find((peer) => peer.url === peerUrl)?.status;
+  }
+
+  for (const mode of ["plaintext", "encrypted", "posture"] as const) {
+    it(`records an error and follows nothing when the peer redirects (${mode})`, async () => {
+      const target = await redirectTarget();
+      const status = await roundAgainst(await redirectingPeer(mode, target.url));
+      expect(target.hits).toEqual([]);
+      expect(status?.lastError).toBeTruthy();
+    });
+  }
+
+  it("does not follow a redirect for a plaintext peer's attachment", async () => {
+    const target = await redirectTarget();
+    await roundAgainst(await redirectingPeer("attachment", target.url));
+    expect(target.hits).toEqual([]);
+  });
+});
+
+describe("imported author records", () => {
+  const editable = { identity: { allowUserDisplayNameEdit: true, allowUserAvatarEdit: true, allowUserAvatarUpload: true } };
+  const webp = Buffer.from("RIFF\0\0\0\0WEBP").toString("base64");
+
+  /** A plaintext peer serving one public post by the record `author()` returns, read at request time. */
+  async function peerServing(author: () => Record<string, unknown>): Promise<string> {
+    const server = createServer((req, res) => {
+      const record = author();
+      const post = { id: `peer_post_${String(record.id).slice(5)}`, type: "channelPost", authorId: record.id, channelId: "general", createdAt: 1_000, body: "hello" };
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/api/sync/digest") {
+        res.end(JSON.stringify({ channels: [], messages: [{ id: post.id }] }));
+        return;
+      }
+      if (req.url === "/api/sync/messages") {
+        res.end(JSON.stringify({ messages: [post], users: [record] }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end("{}");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  /** A node syncing from `peerUrl` whose admin has uploaded a picture. */
+  async function nodeWithPictureAdmin(peerUrl: string) {
+    const { app, dataDir } = await makeApp({ ...editable, sync: { enabled: true, peers: [{ url: peerUrl }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    const upload = await app.server.inject({
+      method: "PUT",
+      url: "/api/users/me/avatar-image",
+      headers: { cookie: admin.cookie },
+      payload: { mimeType: "image/webp", data: webp },
+    });
+    expect(upload.statusCode).toBe(200);
+    const record = upload.json() as { displayName: string; avatar: { kind: "image"; imageId: string; mimeType: "image/webp"; uploadedAt: number } };
+    const file = join(dataDir, "avatars", `${record.avatar.imageId}.webp`);
+    expect(existsSync(file)).toBe(true);
+    return { app, dataDir, admin, displayName: record.displayName, avatar: record.avatar, file };
+  }
+
+  async function runSync(app: LoamApp, cookie: string): Promise<void> {
+    expect((await app.server.inject({ method: "POST", url: "/api/admin/sync/run", headers: { cookie } })).statusCode).toBe(200);
+  }
+
+  function switchToGenerated(app: LoamApp, cookie: string, seed: string): Promise<InjectResponse> {
+    return app.server.inject({ method: "PATCH", url: "/api/users/me", headers: { cookie }, payload: { avatar: { kind: "generated", seed } } });
+  }
+
+  const storedUser = (app: LoamApp, id: string) => app.store.loadUsers().find((user) => user.id === id);
+  const peerAuthor = (id: string, extra: Record<string, unknown>) => ({ id, type: "human", isAdmin: false, ephemeral: true, createdAt: 1, displayName: "Peer", ...extra });
+
+  it("drops a copied picture and a copied name, so the local picture is deleted when its owner switches away", async () => {
+    let author: Record<string, unknown> = {};
+    const node = await nodeWithPictureAdmin(await peerServing(() => author));
+    author = peerAuthor("user.peercopycat01", { displayName: `​${node.displayName.toUpperCase()}`, avatar: node.avatar });
+    await runSync(node.app, node.admin.cookie);
+
+    const imported = storedUser(node.app, "user.peercopycat01");
+    expect(imported).toBeDefined();
+    expect(imported?.avatar).toBeUndefined();
+    expect(imported?.displayName).toBe(generateDisplayName("user.peercopycat01"));
+
+    expect((await switchToGenerated(node.app, node.admin.cookie, node.admin.userId)).statusCode).toBe(200);
+    expect(existsSync(node.file)).toBe(false);
+    expect((await node.app.server.inject({ method: "GET", url: `/api/avatars/${node.avatar.imageId}.webp` })).statusCode).toBe(404);
+  });
+
+  it("drops a generated avatar whose seed is a local person's id, and a name of only hidden characters", async () => {
+    let author: Record<string, unknown> = {};
+    const app = await makeApp({ sync: { enabled: true, peers: [{ url: await peerServing(() => author) }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    author = peerAuthor("user.peerseedcopy1", { displayName: "​⁠", avatar: { kind: "generated", seed: admin.userId, mode: "face" } });
+    await runSync(app, admin.cookie);
+
+    const imported = storedUser(app, "user.peerseedcopy1");
+    expect(imported).toBeDefined();
+    expect(imported?.avatar).toBeUndefined();
+    expect(imported?.displayName).toBe(generateDisplayName("user.peerseedcopy1"));
+  });
+
+  // Skipped where `normalize` composes nothing (a Node without ICU): there the names differ anyway.
+  it.skipIf("e\u0301".normalize("NFKC") !== "\u00E9")("gives the generated name to an author copying a precomposed name with a joiner before the accent", async () => {
+    let author: Record<string, unknown> = {};
+    const app = await makeApp({ ...editable, sync: { enabled: true, peers: [{ url: await peerServing(() => author) }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    const patched = await app.server.inject({ method: "PATCH", url: "/api/users/me", headers: { cookie: admin.cookie }, payload: { displayName: "Jos\u00E9" } });
+    expect(patched.statusCode).toBe(200);
+    for (const [id, name] of [["user.peerjoiner001", "Jose\u034F\u0301"], ["user.peerjoiner002", "Jose\u200D\u0301"]]) {
+      author = peerAuthor(id, { displayName: name });
+      await runSync(app, admin.cookie);
+      expect(storedUser(app, id)?.displayName).toBe(generateDisplayName(id));
+    }
+  });
+
+  it("gives a blank-named author a free name when a local member has typed its generated name", async () => {
+    let author: Record<string, unknown> = {};
+    const app = await makeApp({ ...editable, sync: { enabled: true, peers: [{ url: await peerServing(() => author) }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    const generated = generateDisplayName("user.peerclash0001");
+    const patched = await app.server.inject({ method: "PATCH", url: "/api/users/me", headers: { cookie: admin.cookie }, payload: { displayName: generated } });
+    expect(patched.statusCode).toBe(200);
+    author = peerAuthor("user.peerclash0001", { displayName: "\u200B" });
+    await runSync(app, admin.cookie);
+
+    const imported = storedUser(app, "user.peerclash0001");
+    expect(imported).toBeDefined();
+    expect(imported?.displayName).not.toBe(generated);
+    expect(imported?.displayName).toBe(`${generated}.0001`);
+  });
+
+  it("imports an ordinary peer author with its own name and generated avatar unchanged", async () => {
+    const record = peerAuthor("user.peerordinary1", { displayName: "River Otter", avatar: { kind: "generated", seed: "kelp", mode: "pattern" } });
+    const app = await makeApp({ sync: { enabled: true, peers: [{ url: await peerServing(() => record) }], intervalMs: 3_600_000 } });
+    const admin = await newSession(app);
+    await runSync(app, admin.cookie);
+
+    expect(storedUser(app, "user.peerordinary1")).toEqual(record);
+  });
+
+  it("stops a row imported before this rule from pinning a local picture, at the next boot", async () => {
+    const node = await nodeWithPictureAdmin("http://127.0.0.1:9");
+    const stale = { ...makeUser("user.peerstalecopy"), displayName: "Stale", avatar: node.avatar };
+    node.app.store.upsertUser(stale);
+    node.app.store.markUserSynced(stale.id);
+
+    const reopened = await reopenApp(node.app, node.dataDir);
+    expect(storedUser(reopened, stale.id)?.avatar).toBeUndefined();
+    expect(storedUser(reopened, stale.id)?.displayName).toBe("Stale");
+    expect(storedUser(reopened, node.admin.userId)?.avatar).toEqual(node.avatar);
+
+    expect((await switchToGenerated(reopened, node.admin.cookie, node.admin.userId)).statusCode).toBe(200);
+    expect(existsSync(node.file)).toBe(false);
+  });
+
+  it("exports an author with an uploaded picture without the picture", async () => {
+    const node = await nodeWithPictureAdmin("http://127.0.0.1:9");
+    const posted = await node.app.server.inject({
+      method: "POST",
+      url: "/api/messages",
+      headers: { cookie: node.admin.cookie },
+      payload: { type: "channelPost", channelId: "general", body: "with a face" },
+    });
+    expect(posted.statusCode).toBe(201);
+    const postId = (posted.json() as { message: { id: string } }).message.id;
+
+    const fetched = (
+      await node.app.server.inject({ method: "POST", url: "/api/sync/messages", payload: { ids: [postId] } })
+    ).json() as { users: Record<string, unknown>[] };
+    const exported = fetched.users.find((user) => user.id === node.admin.userId);
+    expect(exported).toBeDefined();
+    expect(exported).not.toHaveProperty("avatar");
+    expect(JSON.stringify(fetched)).not.toContain(node.avatar.imageId);
   });
 });

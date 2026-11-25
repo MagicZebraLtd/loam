@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, type LoamApp } from "./app.js";
 import { capHistoryByChars, ON_DEVICE_CONTEXT_MAX_CHARS } from "./llm.js";
 import {
+  assistantRevision,
   cleanups,
   type InjectResponse,
   makeApp,
@@ -63,7 +64,7 @@ describe("on-device LLM provider", () => {
       method: "POST",
       url: "/api/messages",
       headers: { cookie: user.cookie },
-      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi" },
+      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: await assistantRevision(app) },
     });
     expect(dm.statusCode).toBe(201);
 
@@ -89,7 +90,7 @@ describe("on-device LLM provider", () => {
         method: "POST",
         url: "/api/messages",
         headers: { cookie: user.cookie },
-        payload: { type: "dm", recipientUserId: BOT_ID, body: `${turn}:`.padEnd(7000, "q") },
+        payload: { type: "dm", recipientUserId: BOT_ID, body: `${turn}:`.padEnd(7000, "q"), assistantDestinationRevision: await assistantRevision(app) },
       });
       expect(dm.statusCode).toBe(201);
       for (let attempt = 0; attempt < 80 && seen.length <= turn; attempt += 1) {
@@ -126,7 +127,7 @@ describe("on-device LLM provider", () => {
       method: "POST",
       url: "/api/messages",
       headers: { cookie: user.cookie },
-      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi" },
+      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: await assistantRevision(app) },
     });
 
     // The member sees one plain sentence; the backend's own words go to the log only.
@@ -176,7 +177,7 @@ describe("Ollama LLM streaming", () => {
       method: "POST",
       url: "/api/messages",
       headers: { cookie: user.cookie },
-      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi" },
+      payload: { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: await assistantRevision(app) },
     });
     // The POST itself never fails because of a bad LLM backend — the failure surfaces async, in the
     // assistant's own reply, exactly like an on-device hook failure.
@@ -356,7 +357,8 @@ describe("assistant replies: crashes, moderation and concurrency", () => {
     const app = await makeApp({ llm: { ollama: { enabled: true, baseUrl: await ollama.url } } });
     const admin = await newSession(app);
     const user = await newSession(app);
-    expect((await post(app, user.cookie, { type: "dm", recipientUserId: BOT_ID, body: "hi" })).statusCode).toBe(201);
+    const revision = await assistantRevision(app);
+    expect((await post(app, user.cookie, { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: revision })).statusCode).toBe(201);
 
     const reply = () =>
       app.store.loadMessages().find((message) => message.authorId === BOT_ID) as
@@ -371,6 +373,14 @@ describe("assistant replies: crashes, moderation and concurrency", () => {
     };
     expect(await waitUntil(async () => (await liveBody()).length > 0)).toBe(true);
 
+    // The admin isn't in this DM, so they act on it once the member reports it.
+    const report = await app.server.inject({
+      method: "POST",
+      url: "/api/reports",
+      headers: { cookie: user.cookie },
+      payload: { targetType: "message", targetId: reply()?.id, reason: "other" },
+    });
+    expect(report.statusCode).toBe(201);
     const removed = await app.server.inject({
       method: "POST",
       url: `/api/moderation/messages/${reply()?.id}/remove`,
@@ -392,7 +402,8 @@ describe("assistant replies: crashes, moderation and concurrency", () => {
     const u1 = await newSession(app);
     const u2 = await newSession(app);
     const u3 = await newSession(app);
-    const dm = (cookie: string) => post(app, cookie, { type: "dm", recipientUserId: BOT_ID, body: "hi" });
+    const revision = await assistantRevision(app);
+    const dm = (cookie: string) => post(app, cookie, { type: "dm", recipientUserId: BOT_ID, body: "hi", assistantDestinationRevision: revision });
 
     expect((await dm(u1.cookie)).statusCode).toBe(201);
     const again = await dm(u1.cookie);
