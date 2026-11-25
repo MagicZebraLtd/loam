@@ -20,17 +20,26 @@ export type HostInjection = {
 };
 
 /**
+ * `value` as a JavaScript string literal for a script the WebView will run. `JSON.stringify` alone leaves
+ * `<` (which could close a script element), U+2028 and U+2029 (line ends in older JavaScript) as they are;
+ * here they are written as escapes, so the literal reads the same wherever the script text ends up.
+ */
+export function jsStringLiteral(value: string): string {
+  return JSON.stringify(value).replace(/[<\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
  * The script for `injectedJavaScriptBeforeContentLoaded`: sets `__loamHostDeviceToken`,
  * `__loamHostTransportKey` and `__loamHostNoLocalCache` only on a page whose `location.origin` is LOAM's.
  */
 export function hostInjectionScript({ hostToken, transportKeyFragment, noLocalCache }: HostInjection): string {
   const assignments =
-    (hostToken ? `window.__loamHostDeviceToken = ${JSON.stringify(hostToken)};` : '') +
+    (hostToken ? `window.__loamHostDeviceToken = ${jsStringLiteral(hostToken)};` : '') +
     (transportKeyFragment
-      ? `window.__loamHostTransportKey = ${JSON.stringify(decodeURIComponent(transportKeyFragment.slice('#k='.length)))};`
+      ? `window.__loamHostTransportKey = ${jsStringLiteral(decodeURIComponent(transportKeyFragment.slice('#k='.length)))};`
       : '') +
     (noLocalCache ? 'window.__loamHostNoLocalCache = true;' : '');
-  return `if (location.origin === ${JSON.stringify(HOST_WEBVIEW_ORIGIN)}) { ${assignments} } true;`;
+  return `if (location.origin === ${jsStringLiteral(HOST_WEBVIEW_ORIGIN)}) { ${assignments} } true;`;
 }
 
 /** True when `url` belongs to the embedded server's origin (compares origins, not string prefixes). */

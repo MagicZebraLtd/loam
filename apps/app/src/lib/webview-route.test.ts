@@ -6,11 +6,16 @@ import { webViewRouteScript } from './webview-route';
 /** Run a built script against a stand-in `location`, as the WebView would, and return what it set. */
 function run(script: string, origin = HOST_WEBVIEW_ORIGIN): { hash: string; result: unknown; pathname: string } {
   const location = { hash: '', pathname: '/', origin };
-  const result = new Function('location', 'history', `return eval(${JSON.stringify(script)});`)(location, {
-    pushState: () => {
-      throw new Error('the route must not go in the path');
+  // The script goes in as an argument, so no code is built from it here.
+  const result = new Function('location', 'history', 'script', 'return eval(script);')(
+    location,
+    {
+      pushState: () => {
+        throw new Error('the route must not go in the path');
+      },
     },
-  });
+    script,
+  );
   return { hash: location.hash, pathname: location.pathname, result };
 }
 
@@ -29,6 +34,13 @@ describe('webViewRouteScript', () => {
 
   it('keeps a path that holds quotes inside its string', () => {
     expect(run(webViewRouteScript(`/channel/a'b"c`)).hash).toBe(`#/channel/a'b"c`);
+  });
+
+  it('writes a script end tag and the Unicode line ends as escapes, and still sets the same route', () => {
+    const path = '/channel/</script>\u2028\u2029';
+    const script = webViewRouteScript(path);
+    expect(script).not.toMatch(/[<\u2028\u2029]/);
+    expect(run(script).hash).toBe(`#${path}`);
   });
 });
 

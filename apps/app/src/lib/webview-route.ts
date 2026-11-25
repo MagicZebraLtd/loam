@@ -4,6 +4,7 @@
 // a browser never sends, so a reload asks the node for `/` alone. Setting `location.hash` changes the route in
 // place: the client follows `hashchange`. Pure, so it is unit-testable without the RN import graph.
 
+import { jsStringLiteral } from './host-injection';
 import { HOST_WEBVIEW_ORIGIN } from './join-url';
 
 /**
@@ -14,5 +15,5 @@ import { HOST_WEBVIEW_ORIGIN } from './join-url';
  * `injectJavaScript` asks.
  */
 export function webViewRouteScript(path: string): string {
-  return `if (location.origin === ${JSON.stringify(HOST_WEBVIEW_ORIGIN)}) { location.hash = ${JSON.stringify(`#${path}`)}; } true;`;
+  return `if (location.origin === ${jsStringLiteral(HOST_WEBVIEW_ORIGIN)}) { location.hash = ${jsStringLiteral(`#${path}`)}; } true;`;
 }
