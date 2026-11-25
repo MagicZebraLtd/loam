@@ -3,6 +3,7 @@ import type { VNode } from "preact";
 import { render } from "preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LocationProvider } from "../lib/location";
 import { AdminView } from "./AdminView";
 
 // AdminView fetches its config on mount through the transport passthrough, which (with no transport
@@ -60,7 +61,8 @@ const member: User = { ...admin, id: "user.member", displayName: "Manny Member",
 function mount(element: VNode): HTMLDivElement {
   const container = document.createElement("div");
   document.body.appendChild(container);
-  render(element, container);
+  // AdminView reads its deep-linked section from the route, so mounts get a LocationProvider.
+  render(<LocationProvider>{element}</LocationProvider>, container);
   mounted.push(container);
   return container;
 }
@@ -104,8 +106,8 @@ describe("AdminView", () => {
     expect(host.querySelector(".empty-note")).not.toBeNull();
   });
 
-  it("jumps to the section a #admin-<key> address names once the config has loaded (the hosts' assistant deep link)", async () => {
-    window.location.hash = "#admin-llm";
+  it("jumps to the section a /admin?section=<key> route names once the config has loaded, then drops it from the address (the hosts' assistant deep link)", async () => {
+    window.history.replaceState(null, "", "/#/admin?section=llm");
     try {
       const host = mount(
         <AdminView currentUser={admin} joinUrl="http://192.168.0.10:3000" onChannelUpsert={() => {}} onWiped={async () => {}} />,
@@ -114,8 +116,9 @@ describe("AdminView", () => {
       await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
       expect(host.querySelector("#admin-llm")).not.toBeNull();
       expect(document.activeElement?.id).toBe("admin-llm");
+      expect(window.location.hash).toBe("#/admin");
     } finally {
-      window.location.hash = "";
+      window.history.replaceState(null, "", "/");
     }
   });
 
@@ -132,7 +135,8 @@ describe("AdminView", () => {
     const pills = Array.from(host.querySelectorAll<HTMLAnchorElement>(".admin-nav a"));
     expect(pills.length).toBe(9);
     for (const pill of pills) {
-      expect(host.querySelector(pill.getAttribute("href")!)).not.toBeNull();
+      const section = /^#\/admin\?section=([a-z]+)$/.exec(pill.getAttribute("href")!)?.[1];
+      expect(host.querySelector(`#admin-${section}`)).not.toBeNull();
     }
     // The getting-started panel, the embedded channels panel and the save bar are all present.
     expect(host.querySelector(".getting-started")).not.toBeNull();
@@ -140,6 +144,22 @@ describe("AdminView", () => {
     expect(host.querySelector(".save-bar button")?.textContent).toBe("Save node config");
     // Feature flags are switches (real checkboxes styled by CSS).
     expect(host.querySelectorAll("#admin-features input.toggle").length).toBeGreaterThan(0);
+  });
+
+  it("leaves a modifier click on a section pill to the browser, and handles a plain one itself", async () => {
+    const host = mount(
+      <AdminView currentUser={admin} joinUrl="http://192.168.0.10:3000" onChannelUpsert={() => {}} onWiped={async () => {}} />,
+    );
+    await flush();
+    const pill = host.querySelector<HTMLAnchorElement>(".admin-nav a")!;
+    for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
+      pill.dispatchEvent(event);
+      expect(event.defaultPrevented, JSON.stringify(init)).toBe(false);
+    }
+    const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
+    pill.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(true);
   });
 
   it("labels the admin bootstrap strategies in plain words, not config identifiers", async () => {
@@ -219,7 +239,12 @@ describe("AdminView", () => {
     await flush();
 
     node.config = { ...node.config, features: { ...node.config.features, enablePresence: false } };
-    render(<AdminView configVersion={1} currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />, host);
+    render(
+      <LocationProvider>
+        <AdminView configVersion={1} currentUser={admin} onChannelUpsert={() => {}} onWiped={async () => {}} />
+      </LocationProvider>,
+      host,
+    );
     await flush();
 
     expect((host.querySelector("#admin-network form input") as HTMLInputElement).value).toBe("Unsaved Name");

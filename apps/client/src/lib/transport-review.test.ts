@@ -25,6 +25,7 @@ import {
   UnsealedResponseError,
 } from "./transport";
 import { useEncryptedImage } from "./use-encrypted-image";
+import { openTunnelRequest, tunnelDescriptorReply, type TunnelInner } from "../test-support/tunnel";
 
 // Pre-release review 2026-09-25: the pinned (tunnel) client's handling of unsealed replies, `#k=` links
 // that differ from an existing pin, the invite-QR key source, and the tunnelled-image URL cache.
@@ -33,7 +34,7 @@ const PIN_KEY = (): string => `loam.transportHostKey.${window.location.origin}`;
 const PIN_BROKEN_KEY = (): string => `loam.transportPinBroken.${window.location.origin}`;
 
 type Host = ReturnType<typeof createTransportIdentity>;
-type Inner = { m: string; p: string; body?: unknown };
+type Inner = TunnelInner;
 
 /** The body `/api/transport/handshake` would send for `host` (runs the real server-side accept). */
 function handshakeReply(host: Host, init: RequestInit): { response: Response; sessionKey: string } {
@@ -74,29 +75,17 @@ function tunnelNode(host: Host, reply: (inner: Inner, call: number) => Response 
       const sealed = sealTransport(
         sessionKey!,
         JSON.stringify({ s, m: "POST", p: "/api/session/resume", currentUser: {} }),
-        `POST /api/session/resume#${s}#200`,
+        `loam.transport.response.v2 ${JSON.stringify(["POST", "/api/session/resume", s, 200])}`,
       );
       return new Response(JSON.stringify({ enc: sealed }), { status: 200, headers: { "x-loam-enc": "1" } });
     }
     calls += 1;
-    const opened = openTransport(sessionKey!, (JSON.parse(init.body as string) as { enc: string }).enc, "POST /api/transport/tunnel");
-    const envelope = JSON.parse(opened!) as { s: number; b: Inner };
+    const envelope = openTunnelRequest(sessionKey!, init)!;
     const result = reply(envelope.b, calls);
     if (result instanceof Response) {
       return result;
     }
-    const descriptor = JSON.stringify({
-      s: envelope.s,
-      m: envelope.b.m,
-      p: envelope.b.p,
-      status: result.status,
-      contentType: "application/json",
-      bodyB64: btoa(JSON.stringify(result.json)),
-    });
-    return new Response(JSON.stringify({ enc: sealTransport(sessionKey!, descriptor, "POST /api/transport/tunnel") }), {
-      status: 200,
-      headers: { "x-loam-enc": "1" },
-    });
+    return tunnelDescriptorReply(sessionKey!, envelope, { status: result.status, bodyB64: btoa(JSON.stringify(result.json)) });
   });
 }
 

@@ -29,14 +29,15 @@ function fieldNames(a: FieldMap, b: FieldMap): string[] {
 
 /**
  * The value that clears a field the draft left empty but the saved config has. JSON drops `undefined`, so a
- * cleared retention or sync token needs the explicit clear the server understands; any other field has none
- * and keeps its saved value, as a whole-section save always did.
+ * cleared retention, sync token or system prompt needs the explicit clear the server understands; any other
+ * field has none and keeps its saved value, as a whole-section save always did. (The on-device model label has
+ * no clear: the server refuses an empty one.)
  */
 function clearedValue(section: string, field: string): unknown {
   if (section === "retention" && field === "messageTtlMs") {
     return null;
   }
-  if (section === "sync" && field === "token") {
+  if ((section === "sync" && field === "token") || (section === "ollama" && field === "systemPrompt")) {
     return "";
   }
   return undefined;
@@ -134,7 +135,8 @@ export function configDelta(draft: LoamConfig, base: LoamConfig): LoamConfigUpda
 
 /**
  * The draft carried onto a newer copy of the config: every field the admin changed from `base` keeps the
- * admin's value, every other one takes `fresh`'s. With no edits this is `fresh` itself.
+ * admin's value, every other one takes `fresh`'s. With no edits this is `fresh` itself. Read-only fields the
+ * server reports beside the backends (`llm.refusal`) always come from `fresh`.
  */
 export function rebaseConfig(draft: LoamConfig, base: LoamConfig, fresh: LoamConfig): LoamConfig {
   const result = { ...fresh } as LoamConfig;
@@ -142,6 +144,7 @@ export function rebaseConfig(draft: LoamConfig, base: LoamConfig, fresh: LoamCon
     (result as Record<string, unknown>)[section] = rebaseSection(draft[section], base[section], fresh[section]);
   }
   result.llm = {
+    ...fresh.llm,
     ollama: rebaseSection(draft.llm.ollama, base.llm.ollama, fresh.llm.ollama),
     openai: rebaseSection(draft.llm.openai, base.llm.openai, fresh.llm.openai),
     onDevice: rebaseSection(draft.llm.onDevice, base.llm.onDevice, fresh.llm.onDevice),

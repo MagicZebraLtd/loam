@@ -1,6 +1,6 @@
 import type { VNode } from "preact";
 import { render } from "preact";
-import { LocationProvider } from "preact-iso";
+import { LocationProvider } from "../lib/location";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { groupToasts, ToastStack, type ToastItem } from "./ToastStack";

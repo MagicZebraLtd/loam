@@ -1,5 +1,8 @@
 import type { AvatarImageMimeType, MessageAttachment } from "@loam/schema";
 
+import { t } from "../i18n";
+import { encodeCanvasUnderLimit, type EncodingAttempt } from "./image-encoding";
+
 /** Longest edge an attachment is downscaled to before upload (like the avatar editor's 256px). */
 export const ATTACHMENT_MAX_DIMENSION = 1280;
 /** The server rejects attachment binaries larger than this. */
@@ -91,55 +94,40 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Unable to load image."));
+    image.onerror = () => reject(new Error(t("composer.imageUnreadable")));
     image.src = url;
   });
 }
 
-/** Try webp at descending qualities, then png, until the encoded blob fits the upload cap. */
-function encodeUnderLimit(canvas: HTMLCanvasElement): Promise<Blob> {
-  const formats: { type: "image/webp" | "image/png"; quality?: number }[] = [
-    { type: "image/webp", quality: 0.82 },
-    { type: "image/webp", quality: 0.72 },
-    { type: "image/webp", quality: 0.6 },
-    { type: "image/png" },
-  ];
+/** WebP at descending qualities, then PNG, then WebP at smaller sizes (a very detailed photo), while the
+ *  browser writes WebP. */
+const WEBP_ATTEMPTS: EncodingAttempt[] = [
+  { type: "image/webp", quality: 0.82 },
+  { type: "image/webp", quality: 0.72 },
+  { type: "image/webp", quality: 0.6 },
+  { type: "image/png" },
+  { type: "image/webp", quality: 0.6, scale: 0.75 },
+  { type: "image/webp", quality: 0.6, scale: 0.5 },
+];
 
-  return new Promise((resolve, reject) => {
-    function tryFormat(index: number): void {
-      const format = formats[index];
-
-      if (!format) {
-        reject(new Error("Image is too large even after resizing."));
-        return;
-      }
-
-      canvas.toBlob(
-        (blob) => {
-          if (blob && blob.size <= ATTACHMENT_MAX_BYTES) {
-            resolve(blob);
-            return;
-          }
-
-          tryFormat(index + 1);
-        },
-        format.type,
-        format.quality,
-      );
-    }
-
-    tryFormat(0);
-  });
-}
+/** JPEG at descending qualities, then at smaller sizes, where it can't (Safari, every iOS browser). */
+const JPEG_ATTEMPTS: EncodingAttempt[] = [
+  { type: "image/jpeg", quality: 0.82 },
+  { type: "image/jpeg", quality: 0.72 },
+  { type: "image/jpeg", quality: 0.6 },
+  { type: "image/jpeg", quality: 0.6, scale: 0.75 },
+  { type: "image/jpeg", quality: 0.6, scale: 0.5 },
+];
 
 /**
  * Downscale an image file on-device — like the avatar editor, the original never leaves the
  * browser. Longest edge capped at {@link ATTACHMENT_MAX_DIMENSION}, re-encoded to webp (png
- * fallback) under the server's {@link ATTACHMENT_MAX_BYTES} cap.
+ * fallback), or to JPEG where the browser can't write WebP, under the server's {@link ATTACHMENT_MAX_BYTES}
+ * cap. The upload sends the blob's own type, and `width`/`height` are the size it was encoded at.
  */
 export async function prepareImageAttachment(file: File): Promise<PreparedAttachment> {
   if (!file.type.startsWith("image/") || file.type === "image/svg+xml") {
-    throw new Error("Choose a PNG, JPEG, or WebP image.");
+    throw new Error(t("composer.imageType"));
   }
 
   const url = URL.createObjectURL(file);
@@ -148,17 +136,26 @@ export async function prepareImageAttachment(file: File): Promise<PreparedAttach
     const image = await loadImage(url);
     const { width, height } = fitWithin(image.naturalWidth, image.naturalHeight, ATTACHMENT_MAX_DIMENSION);
     const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
     const context = canvas.getContext("2d");
 
     if (!context) {
-      throw new Error("Unable to process the image.");
+      throw new Error(t("composer.imageProcessFailed"));
     }
 
-    context.drawImage(image, 0, 0, width, height);
-    const blob = await encodeUnderLimit(canvas);
-    return { blob, width, height };
+    const encoded = await encodeCanvasUnderLimit(canvas, context, {
+      width,
+      height,
+      maxBytes: ATTACHMENT_MAX_BYTES,
+      paint: (_canvas, drawWidth, drawHeight) => context.drawImage(image, 0, 0, drawWidth, drawHeight),
+      attempts: WEBP_ATTEMPTS,
+      withoutWebp: JPEG_ATTEMPTS,
+    });
+
+    if (!encoded) {
+      throw new Error(t("composer.imageTooLarge"));
+    }
+
+    return encoded;
   } finally {
     URL.revokeObjectURL(url);
   }

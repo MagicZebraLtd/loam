@@ -205,13 +205,15 @@ export function SettingsView({
                 </label>
               ) : null}
               {allowAvatarEdit ? (
-                <fieldset className="field avatar-style-field" disabled={saving || avatarKind === "image"}>
+                // A tap on a style while a photo is in use switches back to that generated style, so no tile
+                // shows as picked until then.
+                <fieldset className="field avatar-style-field" disabled={saving}>
                   <legend className="field-label">{t("settings.avatarStyle")}</legend>
                   <div className="choice-row">
                     {AVATAR_MODES.map((mode) => (
                       <label className="choice-tile" key={mode}>
                         <input
-                          checked={avatarMode === mode}
+                          checked={avatarKind === "generated" && avatarMode === mode}
                           className="choice-input"
                           name={avatarChoiceName}
                           onInput={() => {
@@ -298,9 +300,9 @@ export function SettingsView({
               plain-text file the client build generates (scripts/third-party-notices.mjs), opened in a new tab
               so the router doesn't take the click. */}
           <p className="screen-footnote privacy-policy-link">
-            <a href="/rules">{t("settings.rules")}</a>
+            <a href="#/rules">{t("settings.rules")}</a>
             {" · "}
-            <a href="/privacy">{t("settings.privacyPolicy")}</a>
+            <a href="#/privacy">{t("settings.privacyPolicy")}</a>
             {" · "}
             <a href="/third-party-notices.txt" target="_blank" rel="noreferrer">
               {t("settings.thirdParty")}

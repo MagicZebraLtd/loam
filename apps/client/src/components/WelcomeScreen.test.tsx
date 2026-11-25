@@ -43,7 +43,7 @@ describe("WelcomeScreen", () => {
     const { container } = mount(newcomer);
     expect(container.querySelector("h1")?.textContent).toContain("Valley Gathering");
     expect(container.querySelector(".welcome-name")?.textContent).toBe("brave.copper.otter");
-    expect(container.querySelector('a[href="/rules"]')).not.toBeNull();
+    expect(container.querySelector('a[href="#/rules"]')).not.toBeNull();
   });
 
   it("agrees with one tap, confirming they're 18 or over", async () => {

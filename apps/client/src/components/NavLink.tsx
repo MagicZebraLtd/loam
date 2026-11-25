@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useLocation } from "preact-iso";
+import { isPlainClick, useLocation } from "../lib/location";
 
 interface NavLinkProps {
   active: boolean;
@@ -12,7 +12,10 @@ interface NavLinkProps {
 
 /**
  * A client-side navigation anchor: renders a real `<a href>` (so it degrades and is inspectable) but
- * intercepts clicks to route through `preact-iso` without a full page load. Marks itself
+ * intercepts plain clicks to route through `lib/location` without a full page load (a modifier click is left
+ * to the browser, which opens a tab or window). `href` is a route path
+ * (`/dm/<id>`); the anchor points at its fragment form (`#/dm/<id>`), so "open in new tab" asks the node for
+ * `/` only and the route stays off the wire. Marks itself
  * `aria-current="page"` when `active`, and takes an optional `className` override for non-nav uses
  * (e.g. the mobile back button).
  */
@@ -25,8 +28,11 @@ export function NavLink({ active, ariaLabel, children, className, href }: NavLin
       aria-current={active ? "page" : undefined}
       aria-label={ariaLabel}
       className={linkClassName}
-      href={href}
+      href={`#${href}`}
       onClick={(event) => {
+        if (!isPlainClick(event)) {
+          return;
+        }
         event.preventDefault();
         location.route(href);
       }}

@@ -1,7 +1,7 @@
-import type { NetworkConfig, User } from "@loam/schema";
+import type { NetworkConfig, User, UserUpdateRequest } from "@loam/schema";
 import type { VNode } from "preact";
 import { render } from "preact";
-import { LocationProvider } from "preact-iso";
+import { LocationProvider } from "../lib/location";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MeshView } from "./MeshView";
@@ -92,15 +92,19 @@ describe("SettingsView", () => {
     securityProfile: "hardened",
   } as unknown as NetworkConfig;
 
-  function mountSettings(onWipeDevice = vi.fn(async () => {})) {
+  function mountSettings(
+    onWipeDevice = vi.fn(async () => {}),
+    currentUser: User = me,
+    onUpdateCurrentUser: (request: UserUpdateRequest) => Promise<void> = async () => {},
+  ) {
     return mount(
       <SettingsView
         blockedUserIds={new Set()}
         config={{ joinUrl: "http://10.0.0.1:3000/", version: "9.9.9", networkConfig }}
-        currentUser={me}
+        currentUser={currentUser}
         onClaimAdmin={async () => {}}
         onSetBlocked={async () => {}}
-        onUpdateCurrentUser={async () => {}}
+        onUpdateCurrentUser={onUpdateCurrentUser}
         onUploadAvatarImage={async () => {}}
         onWipeDevice={onWipeDevice}
         usersById={new Map()}
@@ -117,6 +121,28 @@ describe("SettingsView", () => {
     expect(host.querySelectorAll(".appearance-card .choice-tile input[type=radio]")).toHaveLength(3);
     expect(host.querySelector(".join-card .join-url")?.textContent).toBe("http://10.0.0.1:3000/");
     expect(host.querySelector(".node-version")?.textContent).toBe("LOAM v9.9.9");
+  });
+
+  it("lets someone with a photo pick a generated style, with no style shown as picked until then", async () => {
+    const onUpdateCurrentUser = vi.fn(async (_request: UserUpdateRequest) => {});
+    const withPhoto: User = { ...me, avatar: { kind: "image", imageId: "avt_0123456789abcdef", mimeType: "image/webp" } };
+    const host = mountSettings(undefined, withPhoto, onUpdateCurrentUser);
+    const field = host.querySelector<HTMLFieldSetElement>(".avatar-style-field")!;
+    const tiles = Array.from(field.querySelectorAll<HTMLInputElement>("input[type=radio]"));
+
+    expect(field.disabled).toBe(false);
+    expect(tiles.filter((tile) => tile.checked)).toHaveLength(0);
+
+    // The mount effect that seeds the form from the user runs after paint; let it land before the tap.
+    await flush();
+    tiles[1]!.click();
+    await flush();
+    expect(tiles[1]!.checked).toBe(true);
+    button(host, "Save profile")!.click();
+    await flush();
+    expect(onUpdateCurrentUser).toHaveBeenCalledWith(
+      expect.objectContaining({ avatar: { kind: "generated", seed: "user.me", mode: "initial" } }),
+    );
   });
 
   it("links the node's own third-party licence notices in a new tab", () => {

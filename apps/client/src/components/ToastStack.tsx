@@ -1,4 +1,4 @@
-import { useLocation } from "preact-iso";
+import { useLocation } from "../lib/location";
 
 import { t } from "../i18n";
 

@@ -1,6 +1,6 @@
 import { generateDisplayName } from "@loam/display-name";
 import type { AssistantDestination, Channel, Message, MessageAttachment, MessageLocation, User } from "@loam/schema";
-import { useLocation } from "preact-iso";
+import { useLocation } from "../lib/location";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { t } from "../i18n";

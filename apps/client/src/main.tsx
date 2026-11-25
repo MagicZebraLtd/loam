@@ -17,7 +17,10 @@ void recoverPendingWipe();
 
 // Read the join link before anything rewrites the URL: the host terminal's one-time admin code, an invite
 // code, a node-link code (a "link another node" QR opened in a browser: useless here, but its key still
-// joins), then the `#k=` key (the router's first redirect drops the fragment). A key from the URL only ever establishes or offers a pin; the Android
+// joins), then the `#k=` key. They must run before `render`: the route lives in the fragment too (`#/…`,
+// lib/location.tsx), and the router's first redirect from `/` rewrites it. Each reader strips its own
+// parameter, so a join link `/#k=…` is left at `/` and boots to the default route; a fragment that does not
+// start with `#/` is never a route. A key from the URL only ever establishes or offers a pin; the Android
 // host's own key override comes solely from its native injection (`__loamHostTransportKey`), never a URL.
 captureAdminClaimCode();
 captureInviteCode();

@@ -29,7 +29,7 @@ const HOST_KEY_STORAGE_PREFIX = "loam.transportHostKey.";
  * `SERVER_URL_KEY`, and the initiating tab's revocation calls must still reach the RIGHT origin (docs/20)
  * — a wrong-origin logout/`session/end` would be useless or redirected. */
 export function apiUrl(path: string): string {
-  const base = wipeServerUrlSnapshot ?? localStorage.getItem(SERVER_URL_KEY) ?? "";
+  const base = wipeServerUrlSnapshot ?? readStorage(SERVER_URL_KEY) ?? "";
   return `${base}${path}`;
 }
 
@@ -82,50 +82,175 @@ interface Session {
 
 let session: Session | undefined;
 
-/** Where the per-origin secure identity token (docs/20) is cached. Namespaced per server origin like the
- * host key, so switching nodes never cross-presents one node's token to another. It's a bearer secret at
- * rest (same trust level as the host-key cache); the network threat model is what this defends — device
- * compromise is covered by the encrypted-at-rest DB + wipe, not by hiding this from same-origin JS. */
-const IDENTITY_TOKEN_STORAGE_PREFIX = "loam.identityToken.";
+/** Where the per-origin secure identity token (docs/20) is cached, as JSON `{ k, t }`: the token `t` and the
+ * host public key `k` of the session it was issued over. Namespaced per server origin like the host key, so
+ * switching origins never cross-presents one node's token to another, and bound to the key because two
+ * different networks can sit at the same origin (the same address at different times or places): the token
+ * is only ever sealed to a session with that same key. A node's key and its identity tokens are wiped
+ * together, so a token is never valid under another key and the binding loses nothing. It's a bearer secret
+ * at rest (same trust level as the host-key cache); the network threat model is what this defends — device
+ * compromise is covered by the encrypted-at-rest DB + wipe, not by hiding this from same-origin JS. One
+ * record per origin: a token minted under a newly accepted key replaces the old network's. */
+const IDENTITY_TOKEN_STORAGE_PREFIX = "loam.identityToken.v2.";
 
-/** An in-memory snapshot of the identity token, captured before a wipe clears it from localStorage
+/** Where earlier releases kept the bare token for an origin, with no key beside it. Read only to migrate it
+ * (`migrateLegacyIdentityToken`), and removed wherever the token is cleared. */
+const LEGACY_IDENTITY_TOKEN_STORAGE_PREFIX = "loam.identityToken.";
+
+/** A stored identity token and the host public key it was issued under (see `IDENTITY_TOKEN_STORAGE_PREFIX`). */
+interface IdentityTokenRecord {
+  k: string;
+  t: string;
+}
+
+/** An in-memory snapshot of the identity token record, captured before a wipe clears it from localStorage
  * (docs/20): the wipe erases local state FIRST, but the server-side revocation still needs the token to
  * re-establish + retry if the bound session died. `storedIdentityToken()` falls back to this during the
- * wipe, and `storeIdentityToken` is gated by `mintSuppressed` so the snapshot can't be written back. */
-let wipeTokenSnapshot: string | undefined;
+ * wipe (only for a session under the snapshot's key), and `storeIdentityToken` is gated by `mintSuppressed`
+ * so the snapshot can't be written back. */
+let wipeTokenSnapshot: IdentityTokenRecord | undefined;
 /** In-memory snapshot of the configured server origin, captured alongside the token so the wipe's server
  * revocation reaches the right origin even if a sibling tab has already removed `SERVER_URL_KEY` from the
  * shared localStorage (docs/20). `apiUrl` prefers it while set. */
 let wipeServerUrlSnapshot: string | undefined;
+/** In-memory snapshot of the pinned host key, captured with the token. The wipe erases the pin before it asks
+ * the node to revoke the token, so a session that died in between can only be re-established (and the token
+ * revoked over it) against this copy. `doReHandshake` falls back to it; `wipeServerCredentials` clears it. */
+let wipeHostKeySnapshot: string | undefined;
 
-/** Capture the token AND the server-origin override into in-memory wipe snapshots BEFORE local erasure (or
- * any cross-tab announce) clears them from shared localStorage, so `wipeServerCredentials`'s stale-session
- * recovery can still present the token and reach the right origin (docs/20). MUST be
- * called before `announceWipe()` — a sibling tab receiving the announce clears both from localStorage. */
+/** Capture the token record, the server-origin override and the pinned host key into in-memory wipe snapshots
+ * BEFORE local erasure (or any cross-tab announce) clears them from shared localStorage, so
+ * `wipeServerCredentials`'s stale-session recovery can still handshake, present the token and reach the right
+ * origin (docs/20). MUST be called before `announceWipe()`: a sibling tab receiving the announce clears them
+ * from localStorage. */
 export function snapshotForWipe(): void {
-  wipeTokenSnapshot = localStorage.getItem(IDENTITY_TOKEN_STORAGE_PREFIX + keyStorageOrigin()) ?? undefined;
-  wipeServerUrlSnapshot = localStorage.getItem(SERVER_URL_KEY) ?? undefined;
+  migrateLegacyIdentityToken();
+  wipeTokenSnapshot = readIdentityTokenRecord();
+  wipeServerUrlSnapshot = readStorage(SERVER_URL_KEY);
+  wipeHostKeySnapshot = getCachedHostPublicKey();
 }
 
-/** The stored secure identity token for the current origin, if any — or the in-memory wipe snapshot while
- * a wipe is clearing/has cleared localStorage. */
-function storedIdentityToken(): string | undefined {
-  return wipeTokenSnapshot ?? localStorage.getItem(IDENTITY_TOKEN_STORAGE_PREFIX + keyStorageOrigin()) ?? undefined;
+/**
+ * Parse a stored identity token record. Anything but a JSON object with a non-empty string `k` and `t` is
+ * unreadable and counts as no token at all.
+ */
+function parseIdentityTokenRecord(raw: string | undefined): IdentityTokenRecord | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (value !== null && typeof value === "object") {
+      const { k, t } = value as { k?: unknown; t?: unknown };
+      if (typeof k === "string" && k !== "" && typeof t === "string" && t !== "") {
+        return { k, t };
+      }
+    }
+  } catch {
+    // Not JSON: treated as absent.
+  }
+  return undefined;
 }
 
-function storeIdentityToken(token: string): void {
+/**
+ * This page load's copy of a token record the browser refused to store (`storeIdentityToken`), with the origin
+ * it belongs to. Without it, a browser whose reads work but whose writes throw (a full quota, a WebView with
+ * none) would resume without a token on every boot pass and be handed a new identity each time. Memory only:
+ * like the in-memory pin, it never outlives the page.
+ */
+let memoryTokenRecord: { origin: string; record: IdentityTokenRecord } | undefined;
+
+/** This origin's identity token record: the page's own copy of one the browser refused to store, else the stored
+ * one if it is readable. The page's copy wins, as the in-memory pin does: it is newer than whatever storage kept. */
+function readIdentityTokenRecord(): IdentityTokenRecord | undefined {
+  const origin = keyStorageOrigin();
+  if (memoryTokenRecord?.origin === origin) {
+    return memoryTokenRecord.record;
+  }
+  return parseIdentityTokenRecord(readStorage(IDENTITY_TOKEN_STORAGE_PREFIX + origin));
+}
+
+/**
+ * Move a bare token an earlier release stored for this origin into a key-bound record. It was issued under
+ * the pin stored for the origin at the time, so it is bound to the STORED pin (never the in-memory one, which
+ * may already be a newly scanned key). Runs before anything can replace the pin (`captureJoinKey`, the top of
+ * `adoptHostKey`) and again on every read. A token with no stored pin can't be attributed to any key and is
+ * deleted; an existing readable record wins over it. The legacy key is removed even if writing the record
+ * fails, so it can never be bound later to a pin that replaced the one it was issued under. Never throws.
+ */
+function migrateLegacyIdentityToken(): void {
+  try {
+    const origin = keyStorageOrigin();
+    const legacyKey = LEGACY_IDENTITY_TOKEN_STORAGE_PREFIX + origin;
+    const token = localStorage.getItem(legacyKey);
+    if (token === null) {
+      return;
+    }
+    try {
+      const pin = localStorage.getItem(HOST_KEY_STORAGE_PREFIX + origin);
+      if (token !== "" && pin && readIdentityTokenRecord() === undefined) {
+        const record: IdentityTokenRecord = { k: pin, t: token };
+        localStorage.setItem(IDENTITY_TOKEN_STORAGE_PREFIX + origin, JSON.stringify(record));
+      }
+    } finally {
+      localStorage.removeItem(legacyKey);
+    }
+  } catch {
+    // Storage blocked or full: nothing more can be done, and nothing readable is left behind to misattribute.
+  }
+}
+
+/**
+ * The stored secure identity token for the current origin, if it was issued under `hostKey` (the host key of
+ * the session it is about to be sealed to) — or the in-memory wipe snapshot's, under the same rule, while a
+ * wipe is clearing/has cleared localStorage. A token issued under any other key is never returned.
+ */
+function storedIdentityToken(hostKey: string): string | undefined {
+  migrateLegacyIdentityToken();
+  if (wipeTokenSnapshot?.k === hostKey) {
+    return wipeTokenSnapshot.t;
+  }
+  const record = readIdentityTokenRecord();
+  return record?.k === hostKey ? record.t : undefined;
+}
+
+/** Whether any identity token is held for this origin (stored or in the wipe snapshot), whatever its key. */
+function hasStoredIdentityToken(): boolean {
+  migrateLegacyIdentityToken();
+  return wipeTokenSnapshot !== undefined || readIdentityTokenRecord() !== undefined;
+}
+
+/** Store `token` as this origin's identity token, bound to `hostKey`, the host key of the session that issued
+ * it. Replaces any record for the origin, whatever its key. */
+function storeIdentityToken(token: string, hostKey: string): void {
   // Never persist a token while a wipe is in progress (docs/20): an in-flight resume that resolves AFTER
   // the wipe cleared local storage would otherwise re-write the credential we just erased. `mintSuppressed`
   // is set for the whole wipe, so this closes that repopulation race for the identity token.
   if (mintSuppressed) {
     return;
   }
-  localStorage.setItem(IDENTITY_TOKEN_STORAGE_PREFIX + keyStorageOrigin(), token);
+  const record: IdentityTokenRecord = { k: hostKey, t: token };
+  const origin = keyStorageOrigin();
+  try {
+    localStorage.setItem(IDENTITY_TOKEN_STORAGE_PREFIX + origin, JSON.stringify(record));
+    memoryTokenRecord = undefined;
+  } catch {
+    // Storage refused the write: this page load keeps the token, so its next resume presents it.
+    memoryTokenRecord = { origin, record };
+  }
 }
 
-/** Drop the stored identity token (invalid/revoked token, or explicit logout/wipe). */
+/** Drop the stored identity token (invalid/revoked token, or explicit logout/wipe), in both the current and
+ * the earlier storage format, and the page's own copy of one storage refused. Never throws. */
 export function clearStoredIdentityToken(): void {
-  localStorage.removeItem(IDENTITY_TOKEN_STORAGE_PREFIX + keyStorageOrigin());
+  memoryTokenRecord = undefined;
+  try {
+    const origin = keyStorageOrigin();
+    localStorage.removeItem(IDENTITY_TOKEN_STORAGE_PREFIX + origin);
+    localStorage.removeItem(LEGACY_IDENTITY_TOKEN_STORAGE_PREFIX + origin);
+  } catch {
+    // Storage blocked: nothing durable to clear.
+  }
 }
 
 /** Credentials mode for a fetch on the live session: a `bound`/required session NEVER sends the cookie
@@ -182,23 +307,60 @@ function keyStorageOrigin(): string {
 /** The join QR's key fragment, exactly: `#k=` + one base64url key and nothing else. */
 const HASH_KEY_PATTERN = /^#k=([A-Za-z0-9_-]+)$/;
 
+/** The base64url alphabet in value order (character i stands for the 6-bit value i). */
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/**
+ * The one spelling of a host public key, or undefined when `value` is not a 32-byte key. The base64url decoder
+ * in `@loam/crypto` accepts several spellings of the same bytes (it stops at the first `=` and drops the unused
+ * low bits of the last character), so comparing keys as strings would let a padded or respelled copy of the
+ * pinned key look like a different key. This decodes the same way, requires 32 bytes and re-encodes unpadded:
+ * 32 bytes are exactly 43 characters before any `=`, the first 42 carry whole 6-bit groups, and the last one
+ * carries 4 bits, so its 2 low bits are cleared. Applied wherever a key enters this module (a `#k=`, the
+ * launcher's global, the node's handshake and bootstrap answers) before it is stored or compared.
+ */
+function canonicalHostKey(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const padAt = value.indexOf("=");
+  const body = padAt < 0 ? value : value.slice(0, padAt);
+  if (body.length !== 43) {
+    return undefined;
+  }
+  for (const char of body) {
+    if (!BASE64URL_ALPHABET.includes(char)) {
+      return undefined;
+    }
+  }
+  return body.slice(0, 42) + BASE64URL_ALPHABET[BASE64URL_ALPHABET.indexOf(body[42]!) & 0x3c];
+}
+
+/** This page's `#k=` key in its one spelling, or undefined when there is none or it is not a 32-byte key. */
+function hashJoinKey(): string | undefined {
+  const match = HASH_KEY_PATTERN.exec(window.location.hash);
+  return match ? canonicalHostKey(match[1]) : undefined;
+}
+
 /**
  * Read a `#k=<b64url>` fragment left by the join QR, cache it for this origin, and strip it from the
  * visible URL/history (the fragment is never sent to the server, but it's still a secret-shaped value
  * that shouldn't linger in the address bar or back-button history). Safe to call repeatedly — only
- * acts when the hash is actually present.
+ * acts when the hash is actually present. A `#k=` that is not a 32-byte key is stripped and otherwise
+ * ignored, as if there were none.
  */
 function consumeHashKey(): string | undefined {
-  const match = HASH_KEY_PATTERN.exec(window.location.hash);
-
-  if (!match) {
+  if (!HASH_KEY_PATTERN.test(window.location.hash)) {
     return undefined;
   }
 
-  const key = match[1];
+  const key = hashJoinKey();
   const url = new URL(window.location.href);
   url.hash = "";
   window.history.replaceState(window.history.state, "", url.toString());
+  if (key === undefined) {
+    return undefined;
+  }
 
   // A `#k=` can arrive from ANY same-origin navigation, not only a scanned QR — a link someone posted in a
   // channel, say. So it only ever ESTABLISHES a pin silently; it never
@@ -221,9 +383,11 @@ function consumeHashKey(): string | undefined {
 /**
  * Pin `key` as this origin's trusted host key and clear any "pin broken" marker left by a mismatching
  * handshake (see `handshake`). Kept in memory as well as localStorage so a storage failure (quota, blocked
- * site data) can't downgrade a just-scanned join to an unpinned one for this load.
+ * site data) can't downgrade a just-scanned join to an unpinned one for this load. A bare token from an
+ * earlier release is bound to the pin being replaced first, so it is never attributed to the new key.
  */
 function adoptHostKey(key: string): void {
+  migrateLegacyIdentityToken();
   memoryHostKey = key;
   memoryPinBroken = false;
   pendingHostKey = undefined;
@@ -279,9 +443,7 @@ export function acceptPendingHostKey(): boolean {
   }
   adoptHostKey(next);
   if (session && session.hostPublicKey !== next) {
-    session = undefined;
-    sessionQrVerified = false;
-    notifySessionReplaced();
+    dropSession();
   }
   return true;
 }
@@ -435,6 +597,21 @@ function notifySessionReplaced(): void {
 }
 
 /**
+ * Forget the live session, and tell the socket owner when there was one (`subscribeSessionReplaced`): a socket
+ * opened under it must be closed, not left open with no key to check its frames against. Every path that drops
+ * the session goes through here. Nothing is said when there was no session, so the resync of a node running
+ * without encryption never closes its plaintext socket.
+ */
+function dropSession(): void {
+  const hadSession = session !== undefined;
+  session = undefined;
+  sessionQrVerified = false;
+  if (hadSession) {
+    notifySessionReplaced();
+  }
+}
+
+/**
  * Run the X25519 handshake against `hostPublicKey`. `qrPinned` says whether that key came from the join
  * QR (fresh `#k=` or the per-origin cache) rather than the node's own advertisement. The node returns the
  * public key it actually used; if that differs from the one we derived against, the session key is wrong
@@ -470,8 +647,8 @@ async function handshake(hostPublicKey: string, qrPinned: boolean): Promise<void
   session = { sessionId: parsed.sessionId, key, hostPublicKey, seq: 0, bound: false, wsServerSeq: 0 };
 }
 
-/** POST one `/api/transport/handshake` and return the validated reply. Throws on any network or validation
- * failure. */
+/** POST one `/api/transport/handshake` and return the validated reply, its `hostPublicKey` in its one spelling
+ * (`canonicalHostKey`). Throws on any network or validation failure, including a host key that is not 32 bytes. */
 async function postHandshake(clientEphemeralPublic: string): Promise<TransportHandshakeResponse> {
   const response = await fetch(apiUrl("/api/transport/handshake"), {
     method: "POST",
@@ -486,11 +663,12 @@ async function postHandshake(clientEphemeralPublic: string): Promise<TransportHa
   }
 
   const parsed = TransportHandshakeResponseSchema.safeParse(await response.json().catch(() => undefined));
+  const hostPublicKey = parsed.success ? canonicalHostKey(parsed.data.hostPublicKey) : undefined;
 
-  if (!parsed.success) {
+  if (!parsed.success || hostPublicKey === undefined) {
     throw new Error("Transport handshake returned an invalid response");
   }
-  return parsed.data;
+  return { ...parsed.data, hostPublicKey };
 }
 
 /**
@@ -545,10 +723,13 @@ function adoptLauncherKey(): void {
  * `optional` one connected without the pin the QR is there to give. Call once, before rendering.
  */
 export function captureJoinKey(): void {
+  // Bind any bare token an earlier release stored to the pin it was issued under, before this load's
+  // launcher key or `#k=` can replace that pin.
+  migrateLegacyIdentityToken();
   adoptLauncherKey();
   // Remember the scan BEFORE `consumeHashKey` strips the fragment (and whether or not it adopts the key: a
   // `#k=` that differs from a held pin is parked, yet it is still the user's explicit act of scanning).
-  startupJoinKeyPresent = HASH_KEY_PATTERN.test(window.location.hash) || launcherHostKey() !== undefined;
+  startupJoinKeyPresent = hashJoinKey() !== undefined || launcherHostKey() !== undefined;
   startupHashKey = consumeHashKey();
 }
 
@@ -562,9 +743,11 @@ export function joinKeyPresentAtStartup(): boolean {
   return startupJoinKeyPresent;
 }
 
+/** The launcher's injected key in its one spelling, or undefined when absent, not a string or not a 32-byte
+ * base64url key. */
 function launcherHostKey(): string | undefined {
   const value: unknown = (window as { __loamHostTransportKey?: unknown }).__loamHostTransportKey;
-  return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
+  return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value) ? canonicalHostKey(value) : undefined;
 }
 
 /**
@@ -596,7 +779,10 @@ export async function ensureSession(mode: TransportEncryption, configHostKey?: s
   }
 }
 
-async function ensureTransportSession(mode: TransportEncryption, configHostKey?: string): Promise<void> {
+async function ensureTransportSession(mode: TransportEncryption, advertisedHostKey?: string): Promise<void> {
+  // The bootstrap's key in its one spelling, so a respelled copy of the pin is never a "mismatch"; a value
+  // that is not a 32-byte key counts as no advertised key at all.
+  const configHostKey = canonicalHostKey(advertisedHostKey);
   // Inside the Android host's own WebView the launcher-provided key is trusted directly (`launcherHostKey`):
   // adopt it before the `#k=` is read, so the launcher's own fragment is a quiet confirmation rather than a
   // "different key" prompt on every boot of an ephemeral-key node.
@@ -619,8 +805,7 @@ async function ensureTransportSession(mode: TransportEncryption, configHostKey?:
   // fresh scan. A `#k=` consumed on THIS load already cleared the marker, so this only fires for a cached
   // pin — the post-Emergency-Reset case, or an attacker who forged a handshake response earlier.
   if (qrKey && !hashKey && isHostKeyPinBroken()) {
-    session = undefined;
-    sessionQrVerified = false;
+    dropSession();
     if (pendingHostKey !== undefined) {
       // A differing `#k=` came with this load: learn whether it is the node's real key, so the gate can offer
       // it (and only then) instead of a dead end.
@@ -630,9 +815,8 @@ async function ensureTransportSession(mode: TransportEncryption, configHostKey?:
   }
 
   if (effectiveMode === "off") {
-    session = undefined;
+    dropSession();
     hostKeyMismatch = false;
-    sessionQrVerified = false;
     return;
   }
 
@@ -643,13 +827,11 @@ async function ensureTransportSession(mode: TransportEncryption, configHostKey?:
     if (effectiveMode === "required") {
       // No QR key on a required join — DROP any existing (possibly `optional`/config-key, non-QR-verified)
       // session so a later `resumeIdentity` can't bind a secret token over it (docs/20), then gate the app.
-      session = undefined;
-      sessionQrVerified = false;
+      dropSession();
       throw new TransportNeedsQrError();
     }
 
-    session = undefined;
-    sessionQrVerified = false;
+    dropSession();
     return;
   }
 
@@ -682,9 +864,20 @@ function dropPendingIfPinHealthy(hostPublicKey: string, qrKey: string | undefine
  * only after `ensureSession` has run (it records the effective mode even when it throws).
  */
 export function mayFallBackToPlaintext(advertisedMode: TransportEncryption): boolean {
-  // Both checks: `lastParams` is what `ensureSession` recorded, and the cached pin is re-read directly so a
-  // storage hiccup that left `lastParams` stale can never authorise plaintext for a pinned origin.
-  return advertisedMode === "optional" && lastParams?.mode !== "required" && getCachedHostPublicKey() === undefined;
+  return advertisedMode === "optional" && !plaintextRefused();
+}
+
+/**
+ * Whether this client must never send or accept plaintext, session or no session: the last `ensureSession`
+ * settled on `required`, or this origin holds a pinned host key, or the Android launcher injected one. The pin
+ * and the launcher key are read directly, so the rule holds from the first moment of a page load, before
+ * `/api/bootstrap` has answered and `ensureSession` has run (a slow node, a tab reloaded off the hotspot: the
+ * cached conversation is on screen with a live composer by then), and a storage hiccup that left `lastParams`
+ * stale can never authorise plaintext for a pinned origin. The fetch path, the socket URL, the socket frame
+ * handler, the image mode, the plaintext fallback and the boot's cookie config all ask this.
+ */
+export function plaintextRefused(): boolean {
+  return lastParams?.mode === "required" || getCachedHostPublicKey() !== undefined || launcherHostKey() !== undefined;
 }
 
 /** Thrown by the fetch/WebSocket entry points when the effective mode is `required` but no session exists
@@ -719,7 +912,11 @@ async function doReHandshake(): Promise<boolean> {
     return false;
   }
 
-  const cachedKey = getCachedHostPublicKey();
+  const storedPin = getCachedHostPublicKey();
+  // During a device wipe the pin is already erased when the token is revoked: the snapshot taken before the
+  // erasure is the key to re-establish over, so a session that died in the meantime can still be replaced
+  // and the token revoked over it.
+  const cachedKey = storedPin ?? wipeHostKeySnapshot;
   const hostPublicKey = lastParams.mode === "required" ? cachedKey : (cachedKey ?? lastParams.hostKey);
 
   if (!hostPublicKey) {
@@ -727,14 +924,18 @@ async function doReHandshake(): Promise<boolean> {
   }
 
   try {
-    await handshake(hostPublicKey, hostPublicKey === cachedKey);
+    // Only a key still pinned in storage is treated as the pin by a mismatching answer (marked broken, so the
+    // next boot gates on a rescan). The wipe snapshot is not: marking it would write a pin-broken record back
+    // into the storage the wipe just cleared, so a mismatch there is a plain failure and the revocation gives up.
+    await handshake(hostPublicKey, hostPublicKey === storedPin);
     sessionQrVerified = hostPublicKey === cachedKey;
     // A fresh transport session starts `anonymous` server-side; a bound/required client must re-bind
     // its identity before content or the WebSocket will work again (docs/20). Re-resume with the stored
     // token — silently (a lost identity just re-mints), so the caller's retry proceeds on a bound session.
+    // Only a token issued under this session's host key is presented (see `resumeAttempt`).
     if (lastParams.mode === "required" && session) {
       try {
-        await resumeAttempt(session, storedIdentityToken(), {}, false);
+        await resumeAttempt(session, {}, false);
       } catch {
         // `handshake` has ALREADY replaced the module session — the socket owner must still be told, or a
         // socket confirmed under the previous key stays open and deaf.
@@ -756,24 +957,40 @@ const RESUME_PATH = "/api/session/resume";
 const RESUME_AAD = "POST /api/session/resume";
 
 /**
- * Open a sealed resume reply only under the binding the request asked for (`r: 1`):
- * `POST /api/session/resume#<seq>#<status>`. Unlike `openBoundResponse` this never falls back to the
- * `!status` refusal seal, because the client acts on what a resume reply says (a 401 discards the stored
- * identity token), so only an answer to THIS request with THIS status may count.
+ * The associated data a node seals its reply to a request that asked with `r: 2` under (docs/08 "Response
+ * binding"): method, path, sequence and status as one JSON array behind a fixed label. The node seals a
+ * bare `METHOD url` under the raw request target, which can never start with `loam.`, and JSON keeps the
+ * four fields apart, so no target a stranger sends can produce a ciphertext that opens here.
+ */
+function boundResponseAad(method: string, path: string, seq: number, status: number): string {
+  return `loam.transport.response.v2 ${JSON.stringify([method, path, seq, status])}`;
+}
+
+/** The associated data of a refusal a node sent before it had read the request's sequence (`encStatus2`). */
+function refusalResponseAad(method: string, path: string, status: number): string {
+  return `loam.transport.refusal.v2 ${JSON.stringify([method, path, status])}`;
+}
+
+/**
+ * Open a sealed resume reply only under the binding the request asked for (`r: 2`), `boundResponseAad` for
+ * this sequence and status. Unlike `openBoundResponse` this never falls back to the refusal seal, because
+ * the client acts on what a resume reply says (a 401 discards the stored identity token), so only an
+ * answer to THIS request with THIS status may count.
  *
  * @returns The plaintext, or null when the payload is missing or does not open under that binding.
  */
 function openBoundResumeReply(key: string, payload: unknown, seq: number, status: number): string | null {
   const enc = payload && typeof payload === "object" ? (payload as { enc?: unknown }).enc : undefined;
-  return typeof enc === "string" ? openTransport(key, enc, `${RESUME_AAD}#${seq}#${status}`) : null;
+  return typeof enc === "string" ? openTransport(key, enc, boundResponseAad("POST", RESUME_PATH, seq, status)) : null;
 }
 
 /**
  * Bind this transport session to a persistent secure identity (docs/20). Seals `{ token? }` to the
  * DIRECT `/api/session/resume` endpoint (credentials omitted — the cookie is never a bound credential),
  * verifies the sealed reply is bound to the exact request it answers (`s/m/p`, §9), stores the returned
- * 256-bit token per origin, and marks the session `bound`. With no stored token the server mints a fresh
- * identity; a stored-but-rejected token is cleared and a fresh identity minted once. Returns the
+ * 256-bit token per origin, bound to this session's host key, and marks the session `bound`. With no token
+ * stored for that key (none yet, or the user accepted a different key) the server mints a fresh identity; a
+ * stored-but-rejected token is cleared and a fresh identity minted once. Returns the
  * authenticated `currentUser`. Requires a live transport session (call after `ensureSession`).
  */
 export async function resumeIdentity(init: EncryptedFetchInit = {}): Promise<{ currentUser: unknown }> {
@@ -790,24 +1007,29 @@ export async function resumeIdentity(init: EncryptedFetchInit = {}): Promise<{ c
   if (!sessionQrVerified) {
     throw new Error("Refusing to bind a secure identity over a non-QR-verified session");
   }
-  return resumeAttempt(active, storedIdentityToken(), init, false);
+  return resumeAttempt(active, init, false);
 }
 
+/**
+ * One sealed resume over `active`. The token presented is the one stored for `active`'s own host key (none
+ * after a key change, so the server mints a fresh identity), and a returned token is stored bound to that
+ * key. `retriedFreshMint` is the one tokenless retry after the server rejected the stored token.
+ */
 async function resumeAttempt(
   active: Session,
-  token: string | undefined,
   init: EncryptedFetchInit,
   retriedFreshMint: boolean,
 ): Promise<{ currentUser: unknown }> {
+  const token = retriedFreshMint ? undefined : storedIdentityToken(active.hostPublicKey);
   // A resume with no token asks the server to MINT a fresh identity. During a wipe that must never happen
   // (docs/20) — the identity is being discarded, not replaced — so refuse rather than spawn an orphan.
   if (token === undefined && mintSuppressed) {
     throw new Error("Identity minting is suppressed (wipe in progress)");
   }
   const seq = ++active.seq;
-  // `r: 1` asks the server to seal its answer under `POST /api/session/resume#<seq>#<status>` (docs/08
+  // `r: 2` asks the server to seal its answer under `boundResponseAad` for this sequence and status (docs/08
   // "Response binding"), so the outer status, which travels in the clear, can't be relabelled.
-  const envelope = JSON.stringify(token === undefined ? { s: seq, r: 1, b: {} } : { s: seq, r: 1, b: { token } });
+  const envelope = JSON.stringify(token === undefined ? { s: seq, r: 2, b: {} } : { s: seq, r: 2, b: { token } });
   const response = await fetch(apiUrl(RESUME_PATH), {
     method: "POST",
     credentials: "omit",
@@ -833,7 +1055,7 @@ async function resumeAttempt(
     }
     if (token !== undefined && !retriedFreshMint) {
       clearStoredIdentityToken();
-      return resumeAttempt(active, undefined, init, true);
+      return resumeAttempt(active, init, true);
     }
     throw new Error("Identity resume rejected");
   }
@@ -860,7 +1082,7 @@ async function resumeAttempt(
   }
 
   if (typeof result.token === "string") {
-    storeIdentityToken(result.token);
+    storeIdentityToken(result.token, active.hostPublicKey);
   }
   active.bound = true;
   return { currentUser: result.currentUser };
@@ -880,27 +1102,33 @@ function restAad(method: string, path: string): string {
 
 /**
  * Open a direct sealed response (docs/08, "Response binding"). The server seals the answer to a request
- * under `${aad}#${seq}#${status}`: the sequence that request carried, so a response captured earlier on the
- * same route can't be passed off as this one, and the status it was sent with, so the outer status (outside
- * the AEAD) can't be relabelled. The one exception is a refusal the server made before it could
- * authenticate the request's sequence (a 429 from the rate limiter, a 400 for a malformed envelope, a 409
- * for a replay): its `encStatus` is sealed under `${aad}!${status}`, and is accepted only with an error
- * status, so the worst a replay of one can do is fail a request, never feed it old data. The bare-aad `enc`
- * that rides beside it is for older clients and is never opened here.
+ * under `boundResponseAad`: the sequence that request carried, so a response captured earlier on the same
+ * route can't be passed off as this one, and the status it was sent with, so the outer status (outside the
+ * AEAD) can't be relabelled. The one exception is a refusal the server made before it could authenticate the
+ * request's sequence (a 429 from the rate limiter, a 400 for a malformed envelope, a 409 for a replay): its
+ * `encStatus2` is sealed under `refusalResponseAad`, and is accepted only with an error status, so the worst
+ * a replay of one can do is fail a request, never feed it old data. The bare-aad `enc` and the `!status`
+ * `encStatus` that ride beside it are for older clients and are never opened here: both are built from the
+ * raw request target, which a stranger chooses.
  *
  * @returns The plaintext, or null when neither opens.
  */
-function openBoundResponse(key: string, payload: unknown, aad: string, seq: number, status: number): string | null {
-  const record = payload && typeof payload === "object" ? (payload as { enc?: unknown; encStatus?: unknown }) : {};
-  const bound = typeof record.enc === "string" ? openTransport(key, record.enc, `${aad}#${seq}#${status}`) : null;
+function openBoundResponse(key: string, payload: unknown, method: string, path: string, seq: number, status: number): string | null {
+  const record = payload && typeof payload === "object" ? (payload as { enc?: unknown; encStatus2?: unknown }) : {};
+  const bound = typeof record.enc === "string" ? openTransport(key, record.enc, boundResponseAad(method, path, seq, status)) : null;
   if (bound !== null) {
     return bound;
   }
-  return status >= 400 && typeof record.encStatus === "string" ? openTransport(key, record.encStatus, `${aad}!${status}`) : null;
+  return status >= 400 && typeof record.encStatus2 === "string"
+    ? openTransport(key, record.encStatus2, refusalResponseAad(method, path, status))
+    : null;
 }
 
 export interface EncryptedFetchInit {
   signal?: AbortSignal;
+  /** Never re-handshake (and so never resume) to retry this request: a failure is the caller's to handle.
+   *  For a best-effort read that must not start a new session, such as `reloadNetworkConfig`. */
+  noRehandshake?: boolean;
 }
 
 /** Methods that never mutate server state — safe to retry after ANY kind of failure, including one
@@ -926,7 +1154,8 @@ const SEQ_REHANDSHAKE_THRESHOLD = Number.MAX_SAFE_INTEGER - 1024;
  * @param method - HTTP method, exactly as it will appear on the wire (e.g. `"POST"`).
  * @param path - The server-relative path + query string (e.g. `/api/messages`, `/api/search?q=x`).
  * @param body - Optional JSON-serializable request body.
- * @param init - Optional `AbortSignal` to wire into the underlying `fetch`.
+ * @param init - Optional `AbortSignal` to wire into the underlying `fetch`, and `noRehandshake` to skip the
+ *   re-handshake retry (the request then counts as already retried).
  */
 export async function encryptedFetch(
   method: string,
@@ -934,7 +1163,7 @@ export async function encryptedFetch(
   body?: unknown,
   init: EncryptedFetchInit = {},
 ): Promise<Response> {
-  return attemptFetch(method, path, body, init, false);
+  return attemptFetch(method, path, body, init, init.noRehandshake === true);
 }
 
 async function attemptFetch(
@@ -948,10 +1177,10 @@ async function attemptFetch(
 
   if (!active) {
     // FAIL CLOSED: under an effective `required` mode (the node requires it, or this client is
-    // QR-pinned) a missing session must never degrade to a plaintext cookie request, or a forged 401 +
-    // forged handshake could open exactly that hole. `off`/unpinned-`optional` keep the
-    // pass-through shape.
-    if (lastParams?.mode === "required") {
+    // QR-pinned, which holds before the first `ensureSession` too) a missing session must never degrade
+    // to a plaintext cookie request, or a forged 401 + forged handshake could open exactly that hole.
+    // `off`/unpinned-`optional` keep the pass-through shape.
+    if (plaintextRefused()) {
       throw requiredSessionMissing();
     }
     return fetch(apiUrl(path), {
@@ -979,16 +1208,17 @@ async function attemptFetch(
 
   const isSafe = SAFE_METHODS.has(method.toUpperCase());
   const aad = restAad(method, path);
-  // Every request carries a sealed `{ s, r: 1, b? }` envelope: `s` is this session's next monotonic
-  // sequence number (for the server's replay window), `r: 1` asks the server to bind its response to that
-  // sequence and to its status (docs/08, "Response binding"), and `b` is the actual body (omitted when there is none).
+  // Every request carries a sealed `{ s, r: 2, b? }` envelope: `s` is this session's next monotonic
+  // sequence number (for the server's replay window), `r: 2` asks the server to bind its response to that
+  // sequence and to its status under `boundResponseAad` (docs/08, "Response binding"), and `b` is the actual
+  // body (omitted when there is none).
   // `++active.seq` is atomic under JS's single thread, so concurrent in-flight requests each get a
   // distinct, ever-increasing number. A safe (GET/HEAD) call with no body can't carry one in the body, so
   // the envelope rides the `x-loam-seq` header instead. Every other method is ALWAYS sealed in the body,
   // even with an empty payload: the server requires a sealed `{ enc }` body from any mutation presented
   // under a live session, so a bodyless mutation still proves it went through the session.
   const seq = ++active.seq;
-  const envelope = JSON.stringify(body === undefined ? { s: seq, r: 1 } : { s: seq, r: 1, b: body });
+  const envelope = JSON.stringify(body === undefined ? { s: seq, r: 2 } : { s: seq, r: 2, b: body });
   const inHeader = isSafe && body === undefined;
   const requestBody = inHeader ? undefined : JSON.stringify({ enc: sealTransport(active.key, envelope, aad) });
   const headers: Record<string, string> = { "content-type": "application/json", "x-loam-enc": active.sessionId };
@@ -1006,7 +1236,7 @@ async function attemptFetch(
 
   if (response.headers.get("x-loam-enc") === "1") {
     const payload: unknown = await response.json().catch(() => undefined);
-    const opened = openBoundResponse(active.key, payload, aad, seq, response.status);
+    const opened = openBoundResponse(active.key, payload, method, path, seq, response.status);
 
     if (opened === null) {
       // The server replied `x-loam-enc: 1` — i.e. its handler already ran and produced a response —
@@ -1069,6 +1299,9 @@ function unsealedRefusal(status: number): Response | undefined {
 /** The single opaque endpoint every `required`-mode request is tunnelled through (docs/08). */
 const TUNNEL_PATH = "/api/transport/tunnel";
 
+/** The statuses a `Response` may not carry a body with (the Fetch standard's null body statuses). */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 103, 204, 205, 304]);
+
 /** Decode standard base64 (the tunnel descriptor's `bodyB64`, from Node's `Buffer.toString("base64")`)
  * into a raw `ArrayBuffer`, so a tunnelled binary response (images) reconstructs losslessly while a
  * JSON one still `.json()`s. `atob` is available in an insecure context (unlike most of WebCrypto). */
@@ -1084,10 +1317,11 @@ function base64ToBytes(b64: string): ArrayBuffer {
 
 /**
  * Send a request through the metadata-hiding tunnel (docs/08 v2). The real `{ method, path, body }` is
- * sealed inside the `{ s, b }` anti-replay envelope and POSTed to the single opaque
+ * sealed inside the `{ s, r: 2, b }` anti-replay envelope and POSTed to the single opaque
  * `/api/transport/tunnel`, so the path/query (a search term, which channel is read) never hit the wire.
- * The sealed response is a `{ status, contentType, bodyB64 }` descriptor rebuilt into a normal
- * `Response`. Mirrors `attemptFetch`'s one-shot re-handshake retry (safe methods only, on a decrypt
+ * The reply opens only as the answer to this request (`openBoundResponse`, docs/08 "Response binding"), and
+ * is a `{ status, contentType, bodyB64 }` descriptor rebuilt into a normal `Response`, or the tunnel route's
+ * own refusal, returned with the outer status it was sealed for. Mirrors `attemptFetch`'s one-shot re-handshake retry (safe methods only, on a decrypt
  * failure or an unsealed 401), delegating the retry back through `attemptFetch` so it re-tunnels under the
  * fresh session.
  */
@@ -1102,8 +1336,11 @@ async function tunnelFetch(
   const aad = restAad("POST", TUNNEL_PATH);
   const inner = body === undefined ? { m: method, p: path } : { m: method, p: path, body };
   const seq = ++active.seq;
+  // `r: 2` asks for the reply sealed under `boundResponseAad` for this sequence and the outer status, as on the
+  // direct path: every tunnel request shares one route, so a bare-aad reply to one would open as the answer to
+  // any other, and the tunnel route's own refusals (401, 409, 429) would lose their status.
   const requestBody = JSON.stringify({
-    enc: sealTransport(active.key, JSON.stringify({ s: seq, b: inner }), aad),
+    enc: sealTransport(active.key, JSON.stringify({ s: seq, r: 2, b: inner }), aad),
   });
 
   const response = await fetch(apiUrl(TUNNEL_PATH), {
@@ -1118,8 +1355,7 @@ async function tunnelFetch(
 
   if (response.headers.get("x-loam-enc") === "1") {
     const payload: unknown = await response.json().catch(() => undefined);
-    const enc = payload && typeof payload === "object" ? (payload as { enc?: unknown }).enc : undefined;
-    const opened = typeof enc === "string" ? openTransport(active.key, enc, aad) : null;
+    const opened = openBoundResponse(active.key, payload, "POST", TUNNEL_PATH, seq, response.status);
 
     if (opened === null) {
       if (isSafe && !retried && (await reHandshake())) {
@@ -1134,24 +1370,26 @@ async function tunnelFetch(
     } catch {
       throw new Error("Malformed tunnel response");
     }
-    // The tunnel endpoint's own guards (bad target, missing session) reply with a sealed errorBody, NOT
-    // a `{ status, contentType, bodyB64 }` descriptor. Surface that as a readable 400 Response rather
-    // than crashing on `base64ToBytes(undefined)` — defence in depth (the client shouldn't trip those
-    // guards, but a Response beats a throw).
+    // The tunnel route's own refusals (a bad target, an unbound session, a replay, the rate limiter) reply
+    // with a sealed errorBody, NOT a `{ status, contentType, bodyB64 }` descriptor. It opened under this
+    // request's binding for the outer status, so that status is the node's own: hand the refusal over with
+    // it rather than crashing on `base64ToBytes(undefined)`.
     if (typeof descriptor.status !== "number" || typeof descriptor.bodyB64 !== "string") {
-      return new Response(opened, { status: 400, headers: { "content-type": "application/json" } });
+      return new Response(opened, { status: response.status, headers: { "content-type": "application/json" } });
     }
-    // Response binding (docs/20 §9): the tunnel seals EVERY response under the same constant aad, so a
-    // valid descriptor alone doesn't prove it answers THIS request. Confirm it echoes the exact
-    // { s, m, p } we sent before using the body — else an attacker could cross-feed one in-flight
-    // tunnel response as another's. A mismatch is fatal (never a silent wrong render).
+    // Response binding (docs/20 §9): the descriptor also echoes the exact { s, m, p } we sent. The seal
+    // already binds the sequence; checking the method and path as well keeps a descriptor that names another
+    // request from ever rendering as this one's. A mismatch is fatal (never a silent wrong render).
     if (descriptor.s !== seq || descriptor.m !== method || descriptor.p !== path) {
       throw new Error("Tunnel response did not match the request");
     }
     const contentType = typeof descriptor.contentType === "string" ? descriptor.contentType : "application/octet-stream";
     // Rebuild a normal Response from the raw bytes (an ArrayBuffer is a valid BodyInit), so the caller's
-    // `.json()` / `.blob()` work exactly as on a direct response — text and binary (images) alike.
-    return new Response(base64ToBytes(descriptor.bodyB64), {
+    // `.json()` / `.blob()` work exactly as on a direct response, text and binary (images) alike. A
+    // null-body status (a 204 from a delete or `/api/typing`) must get a null body: the constructor throws
+    // on any body for those, even an empty one.
+    const nullBody = NULL_BODY_STATUSES.has(descriptor.status);
+    return new Response(nullBody ? null : base64ToBytes(descriptor.bodyB64), {
       status: descriptor.status,
       headers: { "content-type": contentType },
     });
@@ -1206,7 +1444,7 @@ export function isTunnelActive(): boolean {
 /** A QR pin requires a tunnel even before a handshake finishes on an Optional node. */
 export function getImageTransportMode(): "direct" | "pending" | "tunnel" {
   if (isTunnelActive() && sessionQrVerified && !isHostKeyPinBroken()) return "tunnel";
-  return lastParams?.mode === "required" || getCachedHostPublicKey() !== undefined ? "pending" : "direct";
+  return plaintextRefused() ? "pending" : "direct";
 }
 
 const imageTransportListeners = new Set<() => void>();
@@ -1364,20 +1602,48 @@ export function clearImageObjectUrls(): void {
   }
 }
 
+/**
+ * What this module knows about the socket `wsUrl` was last called for. Like the per-connection state on the
+ * session, it assumes one live socket per tab, and every `wsUrl` call starts it afresh.
+ *  - `sealed`: the socket was opened under a session (an `enc=` URL). Such a socket never yields a plaintext
+ *    frame, whatever has happened to the session since.
+ *  - `clientNonce`: the `cn` this socket sent; its challenge must name it (`handleWsFrame`).
+ *  - `gap`: a frame on this socket skipped a sequence number, so nothing more is taken from it.
+ */
+let wsSocket: { sealed: boolean; clientNonce?: string; gap: boolean } = { sealed: false, gap: false };
+
+/** A fresh `cn` for a new socket: 16 random bytes (`crypto.getRandomValues`, the source `@loam/crypto` draws
+ * from too), as 22 unpadded base64url characters. */
+function newClientNonce(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 /** Append the live session's `?enc=<sessionId>` to a WebSocket URL (docs/08), so the server knows to
  * seal inbound frames; unchanged when no session is active. Also RESETS the per-connection
  * key-confirmation state (docs/20 §7): every new socket gets a fresh challenge with a fresh connection
- * id, so `handleWsFrame` must forget the previous connection's id + sequence. */
+ * id, so `handleWsFrame` must forget the previous connection's id + sequence. A sealed socket also sends
+ * `cn=<random>`, which the server repeats inside the sealed challenge: a challenge without it can't be the
+ * answer to THIS socket, so a previous connection's challenge and frames replayed onto a new socket under
+ * the same session are refused. */
 export function wsUrl(base: string): string {
   if (session) {
     session.wsConnectionId = undefined;
     session.wsServerSeq = 0;
   }
-  // Same fail-closed rule as `attemptFetch`: no plaintext socket under an effective `required` mode.
-  if (!session && lastParams?.mode === "required") {
+  // Same fail-closed rule as `attemptFetch`: no plaintext socket under an effective `required` mode, or for
+  // a pinned client before its session exists.
+  if (!session && plaintextRefused()) {
+    wsSocket = { sealed: false, gap: false };
     throw requiredSessionMissing();
   }
-  return session ? `${base}${base.includes("?") ? "&" : "?"}enc=${encodeURIComponent(session.sessionId)}` : base;
+  if (!session) {
+    wsSocket = { sealed: false, gap: false };
+    return base;
+  }
+  const clientNonce = newClientNonce();
+  wsSocket = { sealed: true, clientNonce, gap: false };
+  return `${base}${base.includes("?") ? "&" : "?"}enc=${encodeURIComponent(session.sessionId)}&cn=${clientNonce}`;
 }
 
 /** Direction-separated AADs for the reflection-safe WS key-confirmation (docs/20 §7). */
@@ -1389,16 +1655,26 @@ function wsFrameAad(connectionId: string): string {
 
 /**
  * Handle one inbound WebSocket frame (docs/20 §7). Returns exactly one of:
- *  - `{ proof }`  — a sealed key-confirmation proof the caller must send straight back over the socket
+ *  - `{ proof }`:   a sealed key-confirmation proof the caller must send straight back over the socket
  *                   (the reply to the server's challenge). Until this is sent the socket receives nothing.
- *  - `{ payload }`— a decoded application-frame payload (a `ClientEvent` JSON string) to process.
- *  - `{}`         — ignore (undecryptable, malformed, replayed/out-of-order, or a pre-confirmation frame).
- * With no live session (transport off) the raw frame passes straight through as `{ payload }`.
+ *  - `{ payload }`: a decoded application-frame payload (a `ClientEvent` JSON string) to process.
+ *  - `{ gap }`:     a frame skipped a sequence number (one was lost or dropped on the way). The caller must
+ *                   close the socket and reconnect, which resyncs; nothing more is taken from this socket.
+ *  - `{}`:          ignore (undecryptable, malformed, replayed, or a pre-confirmation frame).
+ * With no live session the raw frame passes straight through as `{ payload }`, but only on a socket that was
+ * opened in the clear by a client that may talk plaintext (`plaintextRefused`): a socket opened under a session
+ * that has since been dropped, or any socket of a pinned client, yields nothing.
  */
-export function handleWsFrame(raw: unknown): { proof?: string; payload?: string } {
+export function handleWsFrame(raw: unknown): { proof?: string; payload?: string; gap?: true } {
   const active = session;
   if (!active) {
+    if (wsSocket.sealed || plaintextRefused()) {
+      return {};
+    }
     return { payload: typeof raw === "string" ? raw : String(raw) };
+  }
+  if (wsSocket.gap) {
+    return {};
   }
   const text = String(raw);
 
@@ -1409,13 +1685,19 @@ export function handleWsFrame(raw: unknown): { proof?: string; payload?: string 
     if (opened === null) {
       return {};
     }
-    let challenge: { type?: unknown; connectionId?: unknown; nonce?: unknown };
+    let challenge: { type?: unknown; connectionId?: unknown; nonce?: unknown; cn?: unknown };
     try {
       challenge = JSON.parse(opened) as typeof challenge;
     } catch {
       return {};
     }
     if (challenge.type !== "challenge" || typeof challenge.connectionId !== "string" || typeof challenge.nonce !== "string") {
+      return {};
+    }
+    // The challenge must repeat the `cn` this socket sent (see `wsUrl`). Without it, it could be an earlier
+    // connection's challenge replayed onto this socket by someone on the path, followed by that connection's
+    // frames up to a point of their choosing (a deleted message back, an edit undone).
+    if (wsSocket.clientNonce === undefined || challenge.cn !== wsSocket.clientNonce) {
       return {};
     }
     active.wsConnectionId = challenge.connectionId;
@@ -1444,6 +1726,13 @@ export function handleWsFrame(raw: unknown): { proof?: string; payload?: string 
   }
   if (typeof envelope.q !== "number" || typeof envelope.f !== "string" || envelope.q <= active.wsServerSeq) {
     return {};
+  }
+  // The server numbers every frame on a connection 1, 2, 3, ... and never skips one (`wsSend`), so a jump
+  // means a frame was lost or held back on the way: a delete or a moderator removal the client would never
+  // hear about. Report it once and take nothing more from this socket; the reconnect resyncs.
+  if (envelope.q !== active.wsServerSeq + 1) {
+    wsSocket.gap = true;
+    return { gap: true };
   }
   active.wsServerSeq = envelope.q;
   return { payload: envelope.f };
@@ -1504,7 +1793,7 @@ export async function logoutSecureIdentity(init: EncryptedFetchInit = {}): Promi
   let revoked = false;
   try {
     revoked = await attemptSecureLogout(init);
-    if (!revoked && storedIdentityToken()) {
+    if (!revoked && hasStoredIdentityToken()) {
       // The current session may be dead — revive a fresh bound session with the stored token, then retry.
       if (await reHandshake()) {
         revoked = await attemptSecureLogout(init);
@@ -1563,7 +1852,7 @@ export async function wipeServerCredentials(timeoutMs: number): Promise<void> {
   setMintSuppressed(true);
   try {
     // The logout (and its stale-session re-establish/retry) reads `storedIdentityToken()`, which falls back
-    // to the pre-erasure snapshot — so revocation still works even though local storage was
+    // to the pre-erasure snapshot for a session under the snapshot's key — so revocation still works even though local storage was
     // already cleared. Mint suppression keeps that snapshot from being written back.
     await withDeadline((signal) => logoutSecureIdentity({ signal }), timeoutMs);
     await withDeadline(
@@ -1573,6 +1862,7 @@ export async function wipeServerCredentials(timeoutMs: number): Promise<void> {
   } finally {
     wipeTokenSnapshot = undefined;
     wipeServerUrlSnapshot = undefined;
+    wipeHostKeySnapshot = undefined;
   }
 }
 
@@ -1592,6 +1882,9 @@ export function resetTransportStateForTests(): void {
   mintSuppressed = false;
   wipeTokenSnapshot = undefined;
   wipeServerUrlSnapshot = undefined;
+  wipeHostKeySnapshot = undefined;
+  memoryTokenRecord = undefined;
+  wsSocket = { sealed: false, gap: false };
   clearImageObjectUrls();
   imageUrlHolders.clear();
 }

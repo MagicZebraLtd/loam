@@ -9,6 +9,12 @@ import { putRecord } from "./local-store";
  * local store so an offline start can prune too) and each channel's own shorter `messageTtlMs`.
  */
 
+/**
+ * How often the client drops held messages (and open search results) that have passed the node's retention,
+ * besides at start and whenever the TTL or a channel changes. The node's own reaper runs every 30 s.
+ */
+export const RETENTION_PRUNE_INTERVAL_MS = 60_000;
+
 /** The `sync` store record that remembers the node's retention for an offline start. */
 export const RETENTION_RECORD_ID = "retention";
 

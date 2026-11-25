@@ -16,9 +16,10 @@ vi.mock("../lib/transport", () => ({
 
 const qr = vi.hoisted(() => ({ encoded: [] as string[] }));
 vi.mock("../lib/qr", () => ({
+  // Like the real helper: "" for a payload past the encoder's 106 bytes.
   safeQrSvg: (url: string) => {
     qr.encoded.push(url);
-    return "<svg></svg>";
+    return new TextEncoder().encode(url).length > 106 ? "" : "<svg></svg>";
   },
 }));
 
@@ -73,6 +74,19 @@ describe("NodeLinkControl", () => {
     expect(qr.encoded.at(-1)).toBe("http://192.168.0.10:3000#k=HOSTKEY&l=ABCDEFGHIJKLMNOP");
     expect(host.querySelector(".invite-qr svg")).not.toBeNull();
     expect(host.textContent).not.toContain("ABCDEFGHIJKLMNOP");
+  });
+
+  it("says why there is no code when the address is too long for one", async () => {
+    const joinUrl = "http://[fd12:3456:789a:bcde:f012:3456:789a:bcde]:3000";
+    transport.hostKey = { key: "k".repeat(43), suppressed: false };
+    const host = mount(<NodeLinkControl joinUrl={joinUrl} />);
+    await act(async () => {
+      host.querySelector("button")?.click();
+      await flush();
+    });
+
+    expect(host.querySelector(".invite-qr")).toBeNull();
+    expect(host.textContent).toContain("This node's address is too long for a code.");
   });
 
   it("won't show a code from a device that can't vouch for the network's key", () => {

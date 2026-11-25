@@ -66,7 +66,7 @@ export function WelcomeScreen({ nodeName, currentUser, onAgree, onReroll }: Welc
         </div>
         {canReroll ? <p className="welcome-note">{t("welcome.anonymous")}</p> : null}
         <p className="welcome-rules">
-          {t("welcome.rules")} <a href="/rules">{t("welcome.readRules")}</a>
+          {t("welcome.rules")} <a href="#/rules">{t("welcome.readRules")}</a>
         </p>
         <button className="btn btn-primary btn-block welcome-agree" disabled={!!busy} onClick={() => void run("agree")} type="button">
           {busy === "agree" ? t("welcome.agreeing") : t("welcome.agree")}

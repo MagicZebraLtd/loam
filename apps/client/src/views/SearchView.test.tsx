@@ -1,9 +1,28 @@
-import type { User } from "@loam/schema";
+import type { Channel, Message, User } from "@loam/schema";
 import { render } from "preact";
-import { LocationProvider } from "preact-iso";
+import { LocationProvider } from "../lib/location";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RETENTION_PRUNE_INTERVAL_MS } from "../lib/retention";
+import { publishSearchChange } from "../lib/search-results";
 import { forgetRememberedSearch, SearchView } from "./SearchView";
+
+// Counts the screen's live subscriptions, so a test can see it let go when it unmounts.
+const subscriptions = vi.hoisted(() => ({ active: 0 }));
+vi.mock("../lib/search-results", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/search-results")>();
+  return {
+    ...actual,
+    subscribeSearchChanges: (listener: Parameters<typeof actual.subscribeSearchChanges>[0]) => {
+      subscriptions.active += 1;
+      const stop = actual.subscribeSearchChanges(listener);
+      return () => {
+        subscriptions.active -= 1;
+        stop();
+      };
+    },
+  };
+});
 
 // The search term stays out of the address: a deep link's term is replaced before its request goes out,
 // a submitted search never touches the address, and the screen remembers the term in memory instead.
@@ -14,18 +33,44 @@ const someoneElse: User = { ...me, id: "user.else" };
 const mounted: HTMLDivElement[] = [];
 /** Each search request the stubbed fetch saw, with what the address bar showed at that moment. */
 let requests: { path: string; address: string }[] = [];
+/** What the stubbed node answers each search with; a test swaps it to hold a request or change the answer. */
+let answer: () => Promise<Response>;
 
-function mount(user = me): HTMLDivElement {
+/** The props a test may vary; the rest are fixed. */
+type Props = { channels?: Channel[]; nodeTtlMs?: number; ready?: boolean; resyncCount?: number };
+
+function view(user: User, props: Props) {
+  return (
+    <LocationProvider>
+      <SearchView
+        blockedUserIds={new Set()}
+        channels={props.channels ?? []}
+        currentUser={user}
+        heldMessages={[]}
+        nodeTtlMs={props.nodeTtlMs}
+        ready={props.ready ?? true}
+        resyncCount={props.resyncCount ?? 0}
+        usersById={new Map()}
+      />
+    </LocationProvider>
+  );
+}
+
+function mount(user = me, props: Props = {}): HTMLDivElement {
   const container = document.createElement("div");
   document.body.appendChild(container);
-  render(
-    <LocationProvider>
-      <SearchView blockedUserIds={new Set()} channels={[]} currentUser={user} usersById={new Map()} />
-    </LocationProvider>,
-    container,
-  );
+  render(view(user, props), container);
   mounted.push(container);
   return container;
+}
+
+/** Render the mounted view again with new props, as the app does when its state changes. */
+function rerender(container: HTMLDivElement, props: Props, user = me): void {
+  render(view(user, props), container);
+}
+
+function searchAnswer(results: Message[]): () => Promise<Response> {
+  return async () => new Response(JSON.stringify({ results }), { status: 200 });
 }
 
 function unmountAll(): void {
@@ -43,7 +88,7 @@ async function flush(): Promise<void> {
 }
 
 function address(): string {
-  return `${window.location.pathname}${window.location.search}`;
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
 /** Type `term` and submit the form, letting Preact render the typed value in between as it would for a person. */
@@ -58,6 +103,7 @@ async function submit(host: ParentNode, term: string): Promise<void> {
 
 beforeEach(() => {
   requests = [];
+  answer = searchAnswer([]);
   forgetRememberedSearch();
   window.history.replaceState(null, "", "/search");
   vi.stubGlobal(
@@ -65,7 +111,7 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       requests.push({ path: url.slice(url.indexOf("/api/")), address: address() });
-      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+      return answer();
     }),
   );
 });
@@ -82,10 +128,44 @@ describe("SearchView", () => {
     const host = mount();
     await flush();
 
-    expect(requests).toEqual([{ path: "/api/search?q=secret%20plans", address: "/search" }]);
-    expect(address()).toBe("/search");
+    expect(requests).toEqual([{ path: "/api/search?q=secret%20plans", address: "/#/search" }]);
+    expect(address()).toBe("/#/search");
     expect(host.querySelector<HTMLInputElement>("input[type=search]")?.value).toBe("secret plans");
     expect(host.querySelector(".empty-note")?.textContent).toBe("No messages matched.");
+  });
+
+  it("runs a deep link in the fragment form (/#/search?q=) once, with the term off the address before the request", async () => {
+    window.history.replaceState(null, "", "/#/search?q=secret%20plans");
+    const host = mount();
+    await flush();
+
+    expect(requests).toEqual([{ path: "/api/search?q=secret%20plans", address: "/#/search" }]);
+    expect(address()).toBe("/#/search");
+    expect(host.querySelector<HTMLInputElement>("input[type=search]")?.value).toBe("secret plans");
+  });
+
+  it("holds a deep link's search until the app has its session, across a remount as the confirmed person", async () => {
+    window.history.replaceState(null, "", "/#/search?q=secret%20plans");
+    const placeholder = { ...me, id: "user.placeholder" };
+    const host = mount(placeholder, { ready: false });
+    await flush();
+    expect(requests).toEqual([]);
+    expect(address()).toBe("/#/search");
+
+    // The node confirms another id: the app remounts the screen under it, now with its config.
+    unmountAll();
+    const confirmed = mount(me, { ready: false });
+    await flush();
+    expect(requests).toEqual([]);
+    rerender(confirmed, { ready: true });
+    await flush();
+    expect(requests).toEqual([{ path: "/api/search?q=secret%20plans", address: "/#/search" }]);
+    expect(confirmed.querySelector<HTMLInputElement>("input[type=search]")?.value).toBe("secret plans");
+    expect(host.isConnected).toBe(false);
+
+    rerender(confirmed, { ready: true, resyncCount: 0 });
+    await flush();
+    expect(requests).toHaveLength(1);
   });
 
   it("never puts a submitted search in the address", async () => {
@@ -95,8 +175,8 @@ describe("SearchView", () => {
 
     await submit(host, "meeting point");
 
-    expect(requests).toEqual([{ path: "/api/search?q=meeting%20point", address: "/search" }]);
-    expect(address()).toBe("/search");
+    expect(requests).toEqual([{ path: "/api/search?q=meeting%20point", address: "/#/search" }]);
+    expect(address()).toBe("/#/search");
   });
 
   it("shows the same search again when the same person comes back to the screen, and no one else's", async () => {
@@ -113,5 +193,187 @@ describe("SearchView", () => {
     await flush();
     expect(other.querySelector<HTMLInputElement>("input[type=search]")?.value).toBe("");
     expect(requests).toHaveLength(2);
+  });
+});
+
+describe("SearchView keeps its results in step with the app", () => {
+  const MINUTE = 60_000;
+  const general = { id: "general", name: "general", visibility: "public", createdAt: 1 } as Channel;
+  const secret = { id: "secret", name: "secret", visibility: "private", createdAt: 1 } as Channel;
+
+  function post(id: string, body: string, channelId = "general", createdAt = Date.now()): Message {
+    return { id, type: "channelPost", channelId, authorId: someoneElse.id, body, createdAt } as Message;
+  }
+
+  function dm(id: string, body: string): Message {
+    return { id, type: "dm", recipientUserId: me.id, authorId: someoneElse.id, body, createdAt: Date.now() } as Message;
+  }
+
+  /** The text of the results on screen ("" when there are none). */
+  function shownText(host: ParentNode): string {
+    return host.querySelector(".search-results")?.textContent ?? "";
+  }
+
+  async function searchFor(term: string, results: Message[], props: Props = {}): Promise<HTMLDivElement> {
+    answer = searchAnswer(results);
+    const host = mount(me, props);
+    await flush();
+    await submit(host, term);
+    return host;
+  }
+
+  it("drops a row when the message is deleted", async () => {
+    const host = await searchFor("bridge", [post("m1", "meet at the bridge"), post("m2", "the bridge is closed")]);
+    expect(shownText(host)).toContain("meet at the bridge");
+
+    publishSearchChange({ kind: "deleted", messageId: "m1" });
+    await flush();
+
+    expect(shownText(host)).not.toContain("meet at the bridge");
+    expect(shownText(host)).toContain("the bridge is closed");
+  });
+
+  it("shows an edit's new text", async () => {
+    const host = await searchFor("bridge", [post("m1", "meet at the bridge")]);
+
+    publishSearchChange({ kind: "updated", message: post("m1", "meet at the bridge at noon") });
+    await flush();
+
+    expect(shownText(host)).toContain("meet at the bridge at noon");
+  });
+
+  it("drops a row an edit no longer matches, down to the no-results note", async () => {
+    const host = await searchFor("bridge", [post("m1", "meet at the bridge")]);
+
+    publishSearchChange({ kind: "updated", message: post("m1", "meet at the river") });
+    await flush();
+
+    expect(host.querySelector(".search-results")).toBeNull();
+    expect(host.textContent).not.toContain("meet at the");
+    expect(host.querySelector(".empty-note")?.textContent).toBe("No messages matched.");
+  });
+
+  it("drops the rows of a channel this person lost", async () => {
+    const results = [post("m1", "public plan"), post("m2", "secret plan", "secret"), dm("m3", "dm plan")];
+    const host = await searchFor("plan", results, { channels: [general, secret] });
+    expect(shownText(host)).toContain("secret plan");
+
+    publishSearchChange({ kind: "channelRemoved", channelId: "secret" });
+    await flush();
+
+    expect(shownText(host)).not.toContain("secret plan");
+    expect(shownText(host)).toContain("public plan");
+    expect(shownText(host)).toContain("dm plan");
+  });
+
+  it("never shows a message deleted while the search was in flight", async () => {
+    let land: (response: Response) => void = () => undefined;
+    answer = () => new Promise<Response>((resolve) => (land = resolve));
+    const host = mount();
+    await flush();
+    await submit(host, "bridge");
+
+    publishSearchChange({ kind: "deleted", messageId: "m1" });
+    publishSearchChange({ kind: "updated", message: post("m2", "the bridge reopened") });
+    land(new Response(JSON.stringify({ results: [post("m1", "meet at the bridge"), post("m2", "the bridge is closed")] })));
+    await flush();
+
+    expect(shownText(host)).not.toContain("meet at the bridge");
+    expect(shownText(host)).not.toContain("the bridge is closed");
+    expect(shownText(host)).toContain("the bridge reopened");
+  });
+
+  it("drops a row once retention expires it, on the app's interval", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const aging = post("m1", "meet at the bridge", "general", Date.now() - 55 * MINUTE);
+      const host = await searchFor("bridge", [aging], { nodeTtlMs: 60 * MINUTE });
+      expect(shownText(host)).toContain("meet at the bridge");
+
+      vi.advanceTimersByTime(RETENTION_PRUNE_INTERVAL_MS * 6);
+      await flush();
+
+      expect(shownText(host)).not.toContain("meet at the bridge");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prunes when the retention it is given gets shorter", async () => {
+    const host = await searchFor("bridge", [post("m1", "meet at the bridge", "general", Date.now() - 30 * MINUTE)], {
+      nodeTtlMs: 60 * MINUTE,
+    });
+    expect(shownText(host)).toContain("meet at the bridge");
+
+    rerender(host, { nodeTtlMs: 10 * MINUTE });
+    await flush();
+
+    expect(shownText(host)).not.toContain("meet at the bridge");
+  });
+
+  it("prunes results that arrive already past their retention", async () => {
+    const expired = post("m1", "meet at the bridge", "general", Date.now() - 120 * MINUTE);
+    const host = await searchFor("bridge", [expired, post("m2", "the bridge is closed")], { nodeTtlMs: 60 * MINUTE });
+
+    expect(shownText(host)).not.toContain("meet at the bridge");
+    expect(shownText(host)).toContain("the bridge is closed");
+  });
+
+  it("runs the search on screen again once per resync and shows the new answer", async () => {
+    const host = await searchFor("bridge", [post("m1", "meet at the bridge"), post("m2", "the bridge is closed")]);
+    expect(requests).toHaveLength(1);
+
+    // While the socket was down, m1 was deleted and m2 edited.
+    answer = searchAnswer([post("m2", "the bridge reopened")]);
+    rerender(host, { resyncCount: 1 });
+    await flush();
+
+    expect(requests.map((request) => request.path)).toEqual(["/api/search?q=bridge", "/api/search?q=bridge"]);
+    expect(shownText(host)).not.toContain("meet at the bridge");
+    expect(shownText(host)).toContain("the bridge reopened");
+
+    // Another render with the same count is not another resync.
+    rerender(host, { resyncCount: 1, nodeTtlMs: 60 * MINUTE });
+    await flush();
+    expect(requests).toHaveLength(2);
+  });
+
+  it("runs nothing on a resync when no results are on screen", async () => {
+    const host = mount();
+    await flush();
+
+    rerender(host, { resyncCount: 1 });
+    await flush();
+
+    expect(requests).toEqual([]);
+  });
+
+  it("shows nothing stale when the search after a resync fails", async () => {
+    const host = await searchFor("bridge", [post("m1", "meet at the bridge")]);
+
+    answer = async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 });
+    rerender(host, { resyncCount: 1 });
+    await flush();
+
+    expect(requests).toHaveLength(2);
+    expect(host.querySelector(".search-results")).toBeNull();
+    expect(host.textContent).not.toContain("meet at the bridge");
+    expect(host.querySelector(".notice-danger")).not.toBeNull();
+  });
+
+  it("stops listening when it unmounts", async () => {
+    // Preact 11 runs an unmounted component's effect cleanups after the next paint (see test-setup.ts), so
+    // let the previous test's finish first, and this one's after it unmounts.
+    const afterPaint = (): Promise<unknown> => new Promise((resolve) => setTimeout(resolve, 60));
+    await afterPaint();
+    expect(subscriptions.active).toBe(0);
+    mount();
+    await flush();
+    expect(subscriptions.active).toBe(1);
+
+    unmountAll();
+    await afterPaint();
+
+    expect(subscriptions.active).toBe(0);
   });
 });

@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { captureInviteCode } from "./invite";
 import { captureJoinKey, getCachedHostPublicKey, resetTransportStateForTests } from "./transport";
 
+// Two 32-byte keys in their one base64url spelling (the last character's two unused low bits are zero).
 const PINNED = "A".repeat(43);
-const OTHER = "B".repeat(43);
+const OTHER = `${"B".repeat(42)}E`;
 
 /** Run the start-up capture main.tsx runs, against a given address. */
 function startAt(url: string): void {

@@ -128,6 +128,39 @@ describe("LlmPanel", () => {
     expect(updates.at(-1)).toEqual({ apiKey: "" });
   });
 
+  it("does not offer a saved key as kept once the draft address has another origin than the saved one", () => {
+    const hint = "A saved key is only used with the address it was saved for. Enter the key for this address.";
+    const clearButton = (host: HTMLElement) => Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Clear key");
+    const panel = (openai: Partial<LlmConfig["openai"]>) =>
+      mount(
+        <LlmPanel
+          llm={{ ...base, openai: { ...base.openai, enabled: true, apiKeySet: true, ...openai } }}
+          onListModels={never}
+          onOllamaChange={noop}
+          onOnDeviceChange={noop}
+          onOpenAiChange={noop}
+          savedOpenAiBaseUrl="https://openrouter.ai/api/v1"
+          saving={false}
+        />,
+      );
+
+    // Another origin, no key typed: the field says no key, there is nothing to clear, and the hint says why.
+    const moved = panel({ baseUrl: "https://api.groq.com/openai/v1" });
+    expect(labelled(moved, "API key").placeholder).toBe("Paste the key the service gave you");
+    expect(clearButton(moved)).toBeUndefined();
+    expect(moved.textContent).toContain(hint);
+
+    // The same origin on another path keeps the saved key.
+    const samePlace = panel({ baseUrl: "https://openrouter.ai/api/v2" });
+    expect(labelled(samePlace, "API key").placeholder).toContain("A key is saved");
+    expect(clearButton(samePlace)).toBeDefined();
+    expect(samePlace.textContent).not.toContain(hint);
+
+    // A new key typed for the new address: no hint.
+    const typed = panel({ baseUrl: "https://api.groq.com/openai/v1", apiKey: "gsk_new" });
+    expect(typed.textContent).not.toContain(hint);
+  });
+
   it("Test connection asks the node with the typed connection, offers the models it finds, and words a refusal", async () => {
     const asked: LlmModelsRequest[] = [];
     let answer: LlmModelsResponse = { ok: true, models: ["a-model", "b-model"] };
