@@ -12,6 +12,12 @@ describe("redact", () => {
     expect(redact("listening on [fe80::1%en0]:3000")).toBe("listening on <address>");
   });
 
+  it("redacts an unbracketed scoped IPv6 address that carries a port", () => {
+    expect(redact("connect ECONNREFUSED fe80::1%eth_0:3000")).toBe("connect ECONNREFUSED <address>");
+    expect(redact("connect ECONNREFUSED fe80::1%eth0:3000 again")).toBe("connect ECONNREFUSED <address> again");
+    expect(redact("bound fe80::1%eth_0")).toBe("bound <address>");
+  });
+
   it("drops a URL's query and fragment along with its host", () => {
     expect(redact("GET http://192.168.1.9:3000/api/x?token=SECRET#k=KEY&a=CODE failed")).toBe("GET http://<host>/api/x failed");
     expect(redact("open http://pi.local:3000#k=KEY&a=CODE now")).toBe("open http://<host> now");

@@ -5,6 +5,7 @@ import {
   alertLevelForClientMessage,
   conversationPath,
   createMessageNotifier,
+  MAX_COUNTED_MESSAGE_IDS,
   type MessageNotifierDeps,
   notificationContent,
   parseMessageNotice,
@@ -239,6 +240,58 @@ describe('taking notifications back', () => {
     expect(notifier.withdraw({ messageId: 'msg_a' })).toBe(false);
     expect(notifier.withdraw({ messageId: 'msg_unknown' })).toBe(false);
     expect(clearConversation).not.toHaveBeenCalled();
+  });
+
+  it('lowers the count for a withdrawn older message, leaving the notification on screen', () => {
+    const { notifier, shown, clearConversation } = harness();
+    notifier.notice({ ...dm, messageId: 'msg_a' });
+    notifier.notice({ ...dm, messageId: 'msg_b' });
+
+    expect(notifier.withdraw({ messageId: 'msg_a' })).toBe(false);
+    expect(clearConversation).not.toHaveBeenCalled();
+
+    // B is still unseen, so the next message makes two, not three.
+    notifier.notice({ ...dm, messageId: 'msg_c' });
+    expect(shown.at(-1)).toMatchObject({ conversation: 'dm:user.abc', count: 2 });
+
+    // A repeated withdrawal of the same message changes nothing.
+    expect(notifier.withdraw({ messageId: 'msg_a' })).toBe(false);
+    notifier.notice({ ...dm, messageId: 'msg_d' });
+    expect(shown.at(-1)).toMatchObject({ count: 3 });
+    expect(clearConversation).not.toHaveBeenCalled();
+  });
+
+  it('lowers the count only for a message of that conversation', () => {
+    const { notifier, shown } = harness();
+    notifier.notice({ ...dm, messageId: 'msg_a' });
+    notifier.notice({ ...dm, messageId: 'msg_b' });
+    notifier.notice(otherDm);
+
+    expect(notifier.withdraw({ messageId: 'msg_a' })).toBe(false);
+    notifier.notice({ ...otherDm, messageId: 'msg_other2' });
+    expect(shown.at(-1)).toMatchObject({ conversation: 'dm:user.xyz', count: 2 });
+    notifier.notice({ ...dm, messageId: 'msg_c' });
+    expect(shown.at(-1)).toMatchObject({ conversation: 'dm:user.abc', count: 2 });
+  });
+
+  it('remembers a bounded number of messages per conversation, dropping the oldest', () => {
+    const { notifier, shown } = harness();
+    const total = MAX_COUNTED_MESSAGE_IDS + 2;
+    for (let i = 0; i < total; i += 1) {
+      notifier.notice({ ...dm, messageId: `msg_${i}` });
+    }
+    expect(shown.at(-1)).toMatchObject({ count: total });
+
+    // The two oldest are no longer remembered, so withdrawing them leaves the count where it was.
+    notifier.withdraw({ messageId: 'msg_0' });
+    notifier.withdraw({ messageId: 'msg_1' });
+    // The oldest still remembered lowers it.
+    notifier.withdraw({ messageId: 'msg_2' });
+    notifier.notice({ ...dm, messageId: 'msg_next' });
+    expect(shown.at(-1)).toMatchObject({ count: total });
+
+    // The one on display is still remembered and still taken back.
+    expect(notifier.withdraw({ messageId: 'msg_next' })).toBe(true);
   });
 
   it('never counts below zero', () => {

@@ -188,6 +188,30 @@ describe('the re-bootstrap after a reset the web client reports', () => {
   });
 });
 
+describe('only one device-key clear runs at a time', () => {
+  it('joins a clear already in flight instead of starting a second one', () => {
+    // A second `loam-wipe-restart` (main.js asks again after its wait timed out) or a Retry while a clear
+    // runs must not start another clear: that one could delete the secret minted once the first one acks.
+    const code = screenCode();
+    expect(code).toMatch(/const \[wipeKeyClearFlight\] = useState\(\(\) => createSingleFlight<void>\(\)\);/);
+    expect(code).toMatch(/const attemptWipeKeyClear = \(\) =>\s*wipeKeyClearFlight\.run\(async \(\) => \{\s*const kind = wipeKeyClearKindRef\.current;/);
+    // The only call of the clear is inside the joined work.
+    const body = code.slice(code.indexOf('const attemptWipeKeyClear = '));
+    const work = body.slice(0, body.indexOf('\n    });\n') + 1);
+    expect(work).toMatch(/clearWipeKeyAfterReset\(/);
+    expect(code.match(/clearWipeKeyAfterReset\(/g)).toHaveLength(1);
+  });
+
+  it('answers a database key request only once no clear is running', () => {
+    // A late `loam-wipe-restart` can start a clear just before main.js asks for a key; minting the device
+    // secret while that clear runs would let the clear delete it.
+    const code = screenCode();
+    expect(code).toMatch(
+      /registerDbEncryption\(nodejs\.channel, \{ waitBeforeKeyResolve: wipeKeyClearFlight\.settled \}\)/,
+    );
+  });
+});
+
 describe('startFreshIntentForCode (Sol P1: button copy ↔ marker intent must agree)', () => {
   it('requests DELETE for the plaintext-unconverted destructive recovery ("Delete existing data & start encrypted")', () => {
     // The `db_encryption_plaintext_unconverted` button is a DELIBERATE destructive action — the server

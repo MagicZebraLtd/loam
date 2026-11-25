@@ -30,9 +30,12 @@
 > **What a reset does not reach** (and the public copy says so). (1) **Linked networks** keep their own copy
 > of this node's public channels, their authors and pictures. Every reset turns sync off and keeps the
 > peer list ("Sync after a reset" below); turning sync on again pulls that copy back in, since `wipeAll()`
-> deleted the tombstones that would block it. (2) **The `loamnet` admin's browser**: unlike the
-> Android WebView and the desktop window, it gets no `__loamHostNoLocalCache`, so it keeps an unencrypted
-> IndexedDB copy, on ephemeral networks too, until the reset reaches it. (3) **Copies under an earlier
+> deleted the tombstones that would block it. (2) **The `loamnet` admin's browser on an unencrypted node**
+> keeps an IndexedDB copy like any member's browser, until the reset reaches it (at once when it is
+> connected, otherwise at its next connect to the same address). On an encrypted node, ephemeral ones
+> included, a browser that opens LOAM over loopback is told to keep none (`hostNoLocalCache` in
+> `/api/bootstrap`, see below), so only a copy an older version wrote is left, and the next visit deletes
+> it. A browser that opens the node by its LAN address is an ordinary member's browser. (3) **Copies under an earlier
 > address** (above). (4) **OS backups** of the host's data folder. (5) Browser history and address-bar
 > suggestions (see "What a wipe cannot reach" below). (6) **Log lines already written** (a terminal's
 > scrollback, a file the operator sends the log to). A request line names the matched route pattern

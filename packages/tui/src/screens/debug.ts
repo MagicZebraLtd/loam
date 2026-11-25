@@ -31,10 +31,12 @@ export function redact(value: string, folders: string[] = []): string {
   // A URL keeps its scheme and path only: its query and fragment can carry a token, a key or an admin code.
   out = out.replace(/\b(https?|wss?):\/\/[^\s/?#"'<>]+([^\s?#"'<>]*)(?:\?[^\s#"'<>]*)?(?:#[^\s"'<>]*)?/g, "$1://<host>$2");
   out = out.replace(ADDRESS_TOKEN, (token) => {
-    // A port goes first (`192.168.1.20:11434`, `[fd00::5]:3000`): with it, the token is no address to `isIP`.
+    // A port goes first (`192.168.1.20:11434`, `[fd00::5]:3000`, `fe80::1%eth_0:3000`): with it, the token is
+    // no address to `isIP`. After a zone id the port is unambiguous, since a zone holds no colon here.
     const bare = token
       .replace(/^\[([^\]]+)\]:\d+$/, "$1")
       .replace(/^((?:\d{1,3}\.){3}\d{1,3}):\d+$/, "$1")
+      .replace(/^([^[\]%]+%[\w.-]+):\d+$/, "$1")
       .replace(/^\[|\]$/g, "")
       .replace(/%[\w.-]+$/, "");
     return isIP(bare) ? "<address>" : token;

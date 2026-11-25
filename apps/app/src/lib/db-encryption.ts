@@ -643,9 +643,16 @@ function newOperationId(): string {
  * and waits (with its own timeout), rather than relying on this being registered before the request is
  * posted.
  *
+ * `waitBeforeKeyResolve` (the screen's device-key clear, `attemptWipeKeyClear`) is awaited before each key is
+ * resolved: a resolve can mint the device secret, and a clear still running would then delete it. A rejection
+ * of the wait doesn't stop the answer.
+ *
  * Never logs `key`/`legacyKey`/the passphrase. Returns a cleanup that removes all three listeners.
  */
-export function registerDbEncryption(channel: BridgeChannel): () => void {
+export function registerDbEncryption(
+  channel: BridgeChannel,
+  options: { waitBeforeKeyResolve?: () => Promise<void> } = {},
+): () => void {
   const onRequest = (payload: unknown): void => {
     // Echo main.js's correlation id so a late answer to an already-timed-out
     // request can't be mistaken for the answer to a subsequent one, AND so the candidate this resolve used
@@ -654,6 +661,11 @@ export function registerDbEncryption(channel: BridgeChannel): () => void {
     const requestId = typeof rawId === 'string' ? rawId : undefined;
     void (async () => {
       let response: ResolvedDbKey | { mode: typeof DB_ENCRYPTION_MODE_READ_ERROR };
+      try {
+        await options.waitBeforeKeyResolve?.();
+      } catch {
+        // the clear reports its own failure; the launcher still needs an answer
+      }
       try {
         const mode = await getDbEncryptionMode();
         if (mode === DB_ENCRYPTION_MODE_READ_ERROR) {

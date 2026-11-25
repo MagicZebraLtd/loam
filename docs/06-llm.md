@@ -103,13 +103,16 @@ with `{ ok: false, code }` where `code` is `llm_unreachable`, `llm_unauthorized`
 backend), `llm_bad_response` (also a redirect, or a list over 8 MiB) or `llm_not_allowed`.
 (A 401 from this node would read to the client's transport as its own session expiring.)
 
-**Hardened networks keep messages local.** Under `security.profile: "hardened"` the service may only be a
-local one (`isLocalNetworkUrl`: loopback, the name `localhost`, RFC 1918, link-local, `.local`, a bare host
-name; not a `*.localhost` name, which Node's `fetch` resolves like any other, so it can be another machine);
+**Hardened networks take only an address that reads as local.** Under `security.profile: "hardened"` the
+service's address must be a local one by its text (`isLocalNetworkUrl`: loopback, the name `localhost`,
+RFC 1918, link-local, `.local`, a bare host name; not a `*.localhost` name, which Node's `fetch` resolves like any other, so it can be another machine);
 `PATCH /api/admin/config` refuses a cloud `baseUrl` with `llm_cloud_not_allowed` (also when switching an
 already-cloud node to hardened), `ensureBotUser` treats a hand-edited config.json that pairs them as
 "assistant off" with a boot warning, and the models endpoint answers `llm_not_allowed`. Ollama is held to
-the same rule (its address can point anywhere); only the on-device model is local by construction.
+the same rule (its address can point anywhere); only the on-device model is local by construction. The check
+reads the address and resolves nothing, so it is not a promise that traffic stays on the local network: a
+bare host name that the system resolver maps to a public address (through a search domain, say) is
+accepted like any other.
 
 **Networks the Android app hosts reach another machine only over HTTPS.** The Android launcher sets
 `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` (`AppOptions.requireTransportEncryption`, see docs/08), and on such a

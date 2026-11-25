@@ -272,7 +272,8 @@ the cipher codec would silently ignore `PRAGMA key` and write plaintext.
 spills a large sort (the message load's `ORDER BY`) to temporary storage. The SQLCipher driver is built to
 put that in files in the OS temp directory, and the cipher does not encrypt them: once the message rows
 passed about 16 MB, the load wrote whole rows there in the clear, outside the data folder, where no
-Emergency Reset reaches. With the pragma no temporary file is written.
+Emergency Reset reaches. With the pragma, SQLite writes no sort spill file. The rollback journal and WAL
+files are transaction files, not temporary ones in this sense, and are still written beside the database.
 
 **The key never touches plaintext disk, and is never logged.** `resolveDbKey()`'s three encrypted
 branches all end in `expo-secure-store` (Android Keystore) or pure RAM (`ephemeral`); no branch writes

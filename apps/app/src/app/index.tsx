@@ -81,6 +81,7 @@ import {
 } from '@/lib/passphrase-confirm';
 import { ensureHostService } from '@/lib/host-service';
 import { clearWipeKeyAfterReset } from '@/lib/reset-close';
+import { createSingleFlight } from '@/lib/single-flight';
 import { noteConnectedClients, noteLauncherInterfaces } from '@/hooks/use-hotspot';
 import { parseHostClients, parseHostInterfaces, type HostInterface } from '@/lib/join-display';
 import { registerOnDeviceLlm } from '@/lib/on-device-llm';
@@ -314,6 +315,9 @@ function HostScreen() {
   // the bridge listener and the timer outlive the render that made them.
   const wipeKeyClearKindRef = useRef<WipeKeyClearKind>('live');
   const wipeKeyClearStateRef = useRef<WipeKeyClearState>('idle');
+  // The clear in flight, joined by a repeated request (lib/single-flight.ts): main.js asks again when its
+  // own wait times out, and a second clear could delete the secret minted once the first one acks.
+  const [wipeKeyClearFlight] = useState(() => createSingleFlight<void>());
   // Whether the "Share / Host" overlay (hotspot + two-step join QRs) is open.
   // Opened straight after setup (the join codes, or the admin settings for a hand-configured network).
   const [shareOpen, setShareOpen] = useState(() => afterSetup.openShare);
@@ -477,29 +481,30 @@ function HostScreen() {
   // this screen shows the real failure with a Retry, never a blanket "cleared". Called from the
   // `loam-wipe-restart` bridge listener below, fired both for a LIVE kill-switch signal and for main.js's
   // own boot-time RESUME repost (a suspended/backgrounded/killed RN gets another chance), and from Retry,
-  // which repeats the kind last asked for (`wipeKeyClearKindRef`).
-  const attemptWipeKeyClear = async () => {
-    const kind = wipeKeyClearKindRef.current;
-    wipeKeyClearStateRef.current = 'clearing';
-    setWipeClearBusy(true);
-    // Clear the device key material and, only on a VERIFIED clear, ack the launcher (see
-    // `clearWipeKeyAndAck`); this is the SOLE native path that touches the stored key on a wipe. Around it,
-    // what the kind needs (lib/emergency-reset.ts `finishWipeKeyClear`): a live reset's runtime can't restart
-    // in this process (nodejs-mobile starts once per process), so LOAM closes, after forgetting the setup
-    // record and the WebView's storage; a resumed one boots on here, keeping the setup just made.
-    const result = await clearWipeKeyAfterReset(
-      kind,
-      () => clearWipeKeyAndAck(clearStoredDbKeys, () => nodejs.channel.post('loam-wipe-complete')),
-    );
-    wipeKeyClearStateRef.current = wipeKeyClearStateAfter(kind, result);
-    setWipeClearBusy(false);
+  // which repeats the kind last asked for (`wipeKeyClearKindRef`). A request while a clear runs joins it.
+  const attemptWipeKeyClear = () =>
+    wipeKeyClearFlight.run(async () => {
+      const kind = wipeKeyClearKindRef.current;
+      wipeKeyClearStateRef.current = 'clearing';
+      setWipeClearBusy(true);
+      // Clear the device key material and, only on a VERIFIED clear, ack the launcher (see
+      // `clearWipeKeyAndAck`); this is the SOLE native path that touches the stored key on a wipe. Around it,
+      // what the kind needs (lib/emergency-reset.ts `finishWipeKeyClear`): a live reset's runtime can't restart
+      // in this process (nodejs-mobile starts once per process), so LOAM closes, after forgetting the setup
+      // record and the WebView's storage; a resumed one boots on here, keeping the setup just made.
+      const result = await clearWipeKeyAfterReset(
+        kind,
+        () => clearWipeKeyAndAck(clearStoredDbKeys, () => nodejs.channel.post('loam-wipe-complete')),
+      );
+      wipeKeyClearStateRef.current = wipeKeyClearStateAfter(kind, result);
+      setWipeClearBusy(false);
 
-    if (!result.ok) {
-      setWipeClearFailure(result.error ?? t('boot.keyClearUnknown'));
-      return;
-    }
-    setWipeClearFailure(undefined);
-  };
+      if (!result.ok) {
+        setWipeClearFailure(result.error ?? t('boot.keyClearUnknown'));
+        return;
+      }
+      setWipeClearFailure(undefined);
+    });
 
   // Display mode: keep the screen awake and pin the app while it's on. Both are best-effort no-ops when
   // unsupported; on unmount we release both so the app is never left stuck in lock-task.
@@ -706,7 +711,8 @@ function HostScreen() {
     // Answer main.js's DB-encryption key request at boot (docs/01, docs/21). Registered here rather
     // than gated on nodeStarted so it's always listening before/whenever main.js's own request arrives
     // — though main.js's request/response handoff is race-free regardless (it requests and waits).
-    const cleanupDbEncryption = registerDbEncryption(nodejs.channel);
+    // A key is resolved only once no device-key clear is running, since a resolve can mint the secret.
+    const cleanupDbEncryption = registerDbEncryption(nodejs.channel, { waitBeforeKeyResolve: wipeKeyClearFlight.settled });
 
     if (!nodeStarted) {
       nodeStarted = true;

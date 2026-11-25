@@ -242,7 +242,9 @@ describe('closeLoamAfterReset (both reset paths)', () => {
     const wiring = readFileSync(join(__dirname, 'reset-close.ts'), 'utf8');
     // `attemptWipeKeyClear` (index.tsx) goes through the kind-aware sequence, which closes through
     // `closeLoamAfterReset` on a live reset; the reset screen closes through it directly.
-    expect(screen).toMatch(/const attemptWipeKeyClear = async \(\) => \{\s*const kind = wipeKeyClearKindRef\.current;[\s\S]*?await clearWipeKeyAfterReset\(\s*kind,/);
+    expect(screen).toMatch(
+      /const attemptWipeKeyClear = \(\) =>\s*wipeKeyClearFlight\.run\(async \(\) => \{\s*const kind = wipeKeyClearKindRef\.current;[\s\S]*?await clearWipeKeyAfterReset\(\s*kind,/,
+    );
     expect(screen).not.toMatch(/closeLoamAfterReset\(|import \{[^}]*closeLoamAfterReset/);
     expect(wiring).toMatch(/closeLoam: closeLoamAfterReset/);
     expect(overlay.match(/closeLoamAfterReset\(\)/g)).toHaveLength(2);

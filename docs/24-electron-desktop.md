@@ -113,9 +113,10 @@ boots until it has finished**: the next Start waits for it again, bounded the sa
 does finish, the screen moves to Stopped by itself. Quit stays bounded on its own (`before-quit` exits after
 10 s whatever the node did).
 
-**Discarding a network finishes once it has begun.** "Start a new network" (`newNetwork()`) resets a
-running node, stops it, runs `markClientCopyStale()` before the key is destroyed, and writes a durable
-`discardPending` mark into `desktop.json` before its first destructive step. Then `finishDiscard` destroys
+**Discarding a network finishes once it has begun.** "Start a new network" (`newNetwork()`) first writes a
+durable `discardPending` mark into `desktop.json`, before anything is reset or destroyed, then runs
+`markClientCopyStale()` and resets a running node. Then `finishDiscard` closes the node (nothing is
+destroyed while it hasn't closed; that fails as `stop_timeout` and leaves the mark), destroys
 the key, empties the data folder and the client window's copy, and drops the network record and the mark
 in one last write. Each step can run again, and `initialize()` (a launch) and `start()` (Try again) finish
 a pending discard before anything boots. Before, a discard that failed part-way left the record in place,

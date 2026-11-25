@@ -1028,5 +1028,113 @@ describe("a new network", () => {
     expect(await made.controller.newNetwork()).toMatchObject({ ok: false });
     expect(made.secrets.current()).toBe(secret);
     expect(existsSync(join(dataDir, "loam.db"))).toBe(true);
+    // The running network wasn't reset either: its joined devices keep everything.
+    expect(made.server.nodes[0]!.calls).not.toContain("reset");
+  });
+
+  /** Watch the running node's reset: the record as it stood when the reset was asked for and when it finished. */
+  function watchReset(made: ReturnType<typeof makeController>) {
+    const node = made.server.nodes[0]!;
+    const reset = node.host.emergencyReset;
+    const seen: { before?: DesktopSettings; after?: DesktopSettings } = {};
+    node.host.emergencyReset = async () => {
+      seen.before = structuredClone(made.settings.read());
+      const result = await reset();
+      seen.after = structuredClone(made.settings.read());
+      return result;
+    };
+    return seen;
+  }
+
+  it("records the discard before the running network is reset", async () => {
+    const made = makeController({ settings: { logLevel: "info", network: community } });
+    await made.controller.initialize();
+    const seen = watchReset(made);
+    expect(await made.controller.newNetwork()).toEqual({ ok: true, value: undefined });
+    expect(seen.before?.discardPending).toBe(true);
+  });
+
+  it("finishes the discard at the next launch when LOAM stops right after the reset", async () => {
+    const made = makeController({ settings: { logLevel: "info", network: community } });
+    await made.controller.initialize();
+    writeFileSync(join(dataDir, "loam.db"), "emptied by the reset");
+    const seen = watchReset(made);
+    await made.controller.newNetwork();
+
+    // LOAM stopped the moment the reset finished: the next launch sees the record as it was then.
+    const relaunched = makeController({ settings: seen.after! });
+    await relaunched.controller.initialize();
+    expect(relaunched.server.nodes).toHaveLength(0);
+    expect(relaunched.states.at(-1)).toMatchObject({ phase: "setup" });
+    expect(relaunched.settings.read().network).toBeUndefined();
+    expect(relaunched.settings.read().discardPending).toBeUndefined();
+    expect(existsSync(join(dataDir, "loam.db"))).toBe(false);
+    expect(relaunched.secrets.current()).toBeUndefined();
+  });
+
+  it("finishes a discard found at launch only once the old node has closed", async () => {
+    // The mark is on disk, but a node from this process is still closing: nothing is destroyed under it.
+    const made = makeController({ settings: { logLevel: "info", network: community } });
+    await made.controller.initialize();
+    const secret = made.secrets.current();
+    const release = made.server.holdClose();
+    expect(await made.controller.newNetwork()).toEqual({ ok: false, error: expect.any(String) });
+    expect(made.controller.getState()).toMatchObject({ phase: "failed", error: { code: "stop_timeout" } });
+    expect(made.settings.read().discardPending).toBe(true);
+    // Try again while it is still closing: still nothing destroyed, the mark stays.
+    expect(await made.controller.start()).toMatchObject({ ok: false });
+    expect(made.controller.getState()).toMatchObject({ phase: "failed", error: { code: "stop_timeout" } });
+    expect(made.secrets.current()).toBe(secret);
+    expect(made.settings.read().discardPending).toBe(true);
+    expect(made.settings.read().network).toEqual(community);
+
+    release();
+    await vi.waitFor(() => expect(made.server.nodes[0]!.closed).toBe(true));
+    expect(await made.controller.start()).toEqual({ ok: true, value: undefined });
+    expect(made.states.at(-1)).toMatchObject({ phase: "setup" });
+    expect(made.secrets.current()).toBeUndefined();
+  });
+
+  /** Put a file where the data folder should be, so emptying it throws; returns the undo. */
+  function blockDataDir(): () => void {
+    rmSync(dataDir, { recursive: true, force: true });
+    writeFileSync(dataDir, "not a folder");
+    return () => {
+      rmSync(dataDir, { force: true });
+      mkdirSync(dataDir, { recursive: true });
+    };
+  }
+
+  it("reports a data folder that can't be emptied at launch as a failure, and finishes at Try again", async () => {
+    const made = makeController({ settings: { logLevel: "info", network: community, discardPending: true } });
+    const unblock = blockDataDir();
+    await expect(made.controller.initialize()).resolves.toBeUndefined();
+    const state = made.controller.getState();
+    expect(state).toMatchObject({ phase: "failed", error: { code: "unknown" } });
+    expect(state.phase === "failed" && state.error.detail).toMatch(/data folder/);
+    expect(made.settings.read().discardPending).toBe(true);
+    expect(made.server.nodes).toHaveLength(0);
+
+    // Still blocked: Try again fails the same way, without throwing.
+    expect(await made.controller.start()).toEqual({ ok: false, error: expect.stringMatching(/data folder/) });
+    expect(made.settings.read().discardPending).toBe(true);
+
+    unblock();
+    expect(await made.controller.start()).toEqual({ ok: true, value: undefined });
+    expect(made.states.at(-1)).toMatchObject({ phase: "setup" });
+    expect(made.settings.read().network).toBeUndefined();
+    expect(made.server.nodes).toHaveLength(0);
+  });
+
+  it("reports a data folder that can't be emptied during a discard as a failure", async () => {
+    const made = makeController({ settings: { logLevel: "info", network: community } });
+    await made.controller.initialize();
+    const unblock = blockDataDir();
+    expect(await made.controller.newNetwork()).toEqual({ ok: false, error: expect.stringMatching(/data folder/) });
+    expect(made.controller.getState()).toMatchObject({ phase: "failed", error: { code: "unknown" } });
+    expect(made.settings.read().discardPending).toBe(true);
+    unblock();
+    expect(await made.controller.start()).toEqual({ ok: true, value: undefined });
+    expect(made.states.at(-1)).toMatchObject({ phase: "setup" });
   });
 });

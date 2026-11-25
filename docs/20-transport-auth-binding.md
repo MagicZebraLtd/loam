@@ -219,9 +219,10 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   the token with the host key it was issued under (`loam.identityToken.v2.<origin>` = `{ k, t }`) and only
   ever sends it to a session with that key. A newly accepted key (a `#k=` change the user accepts, or the
   Android launcher's key) starts a fresh identity: the resume carries no token, the node mints one, and
-  that token replaces the old network's record (one record per origin, so going back to the first network
-  later mints a new identity there too). Nothing legitimate is lost: a node's key changes only when its
-  database is wiped, which deletes every identity token with it. A bare token from an earlier release
+  that token replaces the old network's record (one record per origin). Going back to the first network
+  therefore mints a new identity there, and the identity that network issued earlier is not resumed. When
+  the key changed because the node's database was wiped, nothing is lost by that: the wipe deleted every
+  identity token with it. A bare token from an earlier release
   (`loam.identityToken.<origin>`) is bound to the pin stored when it is first read (at start-up, and
   before any pin is replaced), and deleted when no pin is stored. The wipe snapshot (§12) keeps the key
   too, so a revocation re-bind only presents it under the same key.

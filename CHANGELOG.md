@@ -32,7 +32,8 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 - **`loamnet`'s local links go to the port LOAM holds.** With `CLIENT_PORT` set apart from `PORT` (a proxy in
   front, say), the terminal UI's "Open as admin" link and plain mode's admin link used the advertised port,
   which LOAM doesn't hold, and carried the one-time admin code there. Local links now use the port and an
-  address the server listens on. (docs/14)
+  address the server listens on. With `HOST=localhost` the start-up port check now looks at both loopback
+  addresses, so the link can't reach another program that already held the port on `127.0.0.1`. (docs/14)
 - **Every network the Android app hosts now requires encryption.** Whatever the network's security profile,
   a phone-hosted network accepts only encrypted connections, so everything members post or receive is
   encrypted, pictures and files included. (The web app itself and the public network settings it starts
@@ -306,13 +307,15 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   Reset was cut short and finished at the next launch, the app deleted the setup the host had just made and
   closed. It now clears the key and the WebView's data, keeps the new setup and starts the new network. A
   reset of a running network deletes the setup record before the key is cleared, so it is gone even if a
-  later step fails. Not yet verified on a physical phone. (docs/04)
+  later step fails. Only one key clear runs at a time, and no new key is made while one is running, so a
+  slow clear and a retry can't delete the new network's key. Not yet verified on a physical phone. (docs/04)
 - **Android host: a start-fresh that ends at the passphrase prompt reports no time-out.** Five minutes
   later the lock screen's details said `boot_timeout`. (docs/04)
 - **Desktop: a "Start a new network" that fails part-way is finished, not booted.** A discard that stopped
   early (a file Windows still held open, say) left the network record, and the next launch could start an
-  empty network under the old name. The discard now records itself before it erases anything, and a launch
-  or Try again finishes it before anything starts. (docs/24)
+  empty network under the old name. The discard now records itself before it resets or erases anything, a
+  launch or Try again finishes it before anything starts, and a data folder that can't be emptied shows as
+  a failure instead of closing the app. (docs/24)
 - **Desktop: a crashed host window comes back.** It stayed blank while the network ran. It now reloads, up
   to three times a minute, and after that the tray opens a fresh one. (docs/24)
 - **Desktop: a release candidate's update check sees the final release as newer.** A build from an `-rc` tag

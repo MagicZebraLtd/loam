@@ -160,6 +160,14 @@ export type MessageNotifier = {
   level: () => AlertLevel;
 };
 
+/**
+ * How many of a conversation's counted messages are remembered by id, so a withdrawn one lowers the count.
+ * Past this the oldest are dropped: withdrawing one of those leaves the count one high, which after 64 newer
+ * unseen messages in one conversation changes nothing the person acts on, while the memory per conversation
+ * stays a few kilobytes however busy it is. The message on display is the newest, so it is never dropped.
+ */
+export const MAX_COUNTED_MESSAGE_IDS = 64;
+
 /** Build the notifier over `deps`. */
 export function createMessageNotifier(deps: MessageNotifierDeps): MessageNotifier {
   let level: AlertLevel = DEFAULT_ALERT_LEVEL;
@@ -167,14 +175,42 @@ export function createMessageNotifier(deps: MessageNotifierDeps): MessageNotifie
   let loading: Promise<AlertLevel> | undefined;
   // Messages per conversation since LOAM was last in front.
   const counts = new Map<string, number>();
+  // The ids of the messages each count stands for, oldest first (at most MAX_COUNTED_MESSAGE_IDS).
+  const counted = new Map<string, string[]>();
   // The message whose text each conversation's notification shows now.
   const previews = new Map<string, string>();
 
   /** Forget every count and preview and remove every notification. */
   function forgetAll(): void {
     counts.clear();
+    counted.clear();
     previews.clear();
     deps.clear();
+  }
+
+  /** One message fewer stands behind `conversation`'s count. */
+  function lowerCount(conversation: string): void {
+    const count = (counts.get(conversation) ?? 0) - 1;
+    if (count > 0) {
+      counts.set(conversation, count);
+    } else {
+      counts.delete(conversation);
+    }
+  }
+
+  /** Forget `messageId` among the counted ones; returns its conversation, or undefined if it wasn't there. */
+  function uncount(messageId: string): string | undefined {
+    for (const [conversation, ids] of counted) {
+      const index = ids.indexOf(messageId);
+      if (index !== -1) {
+        ids.splice(index, 1);
+        if (ids.length === 0) {
+          counted.delete(conversation);
+        }
+        return conversation;
+      }
+    }
+    return undefined;
   }
 
   return {
@@ -206,6 +242,12 @@ export function createMessageNotifier(deps: MessageNotifierDeps): MessageNotifie
       }
       const count = (counts.get(notice.conversation) ?? 0) + 1;
       counts.set(notice.conversation, count);
+      const ids = counted.get(notice.conversation) ?? [];
+      ids.push(notice.messageId);
+      if (ids.length > MAX_COUNTED_MESSAGE_IDS) {
+        ids.shift();
+      }
+      counted.set(notice.conversation, ids);
       const shown = deps.show(notificationContent(notice, count));
       if (shown) {
         previews.set(notice.conversation, notice.messageId);
@@ -220,18 +262,23 @@ export function createMessageNotifier(deps: MessageNotifierDeps): MessageNotifie
       if ('conversation' in withdrawal) {
         const showing = previews.delete(withdrawal.conversation);
         counts.delete(withdrawal.conversation);
+        counted.delete(withdrawal.conversation);
         deps.clearConversation(withdrawal.conversation);
         return showing;
       }
-      // Only the newest message's text is on screen; an older one in the same conversation shows nowhere.
+      // Forgotten once counted, so a repeated withdrawal lowers nothing.
+      const counter = uncount(withdrawal.messageId);
+      if (counter !== undefined) {
+        lowerCount(counter);
+      }
+      // Only the newest message's text is on screen; an older one in the same conversation shows nowhere,
+      // so its notification stays with the lower count showing on the next message.
       for (const [conversation, messageId] of previews) {
         if (messageId === withdrawal.messageId) {
           previews.delete(conversation);
-          const count = (counts.get(conversation) ?? 0) - 1;
-          if (count > 0) {
-            counts.set(conversation, count);
-          } else {
-            counts.delete(conversation);
+          if (counter === undefined) {
+            // Counted before the ones remembered (a run of notices the shade refused): still one fewer.
+            lowerCount(conversation);
           }
           deps.clearConversation(conversation);
           return true;

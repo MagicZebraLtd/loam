@@ -230,8 +230,9 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   service worker doesn't register. Then type an old-style address (`http://<node>/dm/<id>`): it opens, and
   the address bar shows `/#/dm/<id>` afterwards.
 - [ ] **`loamnet`'s admin link opens on `127.0.0.1`.** Run `npx loamnet`, press `o` (open as admin): the
-  browser opens `http://127.0.0.1:<port>#k=…&a=…` (not `localhost`) and the session becomes admin. Close the
-  panel without claiming, then open the same link again: it no longer grants admin. In plain mode
+  browser opens `http://127.0.0.1:<port>#k=…&a=…` (not `localhost`) and the session becomes admin. Separately, check that a code nobody used
+  is retired: press `o`, then `p` for the phone's code, note its link without opening it, close the panel,
+  and open that link in a private window: it no longer grants admin. In plain mode
   (`--plain`), "Open on this device" prints `http://127.0.0.1:<port>`. Start it again with `CLIENT_PORT` set
   to a port other than `PORT`: both links use the port LOAM listens on, not `CLIENT_PORT`.
 

@@ -32,6 +32,20 @@ describe("probeHosts", () => {
 
   it("probes only a specific host", () => {
     assert.deepEqual(probeHosts("192.168.1.5"), ["192.168.1.5"]);
+    assert.deepEqual(probeHosts("127.0.0.1"), ["127.0.0.1"]);
+    assert.deepEqual(probeHosts("::1"), ["::1"]);
+  });
+
+  it("probes both loopback addresses for localhost, which may resolve to either", () => {
+    assert.deepEqual(probeHosts("localhost"), ["127.0.0.1", "::1"]);
+    assert.deepEqual(probeHosts("LocalHost"), ["127.0.0.1", "::1"]);
+  });
+});
+
+describe("isPortFree for localhost", () => {
+  it("reports a port another server holds on 127.0.0.1", async () => {
+    const port = await hold("127.0.0.1");
+    assert.equal(await isPortFree(port, "localhost"), false);
   });
 });
 
