@@ -54,6 +54,21 @@ function save(view: View, update: LoamConfigUpdate, done: string): void {
   view.toast(result.ok ? done : `Not saved: ${result.error}`, result.ok ? "ok" : "error");
 }
 
+/**
+ * Save the chat service's address. A saved key is only used with the address it was saved for: the node
+ * drops it when the address moves to another origin, and the toast says so, since the next message would
+ * otherwise reach the service with no key.
+ */
+function saveServiceAddress(view: View, baseUrl: string, hadKey: boolean): void {
+  const result = view.options.host.updateConfig({ llm: { openai: { baseUrl } } });
+  if (!result.ok) {
+    view.toast(`Not saved: ${result.error}`, "error");
+    return;
+  }
+  const keyDropped = hadKey && !result.value.llm.openai.apiKeySet;
+  view.toast(keyDropped ? "Saved. The saved key was for the old address: enter the key for this one." : "Saved", "ok");
+}
+
 function choose<T>(
   view: View,
   title: string,
@@ -135,6 +150,11 @@ function pickLlmModel(view: View, request: LlmModelsRequest, current: string, ap
   view.toast("Asking for the list of models...");
   void view.options.host.llmModels(request).then(
     (result) => {
+      // The answer can take seconds: a host who moved to another screen or opened another dialog meanwhile
+      // isn't shown a Model dialog over it.
+      if (view.screen !== "settings" || view.modal !== undefined) {
+        return;
+      }
       if (result.ok && result.models.length) {
         // Names come from a service: nothing it sends may reach the terminal uncleaned.
         const offered = result.models.map(clean);
@@ -256,14 +276,14 @@ function llmRows(config: LoamConfig): Row[] {
             preset?.baseUrl ?? "",
             (value) => {
               if (value) {
-                save(view, { llm: { openai: { baseUrl: value } } }, "Saved");
+                saveServiceAddress(view, value, llm.openai.apiKeySet === true);
                 return;
               }
               llmTextRow(view, "Service address", llm.openai.baseUrl, ["The base of the service's OpenAI-style API, ending in /v1 for most services."], { maxLength: 200 }, (typed) => {
                 if (!/^https?:\/\//.test(typed.trim())) {
                   return "Enter an http:// or https:// address.";
                 }
-                save(view, { llm: { openai: { baseUrl: typed.trim() } } }, "Saved");
+                saveServiceAddress(view, typed.trim(), llm.openai.apiKeySet === true);
                 return undefined;
               });
             },

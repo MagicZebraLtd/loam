@@ -6,7 +6,7 @@
  */
 import { pathToFileURL } from "node:url";
 
-import { isSameOrigin, isWebUrl } from "./external-links.js";
+import { isKnownExternalUrl, isSameOrigin, isWebUrl } from "./external-links.js";
 
 /** The facts about an IPC sender the decisions below need. */
 export type SenderFacts = {
@@ -57,16 +57,48 @@ export function mayInjectHostToken(facts: SenderFacts, nodeOrigin: string | unde
 /** What happens to a navigation a page started. */
 export type NavigationDecision = "allow" | "open-in-browser" | "block";
 
+/** The running node's port and this computer's addresses (undefined while nothing runs), for the host window's rule. */
+export type KnownNode = { port: number; hosts: readonly string[] } | undefined;
+
+/**
+ * Whether a window open (or a refused navigation) goes to the computer's browser. From the client window any web
+ * page may, since members' links must open; from the host window only the pages LOAM knows may, the same rule the
+ * `openExternal` request follows, so a page that got into the host shell can't send the browser anywhere.
+ * Anything else (file:, custom schemes) goes nowhere.
+ */
+export function windowOpenDecision(url: string, page: { isClientWindow: boolean; node: KnownNode }): "open-in-browser" | "block" {
+  const allowed = page.isClientWindow ? isWebUrl(url) : isKnownExternalUrl(url, page.node);
+  return allowed ? "open-in-browser" : "block";
+}
+
 /**
  * The client window may move around its own node's origin; the host shell is one page and never navigates.
- * Anything refused that is a web page opens in the computer's browser instead; anything else (file:, custom
- * schemes) goes nowhere.
+ * Anything refused goes to the browser as {@link windowOpenDecision} says.
  */
-export function navigationDecision(url: string, page: { isClientWindow: boolean; clientOrigin: string | undefined }): NavigationDecision {
+export function navigationDecision(
+  url: string,
+  page: { isClientWindow: boolean; clientOrigin: string | undefined; node: KnownNode },
+): NavigationDecision {
   if (page.isClientWindow && isSameOrigin(url, page.clientOrigin)) {
     return "allow";
   }
-  return isWebUrl(url) ? "open-in-browser" : "block";
+  return windowOpenDecision(url, page);
+}
+
+/** What the client window does when the node moves or stops, and the origin it may stay on afterwards. */
+export type ClientWindowChange = { clientOrigin: string | undefined; action: "reload" | "close" | "none" };
+
+/**
+ * The client window when the node (re)started on `origin`, or stopped (`undefined`). A new boot reloads an open
+ * window, so its preload injects what this boot's node accepts. A stop closes it and forgets the origin: nothing of
+ * LOAM's holds that port now, another program on this computer can take it, and a reload of the dead page (the
+ * client's own error screen offers one) would load that program's page where the host's identity is stored.
+ */
+export function clientWindowOnNodeChange(origin: string | undefined, windowOpen: boolean): ClientWindowChange {
+  if (origin === undefined) {
+    return { clientOrigin: undefined, action: windowOpen ? "close" : "none" };
+  }
+  return { clientOrigin: origin, action: windowOpen ? "reload" : "none" };
 }
 
 /**

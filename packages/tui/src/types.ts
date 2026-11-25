@@ -15,6 +15,12 @@ export type LaunchInfo = {
   platform: string;
   /** "node:sqlite", or "SQLCipher" for an encrypted database. */
   databaseDriver: string;
+  /**
+   * The address and port the server listens on (`HOST`, `PORT`). Links that open LOAM on this computer use
+   * them: the port in the status is the one advertised to joiners, which `CLIENT_PORT` can set apart.
+   */
+  listenHost: string;
+  listenPort: number;
 };
 
 export type TuiOptions = {
@@ -50,6 +56,9 @@ export type ScreenState = {
 export type View = {
   options: TuiOptions;
   status: HostStatus;
+  /** The screen showing now, and the dialog over it, if any (an async step checks both before it opens one). */
+  readonly screen: ScreenId;
+  readonly modal: Modal | undefined;
   state: ScreenState;
   settings: CliSettings;
   now(): number;
@@ -60,7 +69,7 @@ export type View = {
   joinUrl(): string;
   /** What the join QR encodes: the join URL with the node key, and the invite on an approval-only node. */
   joinLink(): string;
-  /** `http://localhost:<port>`. */
+  /** `http://127.0.0.1:<listen port>`, or the one address the server listens on (local-link.ts). */
   localUrl(): string;
   /** Save the startup settings; false (and an error shown) when they couldn't be written. */
   saveSettings(next: CliSettings): boolean;

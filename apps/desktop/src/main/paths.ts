@@ -12,6 +12,8 @@ const distDir = join(mainDir, "..");
 export const appPaths = {
   /** The server bundle (scripts/build.mjs); the SQLCipher driver resolves next to it (dist/main/node_modules). */
   serverBundle: join(mainDir, "loam-server.js"),
+  /** The release tag a tag build was made for (scripts/build.mjs); absent from any other build. */
+  releaseTag: join(mainDir, "release-tag.txt"),
   /** The web client the node serves (LOAM_CLIENT_DIST). */
   clientDist: join(distDir, "client"),
   /** The host shell's page. */

@@ -52,6 +52,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      # The desktop package depends on Electron; this job never launches it, so skip the ~100 MB download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,6 +217,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # build-desktop.yml's release job publishes to the same Release under this group, so the two run one
+    # after the other instead of both creating it at once.
+    concurrency:
+      group: github-release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write # create/update the Release and upload the APK asset (this job only)
     steps:

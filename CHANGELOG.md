@@ -7,6 +7,32 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
 ## [Unreleased]
 
 ### Security
+- **A reply can no longer test whether a post exists in a channel you can't see.** A reply naming a post in
+  another channel was refused with its own answer, different from the one for a post that doesn't exist, so
+  a member could try ids from private channels. Both now get the same answer (`parent_not_found`);
+  `parent_wrong_channel` is gone. (docs/12)
+- **A linked network's author record can't keep a local person's old picture or copy a name.** A peer's
+  record for a post's author could name one of this network's uploaded pictures, which then stayed on disk
+  and kept being served after its owner had replaced it, and could carry a generated look or a name copied
+  from someone here. An imported author now never keeps an uploaded picture, loses a generated look copied
+  from another record, and gets the generated name for its id when its name is blank or reads as someone
+  else's or the assistant's. If someone here already uses that generated name, part of the id is added to
+  it. Records an earlier version imported are repaired at start, and exported records
+  no longer carry a local picture's id. (docs/11)
+- **A used link code can't hand over a new sync token.** A repeat of a used link request, from the same
+  address, port and key, was answered with the network's current sync token, even after an admin had removed
+  that peer or turned sync off. A repeat is now answered only while sync is on and that peer is still
+  listed; otherwise it is refused like any used code. (docs/11)
+- **Android host: a link in a message opens in the browser or not at all.** The WebView's address list sent
+  any address outside it straight to Android, which never asked the app, so the app's own check never ran
+  for outside links and an `intent:` or `tel:` link could open another app. The app now decides every
+  navigation itself: LOAM's pages load, other `http` and `https` links open in the browser, and every other
+  kind of link is refused. Opening a screen or a conversation from a notification acts only on LOAM's own
+  page. Not yet verified on a physical phone. (docs/04)
+- **`loamnet`'s local links go to the port LOAM holds.** With `CLIENT_PORT` set apart from `PORT` (a proxy in
+  front, say), the terminal UI's "Open as admin" link and plain mode's admin link used the advertised port,
+  which LOAM doesn't hold, and carried the one-time admin code there. Local links now use the port and an
+  address the server listens on. (docs/14)
 - **Every network the Android app hosts now requires encryption.** Whatever the network's security profile,
   a phone-hosted network accepts only encrypted connections, so everything members post or receive is
   encrypted, pictures and files included. (The web app itself and the public network settings it starts
@@ -23,8 +49,304 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   the Test button won't send the key to one, and no redirect is followed. A network that already has one
   starts with the assistant off; the admin's Assistant settings say why, and every other setting still
   saves. (docs/06)
+- **A member's sign-in is no longer sent to a different network at the same address.** Two LOAM networks
+  can sit at the same address (the same IP and port at different times or places). The app kept a member's
+  sign-in token per address only, so when they accepted a second network's code there, the app sent the
+  first network's token to the second host, which could then use it on the first network. The token is now
+  stored with the host key it was issued under and only goes to a session with that key; accepting a new
+  key starts a fresh identity. A token saved by an earlier version is tied to the key the device held at
+  the time. (docs/20)
+- **A message to the assistant is refused if the assistant has moved since the sender last saw where it
+  runs.** If the host switched a local model to an online service while a member was typing, and that
+  member's screen had not yet heard, the question went to the online service without the notice. Each
+  message to the assistant now names the destination the sender was shown; when it has changed the network
+  refuses the message, nothing is stored or sent, and the app keeps the draft and shows the new destination
+  first. A tab left open across this update has to reload before it can message the assistant. (docs/06)
+- **The assistant follows no redirect, on any network.** Outside Private networks and the Android app, a
+  service that answered with a redirect could move a member's question and chat history to an address
+  other than the one members were told. No request to an assistant follows one now. A service behind a
+  redirect (http to https, for one) needs its final address in the settings; until then the chat shows the
+  usual failure line and Test connection reports a bad response. (docs/06)
+- **A saved chat-service key is only sent to the address it was saved for.** The key is write-only, but an
+  admin could point Test connection at another address, or change the saved address, and the saved key
+  went there. Test connection now uses the saved key only for the saved address, and saving a different
+  address without a new key removes the saved one. The admin page and the `loamnet` Settings screen say so.
+  A change of path on the same address keeps the key. The removal holds across a restart: a key in
+  `config.json` is never paired with a saved address on another origin, so a network whose address was
+  moved that way on an earlier version needs its key entered again. (docs/06)
+- **An assistant's service can't make a network hold an answer of any size.** A reply is cut at 64,000
+  characters with a note saying so, a single streamed line over 256 Ki characters fails the reply (also when it arrives whole), the
+  model list is read up to 8 MiB, and a failed answer's body is read for its first 4 KiB only.
+- **An address ending in `.localhost` no longer counts as this computer.** Only `localhost` and loopback
+  addresses do. Other `.localhost` names are looked up like any name and can answer from another machine,
+  so such an assistant address is now treated as an online service: members see the online notice, and a
+  Private network refuses it. (docs/06, docs/09)
+- **An open search shows what the conversation shows.** The Search screen kept its own copy of results, so
+  a deleted message, one a moderator removed, an expired one, or one in a private channel the member had
+  just lost stayed readable there. Results now follow deletes, edits and lost channels as they happen, are
+  pruned by the same retention rule as conversations, and are fetched again after each reconnect.
+- **Android host: a message notification goes when its message does.** A notification kept showing a
+  message's text after the message was deleted, edited, removed by a moderator or expired, until LOAM was
+  opened. It is now removed, and so is a channel's notification when the host's person leaves or loses the
+  channel, or a notified author is shadow-banned. The record behind this holds 256 messages and never
+  forgets one whose notification is still showing. Android's own notification history, if it is switched
+  on, is outside the app's reach. Not yet verified on a physical phone. (docs/04)
+- **A link in a message can't carry a join key or a code.** Links were already stripped of a `#k=` key,
+  but a tab or line break inside the link got one past the check, because browsers remove those before
+  opening it. The check now reads the link as the browser will, and also drops admin, invite and
+  node-link codes (`#a=`, `#i=`, `#l=`). (docs/08)
+- **One device can no longer mint identities without limit over IPv6, or lock others out of an invite.**
+  The limit on new identities counted each address, and a device on an IPv6 network can use any address in
+  its subnet. It now also counts the subnet (eight times the per-address limit). The invite-code limit
+  counted the whole subnet, so ten wrong tries from one phone blocked everyone; it now counts each address.
+- **Pictures and files in a data folder you made yourself are private to the account that runs LOAM.** A
+  folder LOAM creates was already private, but in one you created (usually readable by other accounts on
+  the computer) the `avatars/` and `attachments/` folders and their files were readable too. They are now
+  0700 and 0600, and existing folders are tightened at start, before the database is opened, so a start
+  that stops at a locked database is covered too. An old recovery folder is tightened when a start-fresh
+  is resumed. (docs/12)
+- **Nobody can follow a network without a user record or approval.** A first message to the assistant from
+  a browser with no sign-in cookie got a new cookie but no user record. That session received public
+  channels live while it sat in no member list and no approval queue, so on an approval-only network it
+  read along without being let in. Posting now creates the record and answers a banned or waiting person
+  with a refusal first, the socket refuses a session with no record, and such a session receives nothing
+  but the reset notice. Ending a session also closes that person's open connections. (docs/20)
+- **A node admin can't add themself to a private channel.** Admins manage private channels without being
+  in them, but they could invite themself, approve their own join request or take ownership, and then read
+  the channel. Adding anyone to a private channel now needs the caller to be in it already; an admin
+  outside it gets `channel_members_only`. Outside admins can still list members and requests, deny a
+  request, remove a member, rename, archive, delete, and hand ownership to an existing member. They also
+  still see the channel's name, owner and member list. (docs/12)
+- **A browser that joined by code never sends a message or a typing notice unencrypted.** Until the
+  network's settings had loaded, a browser that joined with the join code could send its first typing
+  notice or message in the clear, on a slow node especially. Now a browser that holds the network's key
+  refuses unencrypted requests, sockets and socket messages from the moment the page loads. A browser whose
+  saved key can't be read is treated the same way until it has an encrypted session, and a failed
+  handshake doesn't lift that. (The page
+  itself and the public start-up settings still load unencrypted, as on every LOAM network.) Keys are
+  compared in one spelling, so a key written another way can't pass as a different one. (docs/08)
+- **A forged handshake can't leave a socket open that takes unencrypted messages.** Someone on the Wi-Fi who
+  answered a member's handshake with another key broke the encrypted session, but the member's live socket
+  wasn't told, and it went on accepting unencrypted messages, a fake reset notice included. Every path that
+  drops the session now tells the socket, and a socket opened under encryption never takes an unencrypted
+  message. A new socket also sends a random value that the node repeats inside its sealed challenge, so an
+  earlier connection's challenge and messages can't be replayed onto it. A message that skips a number in
+  the sequence closes the socket, and the app reconnects and catches up. (docs/20)
+- **A sealed answer can't be passed off as the answer to a different request.** The node sealed a reply
+  under the request's address as written, `#` included, though it routed the request without it. So the
+  refusal of `POST /api/session/resume#1#401` was sealed exactly like a real 401 to a sign-in. Someone on
+  the Wi-Fi could replay it to a member's real sign-in, and the member's app dropped its identity and came
+  back as a new person. An address with `#` in it is now refused before anything is sealed. Current apps ask
+  for, and accept only, answers sealed under labelled forms that no address can produce. A tab left open
+  across the update still works. (docs/08)
+- **A conversation's id no longer appears in the page address.** Screens were real paths (`/dm/<id>`,
+  `/channel/<id>/thread/<id>`), so a reload, a restored tab or a phone reloading a tab it had dropped sent
+  the conversation's id to the node in clear HTTP, on a network that requires encryption too. The service
+  worker meant to stop this can't run on a plain-HTTP LAN address. Screens now live after `#/`
+  (`http://node/#/dm/<id>`), which a browser never sends, so a reload asks only for `/`. An old address or a
+  bookmark still opens and is rewritten in place, though that first request carries its path once.
+  (docs/08)
+- **Mesh mail is bound to the person it was written to.** The signature inside sealed mail didn't cover the
+  recipient's key. Someone who was a contact of both A and C could give A a card with their own keys and C's
+  mailbox token, read A's mail to "C", and seal it on to C, who stored it as a direct message from A. Mail
+  now uses version 2 of the signature, which covers the recipient's key, and a swapped token only makes the
+  mail undeliverable. Mesh mail does not cross between this version and 0.3.0 to 0.7.x, in either
+  direction: mail an older build sent is never delivered here, and the other way round. Mesh is off by
+  default. (docs/16)
+- **An encrypted network's temporary files stay in memory.** Once a network held more than about 16 MB of
+  messages, sorting them at start made SQLite spill rows to a temporary file. With the encrypted database
+  driver, that file went to the computer's own temp folder unencrypted, outside the data folder, where an
+  Emergency Reset doesn't reach. Every database now keeps temporary storage in memory. (docs/01)
+- **No request can write through an Emergency Reset.** A request that had arrived before a reset, and whose
+  body was still coming in, could write into the fresh database afterwards, bringing back a message or a
+  pre-reset person. A reset now empties memory and closes every connection before anything else, and the
+  node refuses any request that arrived before the reset started. A reset on an unencrypted network also
+  deletes the stored network key, so a power cut right after it can't bring the old join code back. In
+  members' browsers a reset now clears everything the page holds (direct-message list, read markers,
+  typing, who is online, notices), and a device whose encrypted session had already died can still revoke
+  its sign-in during a reset. (docs/02)
+- **Android host: the admin token and the network key go only to LOAM's own page.** The app relied on the
+  WebView's navigation check, which lets a page load if the app doesn't answer within 250 ms. A page from
+  elsewhere that got in that way was handed the host's admin token and the network key. Both are now set
+  only for LOAM's own page, messages from any other page are ignored, and a foreign page is stopped and
+  LOAM loaded again. The node also accepts the host token only from the phone itself; from any other
+  address it is a wrong secret and counts toward the limit on tries. (docs/04)
+- **Android host: notifications and setup don't outlive the network.** A message notification left by an
+  earlier run stayed until LOAM was opened, and its text was copied to a paired watch. Notifications are
+  now cleared at start and when LOAM is swiped away, and stay on the phone. Closing after an Emergency
+  Reset run from the app now deletes the setup record, so setup no longer names or fills in the erased
+  network, and deletes every cookie and all of the WebView's storage. Passphrase fields no longer offer autofill.
+  The swipe-away, watch and storage changes are not yet verified on a physical phone. (docs/04)
+- **The terminal UI's admin link opens on `127.0.0.1` and ends when you close it.** The link used
+  `localhost`, which can resolve to `[::1]` first. LOAM listens on IPv4, so another account on the computer
+  could listen on `[::1]` at the same port and read the admin code from the link. The local link, the
+  admin link and plain mode's "Open on this device" now use `127.0.0.1`. The admin code used to stay valid
+  for 10 minutes even if no browser used it; it is now retired when its panel closes. (docs/14)
+- **`loamnet` keeps the database key out of the programs it starts.** The browser the terminal UI opens
+  inherited `LOAM_DB_KEY` and the other `LOAM_` values from its environment. `loamnet` now deletes the key
+  once the server has started and starts the browser with no `LOAM_` values. It also defaults `NODE_ENV`
+  to `production`, so a `LOAM_DEV_MODE=1` left in the shell can't turn encryption off. The diagnostics file
+  now hides addresses that carry a port. (docs/14)
+- **The desktop app's member window closes when the network stops.** It stayed open on its "can't reach"
+  page, and a reload, which that page offers, could load another program's page at the same port into the
+  window that holds the host's identity. Open it again from the host window or the tray. The app itself now
+  also holds a new network's passphrase to 8 characters. (docs/24)
+- **A member can't take another person's name or look.** A profile edit accepted a copy of someone else's
+  name, or the assistant's, written with other case, spacing or hidden characters, and an avatar seed equal
+  to someone's id or seed. Together they made a second person who looked the same on every screen. Both
+  are now refused (`display_name_taken`), a name made only of hidden characters is refused, and a seed you
+  already have is kept. A replaced profile picture is deleted at once, not at the next restart. (docs/12)
+- **Moderators can remove only messages they can see.** A moderator or admin could remove a message from a
+  direct conversation or a private channel they weren't in, by its id. Removal now needs the moderator in
+  the message's audience, or a report in their queue that points at it; otherwise the answer is the one for
+  an unknown id. Applying or lifting a shadow ban no longer sends anyone an update, so the member's own
+  connection can't reveal it. (docs/12)
+- **Editing, deleting or reacting can't tell anyone a message exists.** These answered differently for a
+  message outside the caller's audience than for no message, so a member could test ids from other
+  people's conversations. They now answer as for an unknown id, and a reaction to a reaction is refused.
+  Mesh senders are left out of the moderation list, and the routes that act on people, and a direct message
+  or report from someone they never mailed, treat them as unknown. (docs/12)
+- **Resolved reports are deleted after the network's retention.** A resolved report kept who reported whom
+  and both notes for as long as the network ran. It is now deleted once its resolution is older than the
+  message retention, or after 30 days when messages are kept. Open and escalated reports are never
+  deleted. (docs/12)
+- **Read markers go when their conversation goes.** The browser kept the time a member last read each
+  conversation, and the last one they opened, after the messages were deleted or the channel lost, which
+  named who they talked to and when. These are now pruned when a channel is removed, after a reconnect for
+  channels the network no longer lists, when the direct-message list arrives for people no longer in it
+  (also after the last direct message with someone is deleted while the app is open), and in full for a
+  banned or waiting member. (docs/02)
+- **A change of the assistant's destination cuts its history even after a clock change.** The cut-off was
+  the host's clock, so with the clock set back, older turns counted as written after the change and went
+  to the new service. It is now the later of the clock and just after the newest message with the
+  assistant. `http` and `https` on one host now count as two destinations, so switching between them is a
+  change members are told about. (docs/06)
+- **Request logs name the route, not the conversation.** Each log line carried the full path
+  (`/api/dms/user.…`, `/dm/user.…`), which named who a member talked to beside their address, and the log
+  outlives an Emergency Reset. Lines now carry the route's pattern (`/api/dms/:userId`), `[page]`,
+  `[unmatched]` or `[tunnelled]`. An assistant service's own error text, which can quote a member's
+  question, now goes to the debug log only, cut to 200 characters. (docs/02)
+- **A member who joined by code gets the network's settings over the encrypted channel.** The app read the
+  assistant's destination, the retention and the join address from the unencrypted start-up answer, which
+  anyone on the path could rewrite, for example to show a false destination for the assistant. After signing in
+  it now reads them through the encrypted tunnel; the unencrypted answer only says how to reach a session.
+  (docs/20)
+- **Sync follows no redirects and passes on no moderation state.** A peer could answer with a redirect and
+  send the request somewhere else; any redirect now fails it. Exported author records no longer say who is
+  banned or waiting for approval. Imports refuse a post with a location or attachments while that feature
+  is off here, and a reaction to a reaction, and an imported author loses a peer's timeout. (docs/11)
+- **The web app can open sockets only to its own network.** The page's security policy allowed sockets to
+  any host. It now names only the host the page came from.
+- **A downloaded file's name fits its type.** An attachment's name kept invisible and control characters
+  and any extension, so a text file could arrive named `update.apk`. The name is now cleaned and ends with
+  an extension that fits its declared type (`update.apk.txt`).
+- **Message formatting shows no pictures and allows only its own tags.** `![alt](url)` loaded the address
+  in every reader's browser, so a post with hundreds of them made each reader request them all. It now shows
+  the alt text; share pictures as attachments. The sanitiser allows only the tags the formatter writes and
+  the link address, so a malformed link can't carry other attributes.
+- **A private-channel invite doesn't say who is banned or waiting.** An invite or handover naming a banned
+  person got its own answer ("That user has been removed from this node"), and one naming a person still
+  waiting for approval, or a mesh sender, went through. All three now get the answer for an unknown person
+  (`user_not_found`). (docs/12)
+- **A resolved report stays as it was resolved.** Resolving it again rewrote the decision and its time, so
+  a moderator could overwrite another's (or an admin's) decision and keep the report from ever being
+  deleted. It is now returned unchanged. (docs/12)
+- **Names that differ only by characters that draw nothing count as the same.** Hangul fillers, the blank
+  Braille pattern, variation selectors and tag characters got a copy of someone's name past the check, and
+  a name made of them showed as blank. They are now ignored when names are compared (a stored name keeps
+  them, since emoji use variation selectors), and a name that shows as blank is refused. They are removed
+  before the names are normalised as well as after, so one placed between a letter and its accent no
+  longer makes a new name. (docs/12)
+- **Mesh mail waits for the member rules.** A member who hadn't agreed to the rules could still send mesh
+  mail and broadcasts. They are now refused (`rules_not_accepted`), like posts. (docs/30)
+- **The panic address refuses a flood before any hash check, and one token starts one reset.** Attempts on
+  `POST /api/panic` were counted only on a network with a token set, and every attempt, over the limit or
+  not, paid for a slow hash check. Attempts are now counted on every network and a caller over the limit is
+  refused first. Two requests with the right token at once start one reset, not two. (docs/02)
+- **One IPv6 device can't fill the admin-claim and panic limiter with addresses.** In a subnet that had used
+  up its tries, each new address still got an entry before the subnet was checked. Such a subnet is now
+  refused before its address is counted.
+- **Desktop: the host window sends only LOAM's own pages to the browser.** A page that got into the host
+  window could open any address in the computer's browser through a link or a new window. Only the pages
+  LOAM knows (loamnet.com, the project's pages, the running network) go there now; the member window's links
+  are unchanged. (docs/24)
+- **Desktop: the launcher ignores `LOAM_REQUIRE_TRANSPORT_ENCRYPTION` from the shell.** It is the Android
+  launcher's switch; the desktop app keeps the network's own transport setting. (docs/24)
+- **The terminal UI's diagnostics drop every address's query and fragment**, where a code or a search term
+  can sit.
+
+### Changed
+- **Addresses show the screen after `#/`** (`http://node/#/dm/<id>`, `#/admin?section=llm`). Old addresses
+  and bookmarks still open.
+- **Developer Mode under `loamnet` needs an explicit non-production `NODE_ENV`.** `LOAM_DEV_MODE=1` alone no
+  longer turns encryption off there. (docs/14)
+- **The desktop app runs on Electron 45.3.0.** (docs/24)
+- **A tagged release only ships a signed and notarized Mac app.** Without the Apple secrets a tag build fell
+  back to ad-hoc signing, and an ad-hoc signed update can't read the keychain item the signed app made, which
+  locks the host out of an encrypted network. A tag build now fails instead; a manual build keeps the
+  fallback. The Android and desktop workflows also publish to a Release one after the other. (docs/24)
 
 ### Fixed
+- **Photos from iPhones and Safari now send.** Safari, and so every browser on iOS, can't write WebP: asked
+  for it, it hands back a PNG, which for a camera photo is far over the 256 KB limit, so nearly every photo
+  failed. A picture now counts only when it comes back in the type asked for; where WebP is missing it is
+  written as JPEG over white, at falling quality and then at smaller sizes. A very detailed photo is shrunk
+  in WebP too, the profile-picture editor uses the same encoder, and the composer's picture errors are
+  translated.
+- **A phone that slept through an Emergency Reset reaches the "scan again" screen.** A phone that joined by
+  code and was asleep or away during a reset came back to a network with a new key, stayed "Offline" and
+  kept showing the old content until it was reloaded. It now opens no connection under the dead session and
+  runs its start-up again, which shows the screen asking to scan the new code. (docs/08)
+- **Denying a join request works on a phone that joined by code.** Every empty answer (a denied join
+  request, a typing notice) failed in the encrypted tunnel, so denying always showed an error. Empty answers
+  now arrive empty. A refusal from the tunnel itself (a replay, the rate limit) keeps its real status
+  instead of a flat 400, and a tunnel answer is now bound in its seal to the request it answers, as direct
+  requests' answers already were. (docs/08)
+- **Android host: a reset finished on the next launch keeps the new setup.** When a fixed-key Emergency
+  Reset was cut short and finished at the next launch, the app deleted the setup the host had just made and
+  closed. It now clears the key and the WebView's data, keeps the new setup and starts the new network. A
+  reset of a running network deletes the setup record before the key is cleared, so it is gone even if a
+  later step fails. Not yet verified on a physical phone. (docs/04)
+- **Android host: a start-fresh that ends at the passphrase prompt reports no time-out.** Five minutes
+  later the lock screen's details said `boot_timeout`. (docs/04)
+- **Desktop: a "Start a new network" that fails part-way is finished, not booted.** A discard that stopped
+  early (a file Windows still held open, say) left the network record, and the next launch could start an
+  empty network under the old name. The discard now records itself before it erases anything, and a launch
+  or Try again finishes it before anything starts. (docs/24)
+- **Desktop: a crashed host window comes back.** It stayed blank while the network ran. It now reloads, up
+  to three times a minute, and after that the tray opens a fresh one. (docs/24)
+- **Desktop: a release candidate's update check sees the final release as newer.** A build from an `-rc` tag
+  reported the bare version number. Tag builds now record their tag. (docs/24)
+- **`loamnet` plain mode's admin link file is tidied.** A leftover `admin-link.txt` from an earlier run, whose
+  code died with it, is removed at start, no link is made while a reset is under way, and a failure to write
+  the file no longer stops the node. (docs/14)
+- **Terminal UI:** a second `o` while the browser is opening is ignored, the "Open as admin" panel says the
+  link also stops after 10 minutes, and the Model dialog no longer opens over another dialog.
+- **A browser that can't save data keeps its identity for the page.** Where storage writes fail (a full
+  quota, a WebView with none), a member who joined by code became a new person on every start-up pass. The
+  identity is now kept in memory until the page closes, and so is one carried over from an earlier version
+  when its rewrite can't be saved. (docs/20)
+- **A search link runs once the app is connected.** A `#/search?q=` link opened before the app had its
+  settings searched with no session and was never tried again. A reconnect that lands in the middle of a
+  search now refreshes the results once that search has finished.
+- **An expired invite code says so on a first visit**, not only on a later one.
+- **Smaller fixes in the web app:** a settings reload no longer overwrites a newer live change, a saved
+  network key is read in one spelling whatever version wrote it, and a sign-in answer that arrives after
+  the network's key changed no longer replaces the new sign-in.
+- **A thread whose first post is gone no longer leaves a narrow screen blank.** The thread view opens only
+  while its post is there.
+- **The installed app starts at `/`**, not the old `/channels` path, and keeps its identity, so an existing
+  installation updates in place. A click on a navigation link with a
+  modifier key or the middle button is left to the browser (a new tab or window), and going to the screen
+  already shown adds no history entry.
+- **Admin settings:** the assistant's system prompt can be cleared, and the reason the assistant is off
+  stays on screen after a save.
+- **Settings and the composer:** a generated avatar style can be picked while a photo is in use, a picture
+  added while a message is sending is kept, a restored draft keeps its height, and picking the same avatar
+  file again works. A network address too long for a link code says so instead of showing a blank tile.
+- **A message that names one upload twice stores it once.**
+- **A long-running node's name cache stays small.** The generated-name cache is emptied at 4,096 names.
+- **An Emergency Reset that fails after its journal is cleared no longer says a restart will finish it.**
 - **The Mac app now carries Electron's licence files** (`LICENSE.electron.txt` and `LICENSES.chromium.html`,
   in the bundle's Resources), as the Windows and Linux builds already did.
 

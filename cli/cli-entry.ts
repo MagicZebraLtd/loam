@@ -2,12 +2,14 @@
 // bin/loam.js needs from the workspace, so the whole node — server, QR helper and terminal UI — is one
 // self-contained ESM file. `startEmbeddedServer` is env-driven (plus a log stream and host token);
 // `firstLanIPv4` derives the LAN join host; the QR helpers print the join URL in plain mode; @loam/tui is the
-// full-screen terminal UI and its saved settings (cli.json).
+// full-screen terminal UI and its saved settings (cli.json), with `localOrigin` for links that open LOAM on
+// this computer.
 export { firstLanIPv4, startEmbeddedServer } from "../apps/server/src/embedded.js";
 export { encodeQR, renderQRToTerminal } from "@loam/qr";
 export {
   createLogBook,
   createTui,
+  localOrigin,
   processSystem,
   processTerminal,
   readCliSettings,

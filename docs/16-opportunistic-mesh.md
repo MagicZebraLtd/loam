@@ -24,6 +24,9 @@ Building on v1 (below), the mesh now addresses sealed mail by the recipient's **
   (`mesh.<hash>`) is **recipient-scoped**: `visibleUsers` hides it from everyone but the recipients it
   mailed, and its `userUpserted` is targeted to the recipient — so a third party never learns from the
   roster that some local user just received mesh mail (a timing/metadata leak the first cut had).
+  Mesh sender records are also left out of `GET /api/moderation/users`. The moderation, roles, promote,
+  admin edit, approve and deny routes answer for one like an unknown user. A DM to one, or a user report
+  about one, from someone it never mailed answers like an unknown recipient or user.
 - **Self-certifying addressing defeats *key* substitution.** `POST /api/mesh/messages` now takes
   `toMeshId` and seals only to a **contact** the sender explicitly added. `addMeshContact` re-verifies
   `meshId === base32(sha256(sign))` **and** `verifyKxBinding(sign, kx, kxSig)`, so a card whose signing
@@ -32,12 +35,16 @@ Building on v1 (below), the mesh now addresses sealed mail by the recipient's **
   authenticates the *keys* against the id, not the whole card. The `mailboxToken` is unauthenticated
   (it's independent secret material — see the deviation list), so an attacker who can tamper the
   serialized card in transit while leaving `sign`/`kx`/`kxSig` intact can swap only the token; the
-  result is delivery failure (the body stays sealed to the real `kx`), not disclosure. Card exchange
+  result is delivery failure (the body stays sealed to the real `kx`), not disclosure. The version 2
+  inner signature covers the recipient's key, so mail can't be opened by one contact and sealed on to
+  another as if written to them (item 10). Card exchange
   is trusted-out-of-band by design (QR/paste).
-- **Metadata-unlinkable routing tags.** `toTag` is now derived from the recipient's **secret**
+- **Routing tags from a secret token.** `toTag` is now derived from the recipient's **secret**
   `mailboxToken` (`localTagsForWindow` and the sender both call `mailboxTag(token, epoch)`), not the
-  public `kx`. A passive carrier holding the sealed blob **cannot correlate it to a recipient** — the
-  v1 linkability leak (deviation 1) is gone. Confidentiality was already preserved; this adds privacy.
+  public `kx`. A carrier without the token can't compute the tag from public keys, so it can't name the
+  recipient, and the v1 leak (deviation 1) is gone. The tag depends only on the token and the day (a
+  24-hour epoch), and it is in the sync digest. So a carrier can still group and count one day's mail to
+  the same unnamed recipient (item 9 below).
 - **Still gated & non-breaking**: all of the above is behind `mesh.enabled` (default off; the client
   shows the contacts/card UI only when `networkConfig.enableMesh`). Public sync stays byte-identical
   when off. Regression tests cover card exchange + delivery, forged-card rejection (id/key mismatch and
@@ -88,7 +95,8 @@ the remaining hardening); group/broadcast sealed fan-out; and the hardware trans
 
 1. ~~**Routing tag privacy** — v1 derived `toTag` from the public `kx` (no metadata-unlinkability).~~
    **Resolved in v2**: `toTag` is derived from the recipient's secret `mailboxToken`, distributed via
-   the mesh identity card, so a passive carrier can't correlate a blob to a recipient.
+   the mesh identity card, so a carrier without the token can't name a blob's recipient. It can still
+   group one day's mail to the same recipient (item 9).
 2. ~~**Recipient discovery** — a sender needed the recipient's published `identityKey`, which only
    propagated once they'd posted publicly.~~ **Resolved in v2**: out-of-band mesh identity cards
    (`GET /api/mesh/identity` → QR/paste → `POST /api/mesh/contacts`) are the discovery+exchange channel.
@@ -258,8 +266,8 @@ the remaining hardening); group/broadcast sealed fan-out; and the hardware trans
    own intake time (the sync round's clock, or the moment the radio bridge took the blob in) rather than
    the peer's value. The seal covers neither `createdAt` nor anything derived from it (the AAD is
    `toTag|ttlExpiresAt` and the replay key is `sealed.<sha256(sealed | toTag | ttlExpiresAt)>`), so dedupe
-   and delivery see one value per message as before, and older builds carry and open this mail unchanged
-   (no wire change). Retention ages a carried row from when this relay took it in: before, a relay with a
+   and delivery see one value per message as before. (Restamping changed nothing on the wire. The version 2
+   inner signature did, item 10, so builds before it can carry this mail but can't open it.) Retention ages a carried row from when this relay took it in: before, a relay with a
    retention TTL (the hardened profile keeps an hour) aged carried mail by the origin's stated, backdated
    time and deleted most fresh mail on its next tick, then never took it back because it had marked the id
    seen. A relay still running 0.6.0 or earlier keeps the peer's `createdAt`, so with a retention TTL it
@@ -288,38 +296,41 @@ the remaining hardening); group/broadcast sealed fan-out; and the hardware trans
    - *Length is visible.* `sealMailbox` encrypts the inner payload unpadded (the padding buckets in §2 were
      never built), so a carrier or sync peer reads the message's length off the blob, to within the fixed
      overhead. It can tell a one-word reply from a paragraph and match replies by size.
-   - None of this says who on the node sent the mail or to whom; that stays sealed.
+   - *The tag groups a recipient's mail by day.* The routing tag depends only on the recipient's mailbox
+     token and the day (a 24-hour epoch), and it is in the sync digest. A carrier without the token can't
+     name the recipient, but it can group and count one day's mail to the same unnamed recipient. The next
+     day's tag is a new value it can't link to the last one without the token.
+   - None of this names who on the node sent the mail or who it is for; that stays sealed.
 
    Hiding the rest would need relaying on by default, so that a node's digest mixes its own mail with
    carried mail, plus a random hold before mail sealed here is first advertised, or cover traffic. None of
    these is built.
-10. **Inner signature encoding.** The sender signs `"loam.mesh.inner.v1" ‖ from ‖ fromKx ‖ pt ‖ aad`, a
-   bare UTF-8 concatenation with no length prefixes, rather than the structured encoding §2 sketches, and
-   every build since 0.3.0 signs and verifies exactly these bytes. It is unambiguous over everything a
-   recipient accepts, so the wire stays as it is:
-   - The label is fixed. It isn't a prefix of `loam.mesh.kxbind.v1`, the label of the only other message a
-     mesh signing key signs, nor is that one a prefix of it.
-   - `from` must equal the id derived from the enclosed signing key, which is always 31 characters.
-   - `fromKx` must be the canonical base64url of a 32-byte key, always 43 characters. `openMailbox` checks
-     this now (and `sealMailbox` refuses to emit anything else). Before, a longer string let a signature be
-     re-read with characters moved from the start of the plaintext into `fromKx`. The check is
-     receive-side only and every sender has always written a 43-character key, so mail from released
-     builds still opens.
-   - That leaves `pt ‖ aad`, and the recipient never takes `aad` from the blob: it rebuilds
-     `<toTag>|<ttlExpiresAt>` from the outer fields and tries to open only when `toTag` is one of its own
-     22-character tags. Neither base64url nor a decimal timestamp contains `|`, so of two such strings
-     where one ends the other, both have their single `|` in the same place, hence the same timestamp and
-     the same 22 characters before it: they are equal. The signed bytes therefore fix every field.
+10. **Inner signature encoding (version 2).** The sender signs `"loam.mesh.inner.v2"`, then `from`,
+   `fromKx`, `toKx`, `aad` and `pt` in that order, each as a 4-byte big-endian byte length followed by its
+   UTF-8 bytes. This replaces the structured encoding §2 sketches.
+   - `toKx` is the canonical unpadded base64url of the recipient's 32-byte X25519 public key. The recipient
+     verifies against the key it derives from its own secret, never anything in the blob.
+   - The inner JSON carries `v: 2`. `openMailbox` accepts only `v === 2` and refuses version 1, even with a
+     valid version 1 signature. `sealMailbox` writes only version 2.
+   - `from` must equal the id derived from the enclosed signing key. `fromKx` must be the canonical
+     base64url of a 32-byte key, which `openMailbox` checks. `sealMailbox` refuses a sender key or a
+     recipient key that isn't the canonical spelling of 32 bytes, so each key has one spelling under the
+     signature.
+   - The label isn't a prefix of `loam.mesh.kxbind.v1`, the label of the only other message a mesh signing
+     key signs, nor is that one a prefix of it. The length prefixes fix every field boundary.
 
-   The exposure before the check was small. Only the recipient (and the sender) ever sees the signature,
-   inside the AEAD, so the most a re-split allowed was for a recipient to show itself, or a third party, a
-   plaintext with its first characters cut that still verified as the sender's. The `aad` carries the
-   recipient's own tag, so it couldn't be passed on to another recipient as mail. A length-prefixed v2 was
-   considered and not adopted: every released build (0.3.0 onward) verifies only the v1 bytes, so mail signed
-   only under v2 would silently fail to open there, and signing both would keep v1, and its acceptance, for
-   as long as those nodes exist, which buys nothing over the check. A future change to the inner payload
-   must go under a new label with length-prefixed fields, signed beside v1 for a stated compatibility
-   window (released builds ignore inner JSON keys they don't know), never appended to the v1 bytes.
+   Version 1 signed `"loam.mesh.inner.v1" ‖ from ‖ fromKx ‖ pt ‖ aad` as bare UTF-8, and nothing it signed
+   named the recipient's key. `aad` names the recipient only through the routing tag, and the tag comes from
+   the `mailboxToken`, which is not authenticated and is on a card every contact of the recipient holds. So
+   someone who was a contact of both A and C could give A a card with its own keys and C's token, open A's
+   mail, and seal it on to C under the same `aad`. C stored it as a DM from A. Version 2 signs the key A
+   sealed to, so mail sealed again to C fails to verify there. A swapped token now gives delivery failure
+   only.
+
+   Mesh mail does not cross between this version and 0.3.0 to 0.7.x, in either direction: an older build
+   can't open version 2 mail, and this one refuses version 1. Mail an older build sealed that is still in
+   flight when a node upgrades is never delivered. Both still carry the other's blobs onward, since a
+   carrier never opens them. A later change to the inner payload needs a new label.
 
 ---
 
@@ -512,13 +523,15 @@ expires. Honest trade-off: the secret-token `toTag` gives *unlinkability to a pe
 lacks `mtk`*, not *path privacy* — an authorized carrier that itself holds `B.mtk`, or a global observer
 correlating one tag value as it reappears across hops, can still trace a single message's path (never
 its endpoints), and rotating `mtk` means re-distributing it to contacts. Full PSI/onion-rewrap privacy
-is v2.
+is v2. As built, every message to B in one day carries the same tag, and the tag is in the sync digest,
+so a carrier without `B.mtk` can group and count one day's mail to B without knowing who B is.
 
 **Coexistence with today's public-only sync (must not regress):** `isSyncableMessage` gets a `sealed`
 branch (syncable iff **`mesh.enabled`**, unexpired, `hopLimit>0`, not tombstoned — no channel/visibility
 check; the author sentinel means **sender shadow-ban is enforced at *creation*, not here**, see §3);
 `buildSyncDigest` gains a `sealed: [{id,toTag,ttlExpiresAt,hopLimit}]` array **only when `mesh.enabled`**
-(additive — old peers ignore it, so **mixed-version meshes keep working**); `/api/sync/messages`
+(additive, so old peers ignore it and **mixed-version meshes keep working**; the mail itself does not cross
+between 0.3.0 to 0.7.x and later builds, item 10 under "Where v1 differs"); `/api/sync/messages`
 round-trips a `sealed` message through the existing `SyncMessagesResponseSchema` once the union has the
 arm (**no new endpoint**). The `dm` type is **untouched** — LAN-local plaintext DMs to a co-present
 recipient flow through the host as today; `sealed` is the cross-node, host-can't-read path. Client
@@ -644,7 +657,8 @@ per-OEM battery-optimization allowlisting to be needed (document it honestly).
 2. **Metadata / traffic analysis** — the secret-token `toTag` hides *who* from anyone without `B.mtk`
    (carriers included), but not *path*: an authorized carrier that holds `mtk`, or a global passive
    observer correlating a repeated tag across hops, still traces a message's route (never its
-   endpoints). Token distribution/rotation is the added cost. Onion re-wrap would fix path privacy at
+   endpoints). The tag is the same for one recipient for a whole day, so any carrier can group and count
+   that day's mail to one unnamed recipient. Token distribution/rotation is the added cost. Onion re-wrap would fix path privacy at
    large complexity cost (v2+).
 3. **Key lifecycle & the kill switch** — does a panic wipe destroy the `mesh.` keyseed? Decide per
    security profile (docs/09); likely **hardened → identity is DB-bound and dies with the wipe.**

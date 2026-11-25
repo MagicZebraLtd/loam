@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   CLIENT_PARTITIONS,
   clientPartition,
+  clientWindowOnNodeChange,
   hostShellUrl,
   isHostShellSender,
   mayInjectHostToken,
   navigationDecision,
+  windowOpenDecision,
 } from "./trust.js";
 
 const shell = hostShellUrl("/Applications/LOAM.app/Contents/Resources/app.asar/dist/renderer/index.html");
@@ -63,8 +65,17 @@ describe("mayInjectHostToken", () => {
 });
 
 describe("navigationDecision", () => {
-  const client = { isClientWindow: true, clientOrigin: node };
-  const host = { isClientWindow: false, clientOrigin: node };
+  const running = { port: 3000, hosts: ["192.168.1.20"] };
+  const client = { isClientWindow: true, clientOrigin: node, node: running };
+  const host = { isClientWindow: false, clientOrigin: node, node: running };
+
+  it("sends the host window only to pages LOAM knows", () => {
+    expect(navigationDecision("https://loamnet.com/privacy", host)).toBe("open-in-browser");
+    expect(navigationDecision("http://192.168.1.20:3000/", host)).toBe("open-in-browser");
+    expect(navigationDecision("https://example.com/", host)).toBe("block");
+    expect(navigationDecision("http://192.168.1.20:8080/", host)).toBe("block");
+    expect(navigationDecision(`${node}/`, { ...host, node: undefined })).toBe("block");
+  });
 
   it("lets the client window move around its own node", () => {
     expect(navigationDecision(`${node}/channel/x`, client)).toBe("allow");
@@ -80,7 +91,38 @@ describe("navigationDecision", () => {
     expect(navigationDecision("file:///etc/hosts", client)).toBe("block");
     expect(navigationDecision("file:///etc/hosts", host)).toBe("block");
     expect(navigationDecision("smb://server/share", client)).toBe("block");
-    expect(navigationDecision(`${node}/`, { isClientWindow: true, clientOrigin: undefined })).toBe("open-in-browser");
+    expect(navigationDecision(`${node}/`, { isClientWindow: true, clientOrigin: undefined, node: running })).toBe("open-in-browser");
+  });
+});
+
+describe("windowOpenDecision", () => {
+  const running = { port: 3000, hosts: ["192.168.1.20"] };
+
+  it("opens any web page a member linked from the client window", () => {
+    expect(windowOpenDecision("https://example.com/", { isClientWindow: true, node: running })).toBe("open-in-browser");
+    expect(windowOpenDecision("file:///etc/hosts", { isClientWindow: true, node: running })).toBe("block");
+  });
+
+  it("opens only LOAM's own pages from the host window", () => {
+    expect(windowOpenDecision("https://github.com/MagicZebraLtd/loam/releases/latest", { isClientWindow: false, node: running })).toBe(
+      "open-in-browser",
+    );
+    expect(windowOpenDecision("https://example.com/", { isClientWindow: false, node: running })).toBe("block");
+  });
+});
+
+describe("clientWindowOnNodeChange", () => {
+  it("reloads an open client window on the node's new boot", () => {
+    expect(clientWindowOnNodeChange("http://127.0.0.1:3001", true)).toEqual({ clientOrigin: "http://127.0.0.1:3001", action: "reload" });
+    expect(clientWindowOnNodeChange(node, false)).toEqual({ clientOrigin: node, action: "none" });
+  });
+
+  it("closes the client window when the node stops, and forgets the origin nothing of LOAM's holds now", () => {
+    expect(clientWindowOnNodeChange(undefined, true)).toEqual({ clientOrigin: undefined, action: "close" });
+    expect(clientWindowOnNodeChange(undefined, false)).toEqual({ clientOrigin: undefined, action: "none" });
+    // So the guard keeps no window on the stopped node's address.
+    const { clientOrigin } = clientWindowOnNodeChange(undefined, true);
+    expect(navigationDecision(`${node}/`, { isClientWindow: true, clientOrigin, node: undefined })).not.toBe("allow");
   });
 });
 

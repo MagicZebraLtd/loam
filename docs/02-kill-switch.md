@@ -5,12 +5,21 @@
 > `{ "confirm": "wipe" }` when confirmation is on) and unauthenticated `POST /api/panic` (404
 > unless `killSwitch.enabled` is on **and** a token ≥16 chars is configured, `routes-admin.ts` `armed`; a
 > token left on a disabled switch answers exactly like no token, so the operator can't tell it is dead;
-> rate-limited; the token is stored **scrypt-hashed**, so a seized node's config does not reveal it). The wipe empties all tables via the DAL's `wipeAll()`
+> rate-limited; the token is stored **scrypt-hashed**, so a seized node's config does not reveal it. Attempts
+> are counted whether or not a token is set, a caller over the attempt limit gets the uniform 404 before any
+> scrypt, and scrypt runs only for attempts the limiter lets through, against a stand-in hash on a node with
+> no token, so an armed and an unarmed node refuse the same attempts equally fast. The attempt limiter checks
+> the IPv6 /64 bound first and refuses a spent /64 without counting the address. The route records the wipe
+> generation before scrypt; if a reset started or finished meanwhile it joins or reuses that reset
+> (`ctx.latestWipe`, the most recent `executeKillSwitch` promise, never cleared) instead of starting a
+> second one, which on a fixed-key node would rewrite the journal and call the launcher twice). The wipe empties all tables via the DAL's `wipeAll()`
 > (on a plaintext store, which runs with `secure_delete` on, the deleted rows are zeroed in the file;
 > see "What the plaintext wipe does now" below),
 > deletes `avatars/` and `attachments/`, invalidates every session, broadcasts a `wipe` event, closes all sockets, and
 > re-seeds defaults — config survives so the switch can fire again. Clients purge IndexedDB,
-> localStorage, service worker + caches, and show a neutral "Disconnected" screen. Admin UI has a
+> localStorage, service worker + caches, and show a neutral "Disconnected" screen. A wipe also clears
+> everything the page holds in memory, as an identity change does: the DM inbox, read markers, typing,
+> presence, toasts and the error banner. Admin UI has a
 > Safety panel with type-to-confirm arming. A client that was **offline** during the wipe (so missed the
 > `wipe` event) purges its cache when it reconnects: it records the last server-confirmed identity
 > (`loam.confirmedUserId`) and treats a different `currentUser` on its next boot as a reset. That record is
@@ -18,18 +27,19 @@
 > earlier address (a hotspot address that changed after the host phone rebooted, a `loamnet` or desktop
 > node that stepped to the next free port) is never purged by any later reset.
 >
-> **What a reset does not reach** (and the public copy says so). (1) **Linked networks**: the in-process
-> reset keeps `sync.enabled` and the peer list (it only forgets per-peer state), and `wipeAll()` deletes the
-> tombstones that would block re-import, so the next round pulls the peers' copies of this node's public
-> channels, their authors and pictures back in. Turn sync off or remove the peers first; a hooked fixed-key
-> reset turns sync off only when it had to strip a `sync.token`, and nodes linked by code have none. (2)
-> **Browser HTTP caches**: on an unencrypted node, avatars and attachments go out `private, max-age=3600`,
-> and a typed-address joiner (no tunnel) loads them directly, so its browser's HTTP cache can keep them;
-> script can't clear that cache. (3) **The `loamnet` admin's browser**: unlike the Android WebView and the
-> desktop window, it gets no `__loamHostNoLocalCache`, so it keeps an unencrypted IndexedDB copy, on
-> ephemeral networks too, until the reset reaches it. (4) **Copies under an earlier address** (above). (5)
-> **OS backups** of the host's data folder. (6) Browser history and address-bar suggestions (see "What a
-> wipe cannot reach" below). **Now with a cryptographic wipe when encryption at rest
+> **What a reset does not reach** (and the public copy says so). (1) **Linked networks** keep their own copy
+> of this node's public channels, their authors and pictures. Every reset turns sync off and keeps the
+> peer list ("Sync after a reset" below); turning sync on again pulls that copy back in, since `wipeAll()`
+> deleted the tombstones that would block it. (2) **The `loamnet` admin's browser**: unlike the
+> Android WebView and the desktop window, it gets no `__loamHostNoLocalCache`, so it keeps an unencrypted
+> IndexedDB copy, on ephemeral networks too, until the reset reaches it. (3) **Copies under an earlier
+> address** (above). (4) **OS backups** of the host's data folder. (5) Browser history and address-bar
+> suggestions (see "What a wipe cannot reach" below). (6) **Log lines already written** (a terminal's
+> scrollback, a file the operator sends the log to). A request line names the matched route pattern
+> (`/api/dms/:userId`), `[page]`, `[unmatched]` or `[tunnelled]`, never the concrete path, so it names no
+> conversation or person, but it carries the caller's address and the time. The Android host logs no
+> request lines (docs/04). A browser's HTTP cache is not on this list: every `/api/` response, pictures
+> included, is `Cache-Control: no-store`, so no browser keeps a copy there. **Now with a cryptographic wipe when encryption at rest
 > is on** (`LOAM_DB_KEY`): instead of a logical `DELETE`, the kill switch closes the store, deletes
 > the DB files (`loam.db`/`-wal`/`-shm`), and — in `ephemeral` mode — rotates to a fresh random key,
 > so any bytes still physically present on flash become unreadable. Every branch also removes the
@@ -55,12 +65,26 @@
 > served and stays locked if that fails; only when the journal itself could not be written does a restart
 > not finish the wipe, and the notice and the 503 body then say so: the body's `code` is `wipe_incomplete`
 > (a restart finishes it) or `wipe_unrecorded` (restart, then run the reset again), and its `journaled`
-> field carries the same fact for the launcher, which also gets it from the in-process host reset. The route
+> field carries the same fact for the launcher, which also gets it from the in-process host reset; it is
+> false once the journal has been cleared, since a failure after that point can't promise that a restart
+> finishes the wipe. The route
 > answers 503, never a 500 that would leave the gate raised with nothing told to purge. The plaintext logical
 > wipe checkpoints the write-ahead log into `loam.db` (`checkpoint()`, which syncs the file) right after
 > `wipeAll()`: the store commits under `synchronous = NORMAL`, so without it a power cut after the journal is
 > cleared could roll the deletion back with nothing left to finish it. A checkpoint that comes back busy or
 > partial counts as a failed wipe, so the node stays locked with its journal on disk.
+>
+> Requests during a reset. Every branch runs the in-memory lockdown (`lockDownInMemory`) first, before its
+> first durable write or await: the 503 gate goes up, the users, channels and messages mirrors, sessions,
+> identity tokens, transport sessions, peer state and mesh state are emptied, `wipe` is broadcast, and the
+> sockets are closed. The gate in `onRequest` sees only a request's headers, so a `preHandler` hook checks
+> again just before the handler runs. It answers 503 while the gate is up, and also when a reset has started
+> since the request was admitted: `onRequest` records the wipe generation, which each reset bumps. Internal
+> tunnel re-dispatches pass through it too, and only `/api/health` is exempt. So a request admitted before
+> the reset whose body arrives during or after it can't write into the fresh store. `wipeAll()` also deletes
+> the stored transport key (the `transportIdentity` config row): the reset writes a fresh key only after its
+> checkpoint, so a power cut right after a plaintext reset can't roll back to the old key and bring the old
+> join QR back.
 >
 > **Durable writes on Windows.** The wipe journal and `config.json` are written to a staging file, flushed,
 > renamed into place, and then the directory is flushed. Windows needs two changes to that recipe: the
@@ -153,17 +177,23 @@ phone.
   neutral "disconnected" screen (avoid a scary banner that signals what happened).
 - The admin who triggers it gets the same purge locally.
 - **What a wipe cannot reach**: the browser's own history and address-bar suggestions on a joiner's phone
-  keep the paths it visited (`/channel/<id>`, `/dm/<user id>`), and a user id yields its generated display
-  name (`@loam/display-name`). That is why a channel that isn't public gets an opaque `chan_<hex>` id rather
+  keep the addresses it visited (`/#/channel/<id>`, `/#/dm/<user id>`), and a user id yields its generated
+  display name (`@loam/display-name`). That is why a channel that isn't public gets an opaque `chan_<hex>` id rather
   than one made from its name, and why a reset is not a reason to promise a joiner that nothing is left on
-  their own device: clearing browser history is theirs to do. Nor does a reset reach a **linked network**,
+  their own device: clearing browser history is theirs to do. The routes are in the fragment, which a
+  browser never sends, so a reload or a restored tab asks the node for `/` alone and the ids never reach the
+  wire; an address from before fragment routes (`/dm/<id>`) is sent once and rewritten in place. Nor does a reset reach a **linked network**,
   which keeps its own copy of the public channels (see "Sync after a reset" above).
 - **The host machine's own browser** keeps no IndexedDB copy on an encrypted node: the desktop and Android
   hosts' windows are told by their launcher (`window.__loamHostNoLocalCache`), and any other browser on the
   host (the `loamnet` operator's) by the node, in `/api/bootstrap`'s `hostNoLocalCache` to loopback callers
   (docs/14). So a reset, or an ephemeral key's end, finds no IndexedDB copy of the network in that browser's
   profile (a copy an older version wrote is deleted on the next visit; deleted files on flash are not
-  securely erased, as above).
+  securely erased, as above). When the Android host app closes after a reset, it also deletes all of its
+  WebView's cookies and storage natively (`deleteAllWebData`) and its setup record (`loam.setup`), so neither
+  depends on the page hearing the `wipe` frame and setup no longer names the erased network. A fixed-key
+  reset that an earlier launch left unfinished is finished at the next launch after setup has run: it
+  clears the WebView's data and the key but keeps the setup just made and boots on (docs/04).
 
 ### Data-at-rest caveat (document honestly)
 SQLite leaves data in the main DB file, `-wal`, and `-journal`, and deleted rows/files may be

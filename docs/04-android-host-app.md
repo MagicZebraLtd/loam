@@ -254,7 +254,9 @@ exiting closed the whole app before the host screen could say why. A failed boot
 language, and Retry re-runs the launcher's boot in-process (the same `loam-db-unlock` path as the encryption
 retries). Readiness comes only from the server's in-process `__loamReportBootReady`, never from an HTTP answer
 on `127.0.0.1:3000`, which another app could give; main.js keeps a 5-minute `boot_timeout` watchdog, retired by
-any reported failure. For the same reason main.js sends no host-token request (`meshRequest`: the mesh bridge,
+any reported failure. `resolveDbEncryptionAndBoot` arms a fresh one on every attempt that loads the server,
+and the `loam-db-start-fresh` listener arms none of its own: one armed after a start-fresh that ends locked
+would report `boot_timeout` five minutes later over the lock screen's details. For the same reason main.js sends no host-token request (`meshRequest`: the mesh bridge,
 `/api/host/*`) until that signal has arrived, so a squatter on the port never sees the token.
 
 Once that signal has arrived the launcher never runs its key-resolution-and-boot pipeline again in that
@@ -274,7 +276,9 @@ launcher's `db_encryption_locked` report carries `newDatabase` (no `loam.db` yet
 waiting), and the locked screen shows a second field when that is true or when no passphrase has ever opened
 this database (`passphraseNeedsConfirmation` in `src/lib/passphrase-confirm.ts`). An entry typed in
 Encryption settings is always asked for twice. On an existing database one entry is enough: a typo just
-fails to open it.
+fails to open it. Every passphrase field, on the locked screen and in Encryption settings, opts out of
+Android autofill (`autoComplete="off"`, `importantForAutofill="no"`), so no autofill service is offered
+the passphrase to save.
 
 ### Message notifications
 
@@ -285,11 +289,15 @@ a tone and/or vibrates while its page is open (`apps/client/src/lib/alerts.ts`, 
 
 - **Who the host is.** The host's WebView presents the launcher's per-boot host token to
   `POST /api/admin/claim` on every page load, even when it is already admin; the server keeps that
-  session's user as `hostDeviceUserId` (in memory, cleared by the kill switch).
+  session's user as `hostDeviceUserId` (in memory, cleared by the kill switch). The token counts only
+  from loopback (the tunnel forwards the real caller's address), for this and for the admin claim. From any
+  other address it is a wrong secret and counts against the claim's attempt limiter.
 - **Which messages.** `broadcast()` hands each `messageCreated` to `notifyHostDevice` (realtime.ts), which
   passes `globalThis.__loamNotifyHost` (installed by main.js) a `HostMessageNotice` only for a message the
   host's own socket would receive (the same audience, shadow-ban and private-channel filter), never the
-  host's own, a reaction, a bot's, or one from someone the host blocked. Text is cut to 280 characters.
+  host's own, a reaction, a bot's, or one from someone the host blocked. Text is cut to 280 characters. The
+  notice carries the message's id; RN refuses one without it, since its notification could never be taken
+  back.
 - **When.** main.js posts it to RN as `loam-message-notice`; `src/lib/message-notifier.ts` shows it only
   while `AppState` isn't `active`, and only at the level the person chose in the web client's Settings
   (Direct messages, the default / Every message / Nothing), which the WebView posts as `loam-alerts` and
@@ -299,10 +307,36 @@ a tone and/or vibrates while its page is open (`apps/client/src/lib/alerts.ts`, 
   with a count), on a "Messages" channel at high importance with Android's default sound and vibration,
   which the person changes in Android's settings for LOAM. The lock screen shows only "LOAM: New message"
   unless the person allows private content there. A tap opens LOAM at that conversation (the key rides the
-  launch intent; `onOpenConversation` while running, `takeOpenedConversation` from cold). They are all
+  launch intent; `onOpenConversation` while running, `takeOpenedConversation` from cold), and the host
+  screen moves the WebView there by setting its `location.hash` (`src/lib/webview-route.ts`). A tap from
+  cold, before the WebView could route, waits until LOAM's own page has loaded
+  (`pendingConversationAfterLoad`), since a route set on another page would write the conversation's id
+  into that page's address. They are all
   cleared when LOAM comes to the front, at the start of every Emergency Reset (the kill switch calls
   `globalThis.__loamHostReset`, main.js posts `loam-host-reset`, whoever ran the reset and even with the host's
   WebView suspended), when the web client reports a reset (`loam-wipe`) and when LOAM closes after one.
+  They are also cleared when the host screen first starts, before the runtime starts (the notifier's first
+  `load`), and when LOAM is swiped away (`LoamHostService.onTaskRemoved`): a notification an earlier
+  process showed can't be taken back, because the server's record of it died with that process. Each
+  notification is marked local-only (`setLocalOnly(true)`), so Android doesn't bridge its text to a paired
+  watch. The two Kotlin changes compile (`compileReleaseKotlin`) but have not run on a device (docs/21).
+- **Taken back.** A notification never outlives the text it shows. The server remembers up to 256
+  messages it handed over (in memory; the kill switch empties the record). When the record is full it
+  forgets first a message that a newer one in the same conversation has replaced on screen; if every record
+  is its conversation's newest, it forgets the oldest and takes that conversation's notification back.
+  When one of the remembered messages is deleted
+  (by its author or an admin, with its thread, with its channel, or by the retention reaper) or changed (an
+  edit, a moderator's removal, an edit imported over sync), or its author is shadow-banned, it calls
+  `globalThis.__loamWithdrawHostNotice({ messageId })`. When the host's person loses a channel (removed from
+  or leaving a private one, or the channel deleted) it calls it with `{ conversation: "channel:<id>" }`.
+  main.js posts either as `loam-message-withdrawn`; `withdraw` in `message-notifier.ts` removes that
+  conversation's notification only if it still shows that message (an older message in the same
+  conversation is on screen nowhere, so its withdrawal does nothing) and lowers the conversation's count by
+  one, or removes the whole conversation's (`clearMessageNotification`, which cancels the same
+  tag and id `show` used). Nothing more is shown in its place: the earlier message's text is not kept on the
+  phone. A message whose notification is still showing is therefore never forgotten. **Outside the app's reach:** if the person turned on Android's notification history (Settings,
+  Notifications), Android keeps its own copy of every notification it showed for 24 hours, and neither
+  cancelling nor an Emergency Reset removes it.
 - **Permission.** The `POST_NOTIFICATIONS` prompt the hosting notice already asks covers these; no other
   permission is involved, and nothing leaves the phone.
 
@@ -662,7 +696,9 @@ takes a press-and-hold; without device-owner provisioning Android also offers it
 phone's screen-lock PIN when one is set, so a host left out in public should set a device PIN first. The
 network keeps running with the screen off either way; the screen only stays on so the codes can be seen.
 Both native calls are best-effort no-ops when unsupported and never throw; the pin is released on
-unmount. The overlay also shows the app **version** (`Constants.expoConfig?.version`).
+unmount. Still open: the in-app press-and-hold calls `stopLockTask()`, and whether the phone then asks for
+its screen lock depends on Android's own "ask before unpinning" setting; nothing asks when pinning was never
+granted. An in-app device-credential check before leaving is not built; it needs a decision and a device. The overlay also shows the app **version** (`Constants.expoConfig?.version`).
 
 ## QR codes (mostly already solved)
 
@@ -696,13 +732,14 @@ support it); avoid Android-only Easy Connect for v1.
   only, so nothing of LOAM's listens on `[::1]`, and any other app with the INTERNET permission can bind
   `[::1]:3000` without a conflict. Chromium tries `::1` first for `localhost`, so that app's page would sit
   at LOAM's pinned origin and receive the injected host token and transport key. The WebView `source`,
-  `originWhitelist`, the `isLoamUrl` pin and the bootstrap fetch all use the IP literal, and the network
+  the `isLoamUrl` pin (which `navigationDecision` uses) and the bootstrap fetch all use the IP literal, and the network
   security config permits cleartext to `127.0.0.1` only, so a stray `localhost` load fails instead of
   reaching another app. (Builds before this change loaded `localhost`. WebView storage is per origin, so on
   a network that keeps its data the host's own person starts as a new member after the update; the host
   token makes them admin again. At launch the host requests native cleanup of `localhost` without loading
   a page there. On WebViews with scoped browsing-data deletion this covers IndexedDB, localStorage and
-  the HTTP cache. On older Chromium WebViews the origin-level fallback targets the IndexedDB message cache;
+  the HTTP cache. On older Chromium WebViews, and wherever the site call throws, the origin-level fallback
+  (`deleteOrigin`, in `deleteWebOriginData`) targets the IndexedDB message cache;
   the old localStorage token can remain, but the host no longer loads or reads that origin.)
 - WebView needs: `credentials`/cookies enabled (the app relies on the `loam_session` cookie —
   `thirdPartyCookiesEnabled`, `sharedCookiesEnabled`), WebSocket allowed (works over `ws://` on the LAN;
@@ -715,7 +752,13 @@ support it); avoid Android-only Easy Connect for v1.
   `closeApp()` (loam-hotspot module) stops the host service, finishes the task and kills the process. A
   nodejs-mobile runtime can't be started twice in one process, and reattaching to the wiped server left the
   launcher stuck ("Couldn't finish starting LOAM"), so the next launch is a fresh process that opens on the
-  setup screens. Setup never mentions the erased network, and doesn't highlight the last choice. Only then,
+  setup screens. Before it closes, `closeLoamAfterReset` (`src/lib/reset-close.ts`, used by both reset
+  paths) empties the share-sheet cache, deletes the setup record (`loam.setup`) and deletes every cookie and
+  all of the WebView's storage (localStorage, IndexedDB, caches) natively (`deleteAllWebData`). The WebView
+  only ever shows LOAM, so nothing else is lost, and no per-site call is needed whose handling of an
+  IP-literal origin is uncertain. It waits at most 1.5 s for that delete, and a step that fails never
+  keeps the app open. So setup never names or pre-fills the erased network, and doesn't highlight the last
+  choice. Only then,
   though (`resetOutcome`, `src/lib/emergency-reset.ts`): an erase the server couldn't verify complete
   (`complete: false`, the node stays 503-locked) stays on screen saying so, with a Close button. What it
   says follows the kill switch's `journaled` (forwarded by main.js through `reset-reply.js`; an answer
@@ -724,9 +767,37 @@ support it); avoid Android-only Easy Connect for v1.
   it to be run again after reopening. On a fixed-key node the screen waits for the device-key clear the
   server handed off (`keyClearRequested`), which `attemptWipeKeyClear` closes the app after, or shows the
   failure of with a retry.
+- **Two kinds of device-key clear** (`finishWipeKeyClear`, `src/lib/emergency-reset.ts`). main.js asks with
+  `loam-wipe-restart`: with no payload when a running server was just reset (a **live** clear), and with
+  `{ resume: true }` when it finds, at its own boot, a wipe journal still at `key-clear-ready` (a reset an
+  earlier launch never finished). A live clear deletes the setup record first, so it is gone even if a later
+  step dies, then clears the key and acknowledges `loam-wipe-complete`, then closes LOAM. A resumed clear
+  runs in a launch whose setup screens have already run, so the setup record names the new network: it
+  deletes the last shared file and the WebView's data, clears the key and acknowledges, and neither deletes
+  the setup record nor closes, so the boot carries on with the setup just made. A failed clear shows Retry,
+  with no acknowledgement and no close. While a clear is under way or has failed, the 1.5 s re-bootstrap that
+  the web client's `loam-wipe` message schedules does not run (`mayRebootstrapAfterWipe`): it would only
+  remount the WebView against a server that is gone.
 - **The host token and key reach the WebView only by injection** (`injectedJavaScriptBeforeContentLoaded`),
   never in the start URL: the client trusts those globals over a pin, and a URL is something anyone can
-  craft (review 2026-10-03 #1).
+  craft (review 2026-10-03 #1). The injected script runs at the start of every page, so it sets
+  `__loamHostDeviceToken`, `__loamHostTransportKey` and `__loamHostNoLocalCache` only when
+  `location.origin` is `http://127.0.0.1:3000` (`src/lib/host-injection.ts`). The navigation guard can't
+  be relied on alone: react-native-webview's `onShouldStartLoadWithRequest` lets a load through when the
+  JS thread doesn't answer within 250 ms, as while a model file is being verified. So a WebView message
+  from any other origin is ignored, and a foreign page the WebView reports is stopped and LOAM is loaded
+  again (the WebView is remounted).
+- **Every navigation is decided by `navigationDecision(url)`** (`src/lib/host-injection.ts`). The WebView's
+  `originWhitelist` is `['*']` on purpose: under a narrower list react-native-webview hands a URL that fails
+  it straight to Android (`Linking.openURL`, so an intent) and never asks `onShouldStartLoadWithRequest`, so
+  the app's own filter never ran for outside addresses. Now the handler answers every navigation: `load` for
+  LOAM's origin, `external` (the system browser) for any other `http(s)` address, and `block` for every other
+  scheme (`intent:`, `tel:`, `market:`, `file:`, `javascript:`, `data:`, `blob:`, `about:blank`, and an empty
+  or unparseable URL). The scheme is read from the text and lower-cased there, because React Native's `URL`
+  is a few regular expressions that neither validate nor lower-case, and it is checked before the origin: a
+  `blob:` URL made by LOAM's page reports LOAM's origin, yet is no page to load. The route script
+  (`webViewRouteScript`) sets `location.hash` only when `location.origin` is LOAM's, for the same reason as
+  the injection: a slow JS thread can let another page hold the WebView briefly.
 - **After an Emergency Reset** the node rotates its transport key. The host screen re-fetches
   `/api/bootstrap` for the new `#k=` and remounts the WebView when the client reports the `wipe` event
   (which also clears its old pin). The WebView is also handed the node's key directly: alongside the
@@ -735,8 +806,9 @@ support it); avoid Android-only Easy Connect for v1.
   over any stale or broken pin without asking. That covers a WebView that **missed** the wipe event, and
   a node with an ephemeral DB key, which mints a new transport key on **every boot** — without it the host's
   own screen would hit the rescan gate and a "different key" prompt on each launch. The injection only
-  happens in the host's own WebView, pinned to the loopback origin (`originWhitelist` +
-  `onShouldStartLoadWithRequest`), so a LAN browser never gets it; LAN joiners of an ephemeral-key node
+  happens in the host's own WebView, pinned to the loopback origin (`navigationDecision` in
+  `onShouldStartLoadWithRequest`, and the origin check in the script itself, above), so a LAN browser never
+  gets it; LAN joiners of an ephemeral-key node
   rescan the QR after each host restart (docs/08). The client also purges its cached data when its
   server-confirmed identity changes, so a missed wipe doesn't leave old messages on screen.
 - **No persistent copy of messages outside the encrypted database.** On every encrypted network (any DB mode but `off`,
@@ -749,9 +821,17 @@ support it); avoid Android-only Easy Connect for v1.
   cache, and each WebView mount on such a network calls `clearCache(true)` to drop one an older version
   wrote. localStorage stays on (the identity token and preferences, no message text, though
   `loam.lastConversation` names the last conversation, such as `/dm/user.<id>`), and so do the cookie, the
-  service worker registration and its Cache Storage (build files only). The app never clears WebView storage
-  natively: a reset relies on the page receiving the `wipe` frame, and an in-process reset closes the app
-  300 ms after the reply, which can race the page's purge. An `off` network keeps both caches, as before. Not yet checked on a device.
+  service worker registration and its Cache Storage (build files only). When LOAM closes after a reset it
+  deletes all of the WebView's cookies and storage natively first (`deleteAllWebData`, above), and a resumed
+  device-key clear does the same before the new network's page loads, so the purge doesn't depend on
+  the page receiving the `wipe` frame. That covers a reset run from the host app and every fixed-key
+  reset, which closes LOAM after the device-key clear wherever it was started. An in-process reset started
+  elsewhere (the web admin page, the panic token) leaves the app running, and the WebView's purge still
+  relies on the `wipe` frame. An `off` network keeps both caches, as before. Not yet checked on a device.
+- **Routes live in the fragment.** The web client's routes are fragment routes (`/#/dm/<id>`), so a reload
+  asks the node for `/` alone. The host screen moves its WebView to a conversation, the rules or the admin
+  page by setting `location.hash` (`src/lib/webview-route.ts`, `webViewRouteScript`, only on LOAM's own
+  page), and the client follows `hashchange`. The assistant settings open at `/#/admin?section=llm`.
 
 ### What the host phone logs
 
@@ -761,8 +841,18 @@ database: `adb logcat`, a bug report or some backup tools can read it after the 
 because each one carries the joiner's address, port and a timestamp, an activity record for the whole network.
 LOAM's own warnings and errors still go to logcat (Fastify's per-request error lines are muted with the request log), and they carry no message text, names or keys (the request serializer
 drops query strings, the tunnel hides paths, and the assistant's error lines are scrubbed of key-shaped text).
+A request line that is logged (an error, or `loamnet --verbose`) names the matched route pattern
+(`/api/dms/:userId`), `[page]` for anything the client build serves, `[unmatched]` or `[tunnelled]`, never
+the concrete path. At error level an assistant backend failure logs only the provider and HTTP status;
+the backend's own text, cut to 200 characters, is logged at debug only.
 The React Native side logs no URLs either (`onHttpError` logs the status only, since the page URL names a
-conversation). The desktop app keeps its log in memory (docs/24) and the `loamnet` terminal app logs a line per
+conversation).
+
+Known gap: the on-device assistant library, llama.rn 0.12.6 (prebuilt), writes each prompt's token ids to
+the system log at info level (tag `RNLlama`, `prompt_tokens = …`). Token ids decode to text with the
+model's public vocabulary, so a prompt sent to the on-device model, the member's question and the chat
+history it carries, can be read back from logcat. This stays true until the library is built from source
+with that line removed (docs/06). The desktop app keeps its log in memory (docs/24) and the `loamnet` terminal app logs a line per
 request only with `--verbose`.
 
 ## Monorepo question — settled

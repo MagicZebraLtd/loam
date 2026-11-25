@@ -30,6 +30,17 @@ function sanitize(text) {
     .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
+/**
+ * An uncaught error as it may reach the terminal: its stack (or the value itself), each line through
+ * {@link sanitize}, since the message can carry text from the network (a name, a path).
+ */
+export function formatCrashReport(error) {
+  return String(error?.stack ?? error)
+    .split("\n")
+    .map(sanitize)
+    .join("\n");
+}
+
 function str(value) {
   return typeof value === "string" ? value : undefined;
 }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { openCommand, type OpenerProcess, openUrlWith, type SpawnOpener } from "./system.js";
 
-const url = "http://localhost:3000/#k=key&a=code";
+const url = "http://127.0.0.1:3000/#k=key&a=code";
 
 describe("openCommand", () => {
   it("uses the platform's opener", () => {
@@ -17,7 +17,7 @@ describe("openCommand", () => {
   it("hands cmd its arguments verbatim on Windows, with the fragment's & escaped", () => {
     const windows = openCommand("win32", {});
     expect(windows?.command).toBe("cmd");
-    expect(windows?.args(url)).toEqual(["/c", "start", '""', "http://localhost:3000/#k=key^&a=code"]);
+    expect(windows?.args(url)).toEqual(["/c", "start", '""', "http://127.0.0.1:3000/#k=key^&a=code"]);
     expect(windows?.verbatim).toBe(true);
   });
 
@@ -41,9 +41,29 @@ describe("openUrlWith", () => {
   it("is true once the opener exits cleanly", async () => {
     const { child, calls, spawn } = fakeOpener();
     const opening = openUrlWith(url, { platform: "darwin", env: {}, spawn });
-    expect(calls).toEqual([{ command: "open", args: [url], options: { stdio: "ignore", detached: true, windowsVerbatimArguments: false } }]);
+    expect(calls).toEqual([
+      { command: "open", args: [url], options: { stdio: "ignore", detached: true, windowsVerbatimArguments: false, env: {} } },
+    ]);
     child.emit("spawn");
     expect(child.unref).toHaveBeenCalled();
+    child.emit("exit", 0, null);
+    await expect(opening).resolves.toBe(true);
+  });
+
+  it("starts the opener (and the browser it may start) without the database key or any other LOAM_ value", async () => {
+    const { child, calls, spawn } = fakeOpener();
+    const env = {
+      DISPLAY: ":0",
+      PATH: "/usr/bin",
+      LOAM_DB_KEY: "correct horse battery staple",
+      LOAM_DB_KEY_MIGRATE_FROM: "legacy",
+      LOAM_HOST_TOKEN: "token",
+      LOAM_DATA_DIR: "/home/ada/.loam",
+    };
+    const opening = openUrlWith(url, { platform: "linux", env, spawn });
+    expect(calls[0]?.options.env).toEqual({ DISPLAY: ":0", PATH: "/usr/bin" });
+    expect(calls[0]?.options.env).not.toHaveProperty("LOAM_DB_KEY");
+    expect(env.LOAM_DB_KEY).toBe("correct horse battery staple");
     child.emit("exit", 0, null);
     await expect(opening).resolves.toBe(true);
   });

@@ -140,12 +140,30 @@ export function pickJoinAddress(view: View): void {
   });
 }
 
+/** The views with an "Open as admin" still on its way (the browser opener hasn't answered yet). */
+const opening = new WeakSet<View>();
+
 /**
  * Open LOAM in this computer's browser, already admin. A phone can be made admin instead, but only on a
  * second, deliberate key: its QR is drawn on the same screen strangers scan to join, so it isn't shown
  * unasked, it says what it does, and its code is retired as soon as the dialog closes.
  */
 export async function openAsAdmin(view: View): Promise<void> {
+  // A second o while the browser is still opening would mint a second code and open a second tab, and
+  // closing the first panel would then retire the code the browser in front of the host is using.
+  if (opening.has(view)) {
+    return;
+  }
+  opening.add(view);
+  try {
+    await openAsAdminOnce(view);
+  } finally {
+    opening.delete(view);
+  }
+}
+
+/** One "Open as admin": a code for this computer, the browser opened with it, and the panel. */
+async function openAsAdminOnce(view: View): Promise<void> {
   const { host, system } = view.options;
   const key = host.transportPublicKey();
   const fragment = (code: string) => `#${key ? `k=${key}&` : ""}a=${code}`;
@@ -168,10 +186,16 @@ export async function openAsAdmin(view: View): Promise<void> {
       // The link is always shown: an opener can report success and still show nothing (the wrong default
       // browser, a desktop that swallowed it), and the operator must never be left with no way in.
       const note = opened
-        ? paragraph("LOAM is opening in your browser, signed in as admin. The link works once, for 10 minutes.", width, { fg: "green" })
-        : paragraph("Couldn't open a browser on this computer. Open this on this computer instead (it works once, for 10 minutes):", width, {
-            fg: "yellow",
-          });
+        ? paragraph(
+            "LOAM is opening in your browser, signed in as admin. The link works once, and stops working after 10 minutes or when you close this.",
+            width,
+            { fg: "green" },
+          )
+        : paragraph(
+            "Couldn't open a browser on this computer. Open this on this computer instead (it works once, and stops working after 10 minutes or when you close this):",
+            width,
+            { fg: "yellow" },
+          );
       const link = [
         ...(opened ? paragraph("If no browser window appeared, open this on this computer:", width, { dim: true }) : []),
         ...breakLink(local, width).map((piece) => text(piece, { fg: "cyan" })),
@@ -182,7 +206,7 @@ export async function openAsAdmin(view: View): Promise<void> {
       const warning = [
         [],
         ...paragraph(
-          "Anyone who scans this becomes an admin, and an admin can't be removed. It works once, and stops working when you close this.",
+          "Anyone who scans this becomes an admin, and an admin can't be removed. It works once, and stops working after 10 minutes or when you close this.",
           width,
           { fg: "yellow", bold: true },
         ),
@@ -206,6 +230,9 @@ export async function openAsAdmin(view: View): Promise<void> {
       return true;
     },
     onClose() {
+      // The local code too: a browser that never claimed it would leave it usable for 10 minutes, and it
+      // was in the opener's arguments, which other accounts can read in the process list on Linux.
+      host.revokeAdminClaimCode(localCode.code);
       if (phone) {
         host.revokeAdminClaimCode(phone.code);
       }

@@ -7,16 +7,17 @@
 // is the built-in node:sqlite (Node ≥22) — zero node-gyp; `--encrypt` opts into the optional native
 // SQLCipher driver.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { createAdminLinkOffer } from "./admin-link.js";
 import { parseArgs } from "./args.js";
 import { createLineBuffer } from "./line-buffer.js";
 import { SUPPORTED_NODE_RANGE, nodeVersionProblem } from "./node-version.js";
-import { createPlainLogPrinter } from "./plain-log.js";
+import { createPlainLogPrinter, formatCrashReport } from "./plain-log.js";
 import { PORT_ATTEMPTS, findFreePort, isPortFree } from "./port.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -94,6 +95,9 @@ if (!existsSync(bundlePath)) {
   console.error(`Missing ${bundlePath}. The package looks incomplete. Reinstall loamnet.`);
   process.exit(1);
 }
+// A published node, as the Android bundle is (embedded-main.ts): the server refuses Developer Mode (which turns
+// transport encryption off) under production, so an inherited LOAM_DEV_MODE can't. Set before the bundle loads.
+process.env.NODE_ENV ??= "production";
 const bundle = await import(pathToFileURL(bundlePath).href);
 
 // The full-screen UI needs a terminal on both ends; a service or piped output gets the plain print-out.
@@ -349,6 +353,7 @@ const {
   createTui,
   encodeQR,
   firstLanIPv4,
+  localOrigin,
   processSystem,
   processTerminal,
   renderQRToTerminal,
@@ -379,6 +384,9 @@ const plainLogStream = createPlainLogPrinter((text) => process.stdout.write(text
 console.log("");
 console.log(`LOAM node: data in ${dataDir}`);
 
+// The server reads the key once, while it starts, and keeps it itself (an Emergency Reset too). Afterwards it
+// leaves the environment, so nothing started later (the browser the terminal UI opens) inherits it.
+const encrypted = Boolean(process.env.LOAM_DB_KEY);
 let app;
 try {
   // Start FIRST, then show the QR: the QR must carry the host's transport public key as a `#k=<key>`
@@ -393,7 +401,7 @@ try {
 } catch (error) {
   // Only treat this as a missing-driver case when the error actually names the SQLCipher module —
   // a bare `Cannot find module` match would misreport any unrelated missing dependency.
-  if (process.env.LOAM_DB_KEY && String(error?.message ?? "").includes("better-sqlite3-multiple-ciphers")) {
+  if (encrypted && String(error?.message ?? "").includes("better-sqlite3-multiple-ciphers")) {
     printDriverMissingHint();
     process.exit(1);
   }
@@ -415,6 +423,8 @@ try {
     process.exit(1);
   }
   throw error;
+} finally {
+  delete process.env.LOAM_DB_KEY;
 }
 
 let tui;
@@ -460,7 +470,11 @@ if (useTui) {
       dataDir,
       nodeVersion: process.version,
       platform: `${process.platform} ${process.arch}`,
-      databaseDriver: process.env.LOAM_DB_KEY ? "SQLCipher" : "node:sqlite",
+      databaseDriver: encrypted ? "SQLCipher" : "node:sqlite",
+      // Its "Open as admin" link goes to the port the server listens on, which CLIENT_PORT can set apart from
+      // the advertised one.
+      listenHost,
+      listenPort: port,
     },
     settings: saved,
     saveSettings: (next) => writeCliSettings(dataDir, next),
@@ -471,7 +485,7 @@ if (useTui) {
   // Put the terminal back before any crash report is printed.
   process.on("uncaughtException", (error) => {
     tui?.stop();
-    process.stderr.write(`${error?.stack ?? error}\n`);
+    process.stderr.write(`${formatCrashReport(error)}\n`);
     process.exit(1);
   });
   tui.start();
@@ -490,7 +504,10 @@ function printPlain(app) {
   const transportKey = app.host.transportPublicKey();
   const qrUrl = transportKey ? `${joinUrl}#k=${transportKey}` : joinUrl;
 
-  console.log(`Open on this device:  http://localhost:${port}`);
+  // The port the server listens on, and an address it listens on (IPv4 loopback for 0.0.0.0, or HOST itself):
+  // never `localhost`, which can resolve to [::1] first, which another account on this computer could hold.
+  const localUrl = localOrigin(listenHost, port);
+  console.log(`Open on this device:  ${localUrl}`);
   console.log(`Join from your phone: ${joinUrl}`);
   console.log("");
   // The host's responsibilities (the terminal UI and the Android app show the same note once). A print-out has
@@ -527,67 +544,16 @@ function printPlain(app) {
     console.log("");
   }
 
-  // While nobody is admin (a new network, or again after an Emergency Reset), keep a one-time admin link on
-  // hand (each lasts 10 minutes). In a terminal it is printed. Without one (a service), it goes to a file only
-  // this user can read, never to the log: a journal or log shipper is read by more people than this. A code
-  // that is replaced, or no longer needed because someone is admin, is retired on the server too: deleting
-  // the file alone would leave it usable until it expired.
-  const linkFile = join(dataDir, "admin-link.txt");
-  let current;
-  const retireCurrent = () => {
-    if (current) {
-      app.host.revokeAdminClaimCode(current.code);
-      current = undefined;
-    }
-  };
-  const offerAdminLink = () => {
-    let status;
-    try {
-      status = app.host.status();
-    } catch {
-      return;
-    }
-    if (status.people.admins > 0) {
-      if (current) {
-        rmSync(linkFile, { force: true });
-        retireCurrent();
-      }
-      return;
-    }
-    if (current && current.expiresAt - Date.now() > 60_000 && current.resets === status.resets) {
-      return;
-    }
-    retireCurrent();
-    const minted = app.host.adminClaimCode();
-    if (!minted) {
-      return;
-    }
-    const key = app.host.transportPublicKey();
-    const fragment = `#${key ? `k=${key}&` : ""}a=${minted.code}`;
-    const link = `${joinUrl}${fragment}`;
-    current = { code: minted.code, expiresAt: minted.expiresAt, resets: status.resets };
-    if (process.stdout.isTTY) {
-      // Two links to one code. A browser on this computer should use loopback: only a loopback caller is told
-      // to keep no copy of an encrypted network's messages on this disk (`hostNoLocalCache`, docs/02).
-      console.log("Nobody is admin yet. Open one of these links to become admin (it works once, for 10 minutes):");
-      console.log(`  On this computer:    http://127.0.0.1:${advertised.port}/${fragment}`);
-      console.log(`  From another device: ${link}`);
-      console.log("");
-      return;
-    }
-    // Remove first: `mode` only applies to a new file, so an existing one (left with looser permissions, or a
-    // symlink pointing elsewhere) would otherwise keep its permissions or send the code somewhere else.
-    try {
-      rmSync(linkFile, { force: true });
-      writeFileSync(linkFile, `${link}\n`, { mode: 0o600, flag: "wx" });
-    } catch (error) {
-      // Something put a file back in between (or the folder isn't writable): don't write through it.
-      retireCurrent();
-      console.error(`Couldn't write the one-time admin link to ${linkFile} (${error?.code ?? error}). Trying again shortly.`);
-      return;
-    }
-    console.log(`Nobody is admin yet. A one-time admin link (renewed every 10 minutes) is in ${linkFile}`);
-  };
+  // While nobody is admin, a one-time admin link (admin-link.js): printed in a terminal, else in a private file.
+  const offerAdminLink = createAdminLinkOffer({
+    host: app.host,
+    linkFile: join(dataDir, "admin-link.txt"),
+    joinUrl,
+    localOrigin: localUrl,
+    interactive: Boolean(process.stdout.isTTY),
+    log: (line) => console.log(line),
+    error: (line) => console.error(line),
+  });
   const adminTimer = setInterval(offerAdminLink, 30_000);
   adminTimer.unref();
   offerAdminLink();

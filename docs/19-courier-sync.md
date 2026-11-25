@@ -129,7 +129,9 @@ node with **no local users of its own** — a pure mule (a spare phone) that onl
   all **public** channel data (public by definition). It does **not** see sealed content or the real
   recipient. `toTag` is derived from the recipient's *secret* mailbox token, so a tokenless courier
   can't link a blob to a person — but it *can* observe that "some blob is moving" and, across many
-  syncs, do traffic analysis on tags/sizes/timing. No cover traffic.
+  syncs, do traffic analysis on tags/sizes/timing. The tag depends only on the token and the day, so all
+  of one day's mail to one recipient shares it: a courier can group and count that mail without knowing
+  who it is for. No cover traffic.
 - **A malicious node** a courier syncs with sees the same, plus it could **inject** mail (bounded by
   TTL/hop/cap and `acceptSealedFromPeer`'s defensive checks) or **drop** mail (a courier/node can always
   refuse to carry — availability, not confidentiality). Public-message impersonation is guarded by

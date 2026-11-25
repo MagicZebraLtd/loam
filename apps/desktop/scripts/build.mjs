@@ -3,6 +3,7 @@
 // package.json only, so nothing may be resolved from node_modules at runtime):
 //   dist/main/loam-server.js  the LOAM server (shared recipe: scripts/lib/bundle-server.mjs)
 //   dist/main/index.js        the main process (ESM; electron and the server bundle stay external)
+//   dist/main/release-tag.txt the release tag, on a tag build only (LOAM_RELEASE_TAG)
 //   dist/preload/*.cjs        the two preloads (CommonJS: a sandboxed preload can't be ESM)
 //   dist/client/              the web client the node serves (copied from apps/client/dist)
 //   dist/renderer/            the host shell (vite build of src/renderer, when its config exists)
@@ -15,7 +16,7 @@
 //
 // Usage: node scripts/build.mjs   (or: pnpm --filter @loam/desktop build)
 
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +81,17 @@ await build({
   external: ["electron"],
   logLevel: "info",
 });
+
+// 3b. The release tag (CI sets LOAM_RELEASE_TAG on tag builds only), so a release candidate's update check
+// knows the final release of its X.Y.Z is newer. It stays out of package.json's version, which macOS and
+// Windows want as plain numbers. Anything but vX.Y.Z / vX.Y.Z-rc.N / vX.Y.Z-beta.N fails the build.
+const releaseTag = process.env.LOAM_RELEASE_TAG?.trim() ?? "";
+if (releaseTag) {
+  if (!/^v\d+\.\d+\.\d+(-(rc|beta)\.\d+)?$/.test(releaseTag)) {
+    throw new Error(`LOAM_RELEASE_TAG must be vX.Y.Z, vX.Y.Z-rc.N or vX.Y.Z-beta.N, not '${releaseTag}'.`);
+  }
+  writeFileSync(join(mainOut, "release-tag.txt"), `${releaseTag}\n`);
+}
 
 // 4. The web client the node serves to joiners and to the host's own window.
 cpSync(join(repoRoot, "apps/client/dist"), join(dist, "client"), { recursive: true });

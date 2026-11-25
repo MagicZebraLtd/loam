@@ -5,7 +5,8 @@
  * host is admin from the first page without any link that could be copied.
  *
  * Both are sandboxed with context isolation and no Node. Neither may navigate anywhere else or open windows:
- * links to the web go to the computer's browser, everything else is refused.
+ * the client window's links to the web go to the computer's browser, the host window's only when they are pages
+ * LOAM knows (trust.ts), and everything else is refused.
  */
 import { existsSync } from "node:fs";
 
@@ -13,10 +14,19 @@ import type { LogEntry } from "@loam/tui";
 import { app, BrowserWindow, nativeImage, session, shell, type Session, type WebContents } from "electron";
 
 import { IPC, type DesktopState } from "../shared/ipc.js";
+import { createCrashReloadBudget } from "./crash-reload.js";
 import { isWebUrl } from "./external-links.js";
 import { appPaths } from "./paths.js";
 import { strings } from "./strings.js";
-import { CLIENT_PARTITIONS, clientPartition as partitionFor, hostShellUrl, navigationDecision } from "./trust.js";
+import {
+  CLIENT_PARTITIONS,
+  clientPartition as partitionFor,
+  clientWindowOnNodeChange,
+  hostShellUrl,
+  navigationDecision,
+  windowOpenDecision,
+  type KnownNode,
+} from "./trust.js";
 
 /** The only permission a page gets: writing to the clipboard (the client's "Copy" buttons). */
 const ALLOWED_PERMISSION = "clipboard-sanitized-write";
@@ -59,8 +69,12 @@ export type WindowManager = {
   setQuitting(): void;
 };
 
-/** Create the window manager. Call once, after `app` is ready and before any window exists. */
-export function createWindowManager(options: { icon: string | undefined }): WindowManager {
+/**
+ * Create the window manager. Call once, after `app` is ready and before any window exists. `knownNode` names the
+ * running node's port and this computer's addresses: with LOAM's own pages, the only ones the host window may
+ * send to the browser.
+ */
+export function createWindowManager(options: { icon: string | undefined; knownNode: () => KnownNode }): WindowManager {
   let host: BrowserWindow | undefined;
   let client: BrowserWindow | undefined;
   let clientOrigin: string | undefined;
@@ -68,6 +82,7 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
   const icon = options.icon && existsSync(options.icon) ? nativeImage.createFromPath(options.icon) : undefined;
 
   let clientPartition: string | undefined;
+  const mayReloadHost = createCrashReloadBudget();
 
   /** One permission (clipboard writes), nothing else, in every session a page of this app uses. */
   function harden(target: Session): Session {
@@ -84,15 +99,17 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
 
   // Every page this app creates, whichever window it's in: no new windows, no navigation away.
   app.on("web-contents-created", (_event, contents) => {
+    const isClientWindow = (): boolean => client !== undefined && !client.isDestroyed() && contents === client.webContents;
     contents.setWindowOpenHandler(({ url }) => {
-      openInBrowser(url);
+      if (windowOpenDecision(url, { isClientWindow: isClientWindow(), node: options.knownNode() }) === "open-in-browser") {
+        openInBrowser(url);
+      }
       return { action: "deny" };
     });
     contents.on("will-attach-webview", (event) => event.preventDefault());
     // The client window stays on the node it was opened for; the host shell is one page and never navigates.
     const guard = (event: { preventDefault(): void }, url: string): void => {
-      const isClientWindow = client !== undefined && !client.isDestroyed() && contents === client.webContents;
-      const decision = navigationDecision(url, { isClientWindow, clientOrigin });
+      const decision = navigationDecision(url, { isClientWindow: isClientWindow(), clientOrigin, node: options.knownNode() });
       if (decision === "allow") {
         return;
       }
@@ -145,6 +162,18 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     });
     window.on("closed", () => {
       host = undefined;
+    });
+    // A crashed renderer leaves a blank window while the node keeps running: reload it, a few times at most.
+    // Past that the window is closed, so the tray (or the dock) opens a fresh one rather than the blank one.
+    window.webContents.on("render-process-gone", (_event, details) => {
+      if (quitting || details.reason === "clean-exit" || window.isDestroyed()) {
+        return;
+      }
+      if (mayReloadHost()) {
+        window.webContents.reload();
+      } else {
+        window.destroy();
+      }
     });
     if (existsSync(appPaths.rendererIndex)) {
       // By the URL ipc.ts compares senders against, not loadFile(): that spells the path a third way (a
@@ -232,17 +261,18 @@ export function createWindowManager(options: { icon: string | undefined }): Wind
     },
     clearClientData: () => clearClientStorage(),
     nodeChanged(origin) {
-      clientOrigin = origin ?? clientOrigin;
-      if (!client || client.isDestroyed()) {
-        return;
+      const open = client !== undefined && !client.isDestroyed();
+      const change = clientWindowOnNodeChange(origin, open);
+      clientOrigin = change.clientOrigin;
+      if (change.action === "close") {
+        // The node stopped (see clientWindowOnNodeChange); the host window or the tray opens it again later.
+        client?.destroy();
+        client = undefined;
+      } else if (change.action === "reload" && origin !== undefined) {
+        // A new boot means a new host token (and maybe a new port or key): load the page again so the preload
+        // injects what this boot's node accepts.
+        void client?.loadURL(`${origin}/`);
       }
-      if (origin === undefined) {
-        // The node stopped; the page stays (it shows the client's own "can't reach" state) until it is back.
-        return;
-      }
-      // A new boot means a new host token (and maybe a new port or key): load the page again so the preload
-      // injects what this boot's node accepts.
-      void client.loadURL(`${origin}/`);
     },
     setQuitting() {
       quitting = true;

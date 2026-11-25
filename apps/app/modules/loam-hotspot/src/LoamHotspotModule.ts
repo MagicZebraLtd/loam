@@ -39,6 +39,8 @@ declare class LoamHotspotModule extends NativeModule<LoamHotspotEvents> {
   showMessageNotification(content: MessageNotificationContent): boolean;
   /** Remove every new-message notification. */
   clearMessageNotifications(): void;
+  /** Remove one conversation's new-message notification. */
+  clearMessageNotification(conversation: string): void;
   /** The conversation a notification opened LOAM at from cold, once; null otherwise. */
   takeOpenedConversation(): string | null;
   /** Pin the app (Android screen pinning / lock-task) so it can't be left without the device PIN. */
@@ -46,8 +48,10 @@ declare class LoamHotspotModule extends NativeModule<LoamHotspotEvents> {
   /** Unpin the app (leave lock-task mode). */
   stopKiosk(): void;
   closeApp(): void;
-  /** Request scoped WebView storage cleanup without navigating to the old origin. */
-  deleteWebOriginData(origin: string): void;
+  /** Delete the WebView's storage for one origin without navigating there. Resolves when done; never rejects. */
+  deleteWebOriginData(origin: string): Promise<void>;
+  /** Delete every cookie and all of the WebView's storage. Resolves when done; never rejects. */
+  deleteAllWebData(): Promise<void>;
 }
 
 // Android-only native module: `requireOptionalNativeModule` returns `null` on iOS/web (and any

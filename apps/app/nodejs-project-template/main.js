@@ -178,6 +178,18 @@ global.__loamNotifyHost = function (notice) {
   }
 };
 
+// The server calls this (`globalThis.__loamWithdrawHostNotice`, apps/server/src/realtime.ts) when a message it
+// notified is deleted or changed (`{ messageId }`), or the host phone's person loses a channel
+// (`{ conversation }`). Forward it to RN, which removes the notification still showing that text
+// (src/lib/message-notifier.ts `withdraw`). Best-effort, installed BEFORE requiring the server bundle.
+global.__loamWithdrawHostNotice = function (withdrawal) {
+  try {
+    rnBridge.channel.post('loam-message-withdrawn', withdrawal);
+  } catch (err) {
+    // The RN side isn't listening (a restart in progress): this notification just isn't taken back.
+  }
+};
+
 // Interface NAME prefixes that belong to a VPN/tunnel/virtual adapter rather than the real hotspot/LAN:
 // an address on one of these is never reachable by a nearby device scanning the join QR, so
 // picking one would silently break joining. Mirrors the exclusions in apps/server/src/net.ts's
@@ -1230,17 +1242,13 @@ rnBridge.channel.on('loam-db-start-fresh', function (payload) {
   // means the locked prompt, so the fresh database is keyed by a passphrase the operator knowingly types —
   // and keeps the wipe-phase gate in the loop. `resolveDbEncryptionAndBoot` re-requires the (cached)
   // server bundle and drives the SAME re-entrant `__loamBootEmbeddedServer` hook underneath.
+  // No boot watchdog is armed here: `resolveDbEncryptionAndBoot` arms a fresh one on every attempt that
+  // loads the server, and one armed after a locked (or failed) outcome would report `boot_timeout` five
+  // minutes later over the lock screen's details.
   startFreshRebootInFlight = true;
   bootWithWipeResume().then(
     function () {
       startFreshRebootInFlight = false;
-      // Start a FRESH readiness-probe chain for this retry — the original poll
-      // (from the very first boot attempt) may already have given up (~5 minutes) long before the
-      // operator got around to confirming "Preserve old database & start fresh", and it never
-      // restarts itself. Without this, a successful recovery here would never tell the host screen
-      // it's ready (embedded-main.ts's direct `__loamReportBootReady` signal covers the SAME case
-      // from the server side too — this is belt-and-suspenders on the client-poll side).
-      startReadinessProbe();
     },
     function (err) {
       startFreshRebootInFlight = false;
@@ -1597,9 +1605,10 @@ function resolveDbEncryptionAndBoot() {
       }
       try {
         require('./loam-server.js');
-        // A FRESH readiness-probe chain for every attempt that gets this far — including a retry after a
-        // `db_encryption_locked` unlock, like the `loam-db-start-fresh` retry above. Superseded automatically if this isn't the latest call
-        // (see `startReadinessProbe`'s doc comment).
+        // A FRESH readiness-probe chain for every attempt that gets this far, including a retry after a
+        // `db_encryption_locked` unlock or a `loam-db-start-fresh` confirmation (that listener arms none of
+        // its own). Superseded automatically if this isn't the latest call (see `startReadinessProbe`'s doc
+        // comment).
         startReadinessProbe();
         // Start the mesh courier poll once the server is required. refreshMesh no-ops (404) until an
         // operator enables mesh, so this costs one cheap loopback GET per 30s while off. Armed at most
@@ -1742,7 +1751,9 @@ function bootWithWipeResume() {
     // `proceed` also runs once the phase-file-delete handler above has cleared the file on the SAME event.
     rnBridge.channel.on('loam-wipe-complete', proceed);
     try {
-      rnBridge.channel.post('loam-wipe-restart');
+      // `resume: true` tells the host screen this runtime is fresh and boots on in this process once the key
+      // is cleared, so it keeps the setup just made and stays open (a live reset's request has no payload).
+      rnBridge.channel.post('loam-wipe-restart', { resume: true });
     } catch (err) {
       proceeded = true;
       clearTimeout(timer);

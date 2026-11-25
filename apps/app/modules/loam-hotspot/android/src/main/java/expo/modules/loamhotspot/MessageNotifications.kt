@@ -88,6 +88,8 @@ object MessageNotifications {
           .setShowWhen(true)
           .setWhen(System.currentTimeMillis())
           .setAutoCancel(true)
+          // Kept on this phone: a message's text is never bridged to a paired watch.
+          .setLocalOnly(true)
       if (contentIntent != null) {
         notification.setContentIntent(contentIntent)
       }
@@ -108,6 +110,19 @@ object MessageNotifications {
       }
     } catch (error: Exception) {
       Log.w(TAG, "Couldn't clear message notifications", error)
+    }
+  }
+
+  /**
+   * Remove one conversation's notification (the message it shows was deleted or changed, or the person
+   * lost the conversation). The id is the one [show] used for that conversation.
+   */
+  fun clear(context: Context, conversation: String) {
+    try {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      manager.cancel(NOTIFICATION_TAG, conversation.hashCode())
+    } catch (error: Exception) {
+      Log.w(TAG, "Couldn't clear a message notification", error)
     }
   }
 

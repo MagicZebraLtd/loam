@@ -12,7 +12,9 @@ A node with `sync.enabled` answers two endpoints (404 otherwise, indistinguishab
 - `GET /api/sync/digest` — its public non-archived channels plus `{id, editedAt}` for every
   syncable message.
 - `POST /api/sync/messages {ids}` — full records (≤500 ids per request by schema; the puller asks for
-  far fewer, see *Batching*) plus the authors' profiles.
+  far fewer, see *Batching*) plus the authors' profiles. An author record goes out without roles, a shadow
+  ban, a timeout, `banned`, `pending` or an uploaded-picture avatar (avatar files never sync, so the peer
+  would only learn a local image id it can't fetch; it shows the generated avatar for the id instead).
 
 **Syncable** means: posts/replies in *public, non-archived* channels, and reactions on them.
 **Never exported:** DMs, private channels (or their member lists), in-flight LLM streams, and
@@ -24,7 +26,14 @@ schema-validated and defensive: messages only land in channels that are public *
 malicious peer can't inject into a private channel id), **only the author of a message this node
 actually accepted is imported** (never every user a peer's payload lists — a peer could otherwise push
 tens of thousands of records per batch), imported user profiles are stripped of `isAdmin`/roles/moderation
-state (a peer's admin is a stranger here), **reserved ids are refused** both as user records and as message
+state, a peer's `timeoutUntil` included (a peer's admin is a stranger here), and can't pass as someone
+here (`importPeerAuthor`): an imported record never keeps an uploaded-picture avatar (it could only name a
+missing file or one of this node's, which the avatar cleanup would then keep on disk and served after its
+owner changed it), a generated avatar whose seed is another record's id or seed, or starts with `user.`,
+`llm.` or `mesh.`, is dropped, and the name has control and format characters removed and is replaced by
+the generated name for the id when it is then empty or reads as another record's or the active assistant's
+(the profile-edit rules, `identity.ts`). At boot `stripSyncedAvatarImages()` removes uploaded-picture
+avatars from synced users' rows an earlier build imported. **Reserved ids are refused** both as user records and as message
 authors (any `mesh.*` id — a mesh sender's display record — and the whole `llm.*` assistant namespace, not
 just this node's configured bot id); an author whose record in the payload isn't `human` (a peer's bot or
 system account) is refused along with its message; **a peer may author a new message only as a user sync
@@ -51,7 +60,9 @@ rewrite a message a local user wrote. A peer can still rewrite messages that *ca
 unsigned; signed sync (docs/29 Track B) is the real fix. Messages imported before the provenance table
 existed are unmarked, so later peer edits to them are ignored (fail closed). An import is also refused if
 it names an attachment id whose file is already on disk (under any extension) and that the edited record
-doesn't reference. **Local moderation is sticky:** a message a moderator removed no longer takes peer edits
+doesn't reference. Imports follow this node's content flags as `createMessage` does: a post or reply with a location is
+refused while `enableLocationSharing` is off, one with attachments while `enableAttachments` is off, and a
+reaction on another reaction is always refused. **Local moderation is sticky:** a message a moderator removed no longer takes peer edits
 (the removal is an in-place edit the origin's next edit would otherwise win against) and takes no new
 peer replies or reactions (as `createMessage` refuses them locally), and un-editable
 records aren't even requested from the digest. **Every check runs twice** (`vetPeerImport`): before the
@@ -92,6 +103,8 @@ over-cap answer costs the cap, an unusable one its bytes; the batch whose fetche
 round, and once it is spent no further attachment is fetched (the files are queued for the retry pass; the
 messages themselves still import). A network-level failure
 (peer unreachable, 4xx/5xx) ends the round's fetching without discarding what earlier batches imported.
+Requests to a peer, attachment fetches included, never follow a redirect: a 3xx fails the request, so a peer
+(or someone on the path to an unpinned one) can't send this node to another address, loopback included.
 
 **Refused offers.** After each batch the puller remembers, per peer, every public offer it fetched and
 didn't end up holding (a reply to a deleted post, a post into an archived channel, an over-cap body…),
@@ -146,7 +159,10 @@ mints one (32 random bytes) on that first link, so a pair linked by code never r
 anyone who can reach either node, banned and unapproved people included, reads every public channel over
 `/api/sync/*`; a node that already syncs with a tokenless peer mints none (that peer would start getting
 404s), and the admin Sync panel warns whenever sync is on without a token. The new node then drops the spent
-code. A refused code (expired, used, or retired by a reset) is reported in its sync panel and not retried.
+code. A repeat of a used link request from the same address, port and key (a retry after a lost answer) is
+answered only while sync is on and that peer is still listed; once an admin has turned sync off or removed
+the peer, the spent code gets the same 403 as any used code and hands over nothing, the current token
+included. A refused code (expired, used, or retired by a reset) is reported in its sync panel and not retried.
 Admin saves can neither add a link code nor put back a spent one. Why a code rather than a request
 queue: showing the code *is* the approval, so there is nothing to spam and nothing to judge from a
 self-chosen name, and the ordinary join QR (on a poster, in a photo) can never link a node.

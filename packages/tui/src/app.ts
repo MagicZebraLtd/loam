@@ -11,6 +11,7 @@ import { HOST_ACK_VERSION, type HostStatus } from "@loam/schema";
 import { type Line, lineWidth, text } from "./ansi.js";
 import { createKeyReader, isChar, type Key } from "./keys.js";
 import { createKioskGuard, hashKioskPassword, KIOSK_PASSWORD_MIN_LENGTH, verifyKioskPassword } from "./kiosk.js";
+import { localOrigin } from "./local-link.js";
 import { type Modal, modalKey, modalLines, textField } from "./modal.js";
 import { activityScreen } from "./screens/activity.js";
 import { debugScreen } from "./screens/debug.js";
@@ -96,6 +97,12 @@ export function createTui(options: TuiOptions): Tui {
     get status() {
       return status;
     },
+    get screen() {
+      return screen.id;
+    },
+    get modal() {
+      return modal;
+    },
     state,
     get settings() {
       return settings;
@@ -125,7 +132,9 @@ export function createTui(options: TuiOptions): Tui {
       const parts = [key ? `k=${key}` : "", invite ? `i=${invite.code}` : ""].filter(Boolean);
       return `${view.joinUrl()}${parts.length ? `#${parts.join("&")}` : ""}`;
     },
-    localUrl: () => `http://localhost:${status.port}`,
+    // The port and an address the node listens on, never the advertised port (CLIENT_PORT can set it apart)
+    // nor `localhost` (it can resolve to [::1] first, where another account could listen and read the code).
+    localUrl: () => localOrigin(options.launch.listenHost, options.launch.listenPort),
     saveSettings(next) {
       // Kept in memory only once it is on disk, so the screen never shows a setting that wasn't saved.
       try {

@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cryptoMock, resetCryptoMock, resetSecureStoreMock, secureStoreMock } from '@/test-utils/mocks';
+import {
+  clearSecureStoreFailure,
+  cryptoMock,
+  failSecureStoreItem,
+  resetCryptoMock,
+  resetSecureStoreMock,
+  secureStoreMock,
+} from '@/test-utils/mocks';
 
 const LEGACY_KEY_ITEM = 'loam-db-encryption-persistent-key';
 
@@ -34,7 +41,7 @@ vi.mock('expo-file-system/legacy', () => ({
 
 const HINT = 'file:///data/files/loam/.loam-db-mode-hint';
 
-const { detectPreviousNetwork, loadSetupRecord, prepareNewNetwork, saveSetupRecord } = await import('./new-network');
+const { clearSetupRecord, detectPreviousNetwork, loadSetupRecord, prepareNewNetwork, saveSetupRecord } = await import('./new-network');
 const { getDbEncryptionMode, registerDbEncryption, resolveDbKey, setDbEncryptionMode, setPassphraseCandidate, setPendingNewNetwork } =
   await import('./db-encryption');
 
@@ -86,6 +93,15 @@ describe('setup record', () => {
     expect(await loadSetupRecord()).toBeUndefined();
     await saveSetupRecord({ preset: 'private', nodeName: 'Camp', connection: 'wifi' });
     expect(await loadSetupRecord()).toEqual({ preset: 'private', nodeName: 'Camp', connection: 'wifi' });
+  });
+
+  it('is forgotten by clearSetupRecord, and a failed delete never throws', async () => {
+    await saveSetupRecord({ preset: 'private', nodeName: 'Camp', connection: 'wifi' });
+    await clearSetupRecord();
+    expect(await loadSetupRecord()).toBeUndefined();
+    failSecureStoreItem('loam.setup');
+    await expect(clearSetupRecord()).resolves.toBeUndefined();
+    clearSecureStoreFailure('loam.setup');
   });
 });
 

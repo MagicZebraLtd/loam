@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.webkit.CookieManager
 import android.webkit.WebStorage
 import androidx.webkit.WebStorageCompat
 import androidx.webkit.WebViewFeature
@@ -18,6 +19,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Coded exception surfaced to JS with an explicit `ERR_HOTSPOT_*` code. The JS side maps the code to the
@@ -161,26 +163,94 @@ class LoamHotspotModule : Module() {
       }
     }
 
-    // The host no longer loads localhost. Use the WebView's site cleanup API where available so the
-    // old IndexedDB and localStorage are both covered. Older Chromium providers can still clear the
-    // old origin's IndexedDB with deleteOrigin. Don't clear all data: the current host uses 127.0.0.1.
-    Function("deleteWebOriginData") { origin: String ->
+    // Delete one origin's WebView storage: at launch the old localhost origin's (the host no longer loads
+    // it), where only that origin may go. Use the WebView's site cleanup API where available so IndexedDB
+    // and localStorage are both covered; where it is missing, or refuses the site (an IP literal or a
+    // single-label host may not count as one), deleteOrigin still clears the origin's IndexedDB. Never all
+    // data: only the origin asked for. Resolves once the delete has finished (deleteOrigin has no callback,
+    // so right after it); never rejects.
+    AsyncFunction("deleteWebOriginData") { origin: String, promise: Promise ->
       Handler(Looper.getMainLooper()).post {
         try {
           val storage = WebStorage.getInstance()
           if (WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
-            WebStorageCompat.deleteBrowsingDataForSite(storage, origin) {}
+            try {
+              WebStorageCompat.deleteBrowsingDataForSite(storage, origin) { promise.resolve() }
+            } catch (error: Throwable) {
+              Log.w(TAG, "Couldn't delete a WebView site's data; deleting the origin's storage instead", error)
+              storage.deleteOrigin(origin)
+              promise.resolve()
+            }
           } else {
             storage.deleteOrigin(origin)
+            promise.resolve()
           }
         } catch (error: Throwable) {
-          Log.w("LoamHotspot", "Couldn't delete an earlier WebView origin's storage", error)
+          Log.w(TAG, "Couldn't delete a WebView origin's storage", error)
+          promise.resolve()
+        }
+      }
+    }
+
+    // Delete everything the WebView holds after an Emergency Reset: every cookie, and all web storage
+    // (localStorage, IndexedDB, caches). The WebView only ever shows LOAM, so nothing else is lost, and no
+    // per-site call is needed whose handling of an IP-literal origin is uncertain. Resolves exactly once,
+    // after both parts have finished or failed; never rejects. Logs carry no URL.
+    AsyncFunction("deleteAllWebData") { promise: Promise ->
+      Handler(Looper.getMainLooper()).post {
+        val settled = AtomicBoolean(false)
+        val remaining = AtomicInteger(2)
+        fun partFinished(part: AtomicBoolean) {
+          if (part.compareAndSet(false, true) && remaining.decrementAndGet() == 0 && settled.compareAndSet(false, true)) {
+            promise.resolve()
+          }
+        }
+
+        val cookiesFinished = AtomicBoolean(false)
+        try {
+          val cookies = CookieManager.getInstance()
+          cookies.removeAllCookies { _ ->
+            try {
+              cookies.flush()
+            } catch (error: Throwable) {
+              Log.w(TAG, "Couldn't flush the WebView's cookie store", error)
+            }
+            partFinished(cookiesFinished)
+          }
+        } catch (error: Throwable) {
+          Log.w(TAG, "Couldn't delete the WebView's cookies", error)
+          partFinished(cookiesFinished)
+        }
+
+        val storageFinished = AtomicBoolean(false)
+        try {
+          val storage = WebStorage.getInstance()
+          if (WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
+            try {
+              WebStorageCompat.deleteBrowsingData(storage) { partFinished(storageFinished) }
+            } catch (error: Throwable) {
+              Log.w(TAG, "Couldn't delete the WebView's browsing data; deleting all web storage instead", error)
+              storage.deleteAllData()
+              partFinished(storageFinished)
+            }
+          } else {
+            storage.deleteAllData()
+            partFinished(storageFinished)
+          }
+        } catch (error: Throwable) {
+          Log.w(TAG, "Couldn't delete the WebView's storage", error)
+          partFinished(storageFinished)
         }
       }
     }
 
     Function("clearMessageNotifications") {
       appContext.reactContext?.applicationContext?.let { MessageNotifications.clearAll(it) }
+    }
+
+    // One conversation's notification, taken back when the server withdraws the message it shows.
+    Function("clearMessageNotification") { conversation: String ->
+      appContext.reactContext?.applicationContext?.let { MessageNotifications.clear(it, conversation) }
     }
 
     // The conversation a message notification opened LOAM at from cold, read once: the extra is removed

@@ -59,8 +59,10 @@ class LoamHostService : Service() {
 
   override fun onTaskRemoved(rootIntent: Intent?) {
     // The user swiped the app away — stop hosting rather than keep the notification + wake lock
-    // alive for a process that's going away.
+    // alive for a process that's going away. Its message notifications go too: once the process is gone
+    // nothing can take them back when their messages are deleted or erased.
     releaseWakeLock()
+    MessageNotifications.clearAll(this)
     stopSelf()
     super.onTaskRemoved(rootIntent)
   }

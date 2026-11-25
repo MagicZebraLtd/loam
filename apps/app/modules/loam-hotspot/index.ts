@@ -191,12 +191,37 @@ export function clearMessageNotifications(): void {
 }
 
 /**
- * Delete what the app's WebView stored under `origin` (no page is loaded there). Best effort: a no-op when
- * unsupported; never throws.
+ * Remove one conversation's new-message notification (its message was deleted or changed, or the person
+ * lost the conversation). A no-op when unsupported or on a native build without the call; never throws.
  */
-export function deleteWebOriginData(origin: string): void {
+export function clearMessageNotification(conversation: string): void {
   try {
-    LoamHotspotModule?.deleteWebOriginData(origin);
+    LoamHotspotModule?.clearMessageNotification(conversation);
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
+ * Delete what the app's WebView stored under `origin`. Resolves once the delete is done (at once when
+ * unsupported). Best effort: never rejects.
+ */
+export async function deleteWebOriginData(origin: string): Promise<void> {
+  try {
+    await LoamHotspotModule?.deleteWebOriginData(origin);
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
+ * Delete everything the app's WebView stored: every cookie and all web storage (localStorage, IndexedDB,
+ * caches). Used after an Emergency Reset, since the WebView only ever shows LOAM. Resolves once the delete is
+ * done (at once when unsupported). Best effort: never rejects.
+ */
+export async function deleteAllWebData(): Promise<void> {
+  try {
+    await LoamHotspotModule?.deleteAllWebData();
   } catch {
     // Best effort.
   }

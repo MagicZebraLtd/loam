@@ -72,6 +72,8 @@ const LAUNCHER_ENV = [
   "LOAM_DB_DRIVER",
   "LOAM_HOST_TOKEN",
   "LOAM_DEV_MODE",
+  // The Android launcher's switch: the desktop keeps the profile's transport mode, so a shell can't force it.
+  "LOAM_REQUIRE_TRANSPORT_ENCRYPTION",
   "CLIENT_PORT",
   "PORT",
   "HOST",
@@ -332,6 +334,12 @@ export class NodeController {
   /** At launch: set up a network, ask for its passphrase, or start it. */
   initialize(): Promise<void> {
     return this.serialize(async () => {
+      // A discard that failed part-way, or was cut short: finish it before anything else.
+      if (this.deps.settings.read().discardPending) {
+        this.deps.log.note("warn", "Finishing the discard of a network that was being erased.");
+        await this.finishDiscard();
+        return;
+      }
       // A reset or discard that erased the network but not (yet) the host client window's copy of it: erase
       // that first, before any window could show it.
       if (this.deps.settings.read().clientCopyStale) {
@@ -827,6 +835,11 @@ export class NodeController {
       if (this.phase.phase === "running" || this.phase.phase === "starting") {
         return { ok: true, value: undefined };
       }
+      // A discard that failed part-way: finishing it is the only start there is (never the old record's boot).
+      if (this.deps.settings.read().discardPending) {
+        const discarded = await this.finishDiscard();
+        return discarded.ok ? { ok: true, value: undefined } : discarded;
+      }
       if (this.running && this.phase.phase === "failed" && this.phase.error.code === "reset_incomplete") {
         this.launcherReset = true;
         const reset = await this.resetNow().finally(() => {
@@ -887,36 +900,50 @@ export class NodeController {
         this.fail("stop_timeout", STOP_TIMEOUT);
         return { ok: false, error: STOP_TIMEOUT };
       }
-      try {
-        this.deps.secrets.destroy();
-      } catch (error) {
-        const detail = `The network's key couldn't be destroyed: ${errorDetail(error)}`;
-        this.fail("unknown", detail);
-        return { ok: false, error: detail };
-      }
-      this.freshKey = true;
       this.markClientCopyStale();
-      this.forgetLog("Starting a new network: the old one was erased, and its log with it.");
-      await this.discardClientData();
-      const left = emptyDataDir(this.deps.dataDir);
-      if (left.length > 0) {
-        const detail = `Some files in the data folder couldn't be removed: ${left.join(", ")}`;
-        this.fail("unknown", detail);
-        return { ok: false, error: detail };
-      }
-      const { network: _discarded, ...rest } = this.deps.settings.read();
       try {
-        this.deps.settings.write(rest);
+        this.deps.settings.write({ ...this.deps.settings.read(), discardPending: true });
       } catch (error) {
-        // The record would outlive the network it describes: the next launch would mint a key and boot an empty
-        // network under the old name, as if the old one had come back empty.
-        const detail = `The network's record couldn't be removed: ${errorDetail(error)}`;
+        // Unrecorded, a failure part-way would leave the old record to boot: nothing is destroyed yet.
+        const detail = `The discard couldn't be recorded, so nothing was erased: ${errorDetail(error)}`;
         this.fail("unknown", detail);
         return { ok: false, error: detail };
       }
-      this.setPhase({ phase: "setup" });
-      return { ok: true, value: undefined };
+      return this.finishDiscard();
     });
+  }
+
+  /**
+   * The destructive steps of a discard, run after its mark (`discardPending`) is on disk, and run again in full
+   * by a launch or a start that finds the mark: each is idempotent. A step that fails leaves the mark, so Try
+   * again comes back here instead of booting. The record goes last, with the mark, in one write.
+   */
+  private async finishDiscard(): Promise<HostResult<void>> {
+    this.passphrase = undefined;
+    const failed = (detail: string): HostResult<void> => {
+      this.fail("unknown", detail);
+      return { ok: false, error: detail };
+    };
+    try {
+      this.deps.secrets.destroy();
+    } catch (error) {
+      return failed(`The network's key couldn't be destroyed: ${errorDetail(error)}`);
+    }
+    this.freshKey = true;
+    this.forgetLog("Starting a new network: the old one was erased, and its log with it.");
+    await this.discardClientData();
+    const left = emptyDataDir(this.deps.dataDir);
+    if (left.length > 0) {
+      return failed(`Some files in the data folder couldn't be removed: ${left.join(", ")}`);
+    }
+    const { network: _discarded, discardPending: _pending, ...rest } = this.deps.settings.read();
+    try {
+      this.deps.settings.write(rest);
+    } catch (error) {
+      return failed(`The network's record couldn't be removed: ${errorDetail(error)}`);
+    }
+    this.setPhase({ phase: "setup" });
+    return { ok: true, value: undefined };
   }
 
   /** Emergency Reset from the host's own screen (no admin session needed, whatever `killSwitch.enabled` says). */

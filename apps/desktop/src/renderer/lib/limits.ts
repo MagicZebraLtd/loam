@@ -11,8 +11,8 @@ export const MAX_NODE_NAME = 80;
 /** `MAX_PASSPHRASE` in ipc.ts. */
 export const MAX_PASSPHRASE = 1024;
 /**
- * The shortest passphrase setup accepts. The contract allows one character, but the key is only as strong
- * as the passphrase, so a new network asks for a little more. Unlocking accepts whatever was set.
+ * The shortest passphrase setup accepts: the key is only as strong as the passphrase. `MIN_PASSPHRASE` in
+ * ipc.ts, which the main process holds a new network's passphrase to.
  */
 export const MIN_NEW_PASSPHRASE = 8;
 /** The version of the "You run this network" note, shared with every host UI through @loam/schema. */

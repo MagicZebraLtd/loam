@@ -17,7 +17,10 @@
 > identity mode (05). **Secure by default:** transport encryption is enforced and **every named profile
 > now encrypts** — `open` and `standard` both force `optional` (they differ only in intent for now; an
 > invite-token axis would split them), and `hardened` forces `required` (plus approval join, 1-hour TTL,
-> armed kill switch). Plaintext (`off`) is not any profile's posture and not an operator setting at all:
+> armed kill switch). A `hardened` network also keeps its assistant local: an Ollama or OpenAI-compatible
+> address must be this computer or the local network (`isLocalNetworkUrl`: loopback addresses, the name
+> `localhost`, RFC 1918 and link-local addresses, `.local` names, a bare host name; not a `*.localhost`
+> name, which is resolved like any other), docs/06. Plaintext (`off`) is not any profile's posture and not an operator setting at all:
 > `security.transportEncryption` accepts only `optional` / `required` (`PATCH /api/admin/config` 400s an
 > `"off"`; one found in `config.json` or a persisted DB row is coerced to `optional` with a warning). It's
 > reachable only via Developer Mode (`LOAM_DEV_MODE=1`, a read-time projection; non-production builds only

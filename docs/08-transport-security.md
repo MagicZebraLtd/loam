@@ -15,7 +15,14 @@
 > **Broken pin (2026-09-04):** if the node's handshake ever reports a key other than the one this client
 > pinned from a QR, the pin is marked *broken* (kept, not replaced) and the client gates on a fresh scan —
 > it never falls back to the advertised key or to plaintext, and a pinned client refuses plaintext fetches
-> and sockets outright. This is fail-closed by design: an on-path forger can lock a client out of that node
+> and sockets outright. One predicate, `plaintextRefused()` in `transport.ts`, decides it for fetches, the
+> socket URL, socket frames, image mode, the plaintext fallback and boot. It reads the stored pin and the
+> launcher's key directly, so it holds from page load, before `/api/bootstrap` has answered, and a pinned
+> client never uses the cookie `/api/config`. Every client path that drops the transport session tells the
+> socket owner, a socket opened with `enc=` never yields a plaintext frame, and the app closes its socket
+> and opens none while the "scan the join QR" gate shows. Host keys are put in one spelling where they
+> enter the client (`#k=`, the launcher's global, the handshake and bootstrap answers): 32 bytes, unpadded
+> base64url, unused low bits cleared. A value that is not 32 bytes counts as no key. This is fail-closed by design: an on-path forger can lock a client out of that node
 > (denial only, never disclosure), and the ways back are a real rescan of the host's current QR or
 > Settings → "erase this device". The same mechanism is what makes an Emergency Reset (which rotates the
 > host key) show a "scan the current QR" screen instead of looping.
@@ -64,45 +71,77 @@
 > a `POST /api/transport/tunnel` happened, plus coarse ciphertext size/timing — its method, path/query,
 > and body are all sealed. Still observable (unavoidably): the **bootstrap** — `GET /api/bootstrap` and
 > `POST /api/transport/handshake` run before a session exists — and the **WebSocket upgrade**
-> `GET /ws?enc=<sid>`, which exposes the session id and that a WS connection opened. Its frames are then
+> `GET /ws?enc=<sid>&cn=<random>`, which exposes the session id, the client's per-socket value and that a WS
+> connection opened. Its frames are then
 > sealed, carry a per-connection sequence + connection-bound AAD, and follow a reflection-safe
 > key-confirmation challenge (docs/20 §7). Every admitted socket also gets a content-free `{"type":"ping"}`
 > heartbeat (sealed + sequenced like any frame) on admission and every 25 s, so a client can detect a dead
 > connection (docs/20).
+> The page load is on the wire too: the HTML and the built files, in clear. Client routes live in the
+> address's fragment (`http://<node>/#/dm/<id>`), which a browser never sends, so a reload, a restored tab
+> or a phone reloading an evicted tab asks for `GET /` only, also on a plain-HTTP LAN origin where the
+> service worker can't register. An address from before routes moved into the fragment, or a link from
+> outside (`/dm/<id>`, `/privacy`), still opens: the node's app-shell fallback answers it and the client
+> rewrites the address to `/#…` in place. That first request carries the path once.
 >
-> **Response binding (`optional` mode's direct requests).** The tunnel binds each response to its request
-> inside the sealed descriptor, and sync responses are sealed under `${METHOD} ${path}#${s}`. A direct
+> **Response binding (direct requests, the tunnel and the resume).** Sync responses are sealed under
+> `${METHOD} ${path}#${s}`. A direct
 > sealed request in `optional` mode used to get its response sealed under the bare `${METHOD} ${url}`, the
 > same for every request on that route, so an on-path attacker could keep an old sealed answer and replay
-> it as the answer to a later request (stale messages, an old roster). Now the browser client puts
-> `r: 1` in the authenticated `{ s, r, b? }` envelope of every direct request, and the server then seals
-> the response under `${METHOD} ${url}#${s}#${status}`; the client opens it only under the sequence it sent
-> and the status the reply arrived with, so the outer status (outside the AEAD) can't be relabelled either.
-> A GET or HEAD can't carry a body, so its envelope (`{ s, r: 1 }`, sealed under the same request aad) rides
-> an `x-loam-seq` header and runs through the same replay window (409 on a repeat, 400 if it doesn't open).
+> it as the answer to a later request (stale messages, an old roster). Now the browser client puts `r: 2`
+> in the authenticated `{ s, r, b? }` envelope of every direct request, and the server seals the response
+> under `"loam.transport.response.v2 " + JSON.stringify([METHOD, url, s, status])`. The client opens it only
+> under the sequence it sent and the status the reply arrived with, so the outer status (outside the AEAD)
+> can't be relabelled either. A GET or HEAD can't carry a body, so its envelope (`{ s, r: 2 }`, sealed under
+> the same request aad) rides an `x-loam-seq` header and runs through the same replay window (409 on a
+> repeat, 400 if it doesn't open).
+> The tunnel does the same. Every tunnel request shares one route, so a reply sealed under the bare
+> `POST /api/transport/tunnel` aad would open as the answer to any other tunnel request on the session, and
+> the tunnel route's own refusals (a bad target, an unbound session, a replay, the rate limiter) reached the
+> caller as a flat 400. The client now sends its tunnel envelope as `{ s, r: 2, b }` and opens the reply only
+> through `openBoundResponse`: the v2 response form for its sequence and the outer status, or `encStatus2`
+> for a status of 400 and above, as on the direct path. A refusal from the tunnel route itself reaches the
+> caller with its real status (401, 409, 429). The descriptor still echoes `{ s, m, p }`, and the client
+> still checks all three before it uses the body. The server already sealed `r: 2` tunnel replies this way;
+> three tests in `apps/server/src/transport.test.ts` pin it.
 > A response to a request with no authenticated sequence (a refusal the server made before reading it: a
 > 429 from the rate limiter, a 400 or 409 for a bad envelope; or a GET whose `x-loam-seq` header was
-> stripped on the way) can't be bound to a sequence, and at that point the server doesn't know whether the
-> client asked. So it goes out sealed twice: `enc` under the bare `${METHOD} ${url}` for older clients, and
-> `encStatus` under `${METHOD} ${url}!${status}`. The current client never opens the bare `enc`, and takes
-> `encStatus` only with an error status: a replayed refusal can fail a request, which an on-path attacker
-> can do anyway, but a success can't be relabelled as an error (or the reverse), and old data never passes
-> as a success. An envelope without `r` (an older client still open in a tab across an upgrade) gets the
-> bare aad as before, so the server stays compatible; the client and server ship together because the
-> node serves the client. Sync pullers don't send `r`, and their responses stay under `#${s}` so 0.6.0
-> peers keep working; a relabelled status there can only fail a pull, since a non-2xx answer carries no
-> data the puller imports. The sealed identity resume (docs/20 §9) sends `r: 1` too, and the client
-> forgets its identity token only on a `401` that opens under `POST /api/session/resume#${s}#401`; a fake
-> `401` with `x-loam-enc: 1` (both outside the AEAD) is treated as an expired session and the token is
-> kept.
+> stripped on the way) can't be bound to a sequence, and at that point the server doesn't know whether or
+> how the client asked. So it goes out sealed three times: `enc` under the bare `${METHOD} ${url}`,
+> `encStatus` under `${METHOD} ${url}!${status}`, and `encStatus2` under
+> `"loam.transport.refusal.v2 " + JSON.stringify([METHOD, url, status])`. The current client opens only
+> `encStatus2`, and only with a status of 400 or above: a replayed refusal can fail a request, which an
+> on-path attacker can do anyway, but a success can't be relabelled as an error (or the reverse), and old
+> data never passes as a success. It never opens the bare `enc` or `encStatus`.
+> The labelled forms exist because the older forms are built from the raw request target, which a stranger
+> chooses. The router ignores a `#` and what follows it, so `POST /api/session/resume#1#401` reached the
+> resume route and had its refusal sealed under a string equal to the `r: 1` form of a 401 to a real resume.
+> Served to a member's real resume, it made their client drop its identity token. A bare `METHOD url` can
+> never start with `loam.`, and JSON keeps the fields apart, so no request target makes one form read as
+> another. The node also refuses any request whose raw target contains `#` with an unsealed 400
+> `invalid_request`, before the session lookup; a browser never sends one.
+> Older forms stay for compatibility, since the node serves the client and the two ship together. An
+> envelope with `r: 1` (a tab left open across the update) still gets `${METHOD} ${url}#${s}#${status}`,
+> and one without `r` gets the bare aad. Sync pullers don't send `r`, and their responses stay under
+> `#${s}` so 0.6.0 peers keep working; a relabelled status there can only fail a pull, since a non-2xx
+> answer carries no data the puller imports. The logout keeps the bare aad.
+> The sealed identity resume (docs/20 §9) sends `r: 2` too, and opens its reply only under the v2
+> response form, never a refusal form. The client forgets its identity token only on a `401` that opens
+> under that form for its own sequence; a fake `401` with `x-loam-enc: 1` (both outside the AEAD) is
+> treated as an expired session and the token is kept.
+> Sealed envelopes are parsed as strictly as a plain JSON body: an envelope (and so a tunnel descriptor or
+> an inner body) that carries a `__proto__` key, or a `constructor` key holding an object with a
+> `prototype` key, at any depth, gets the malformed-envelope 400.
 > Binding only helps if the client also refuses a reply with the seal stripped off. Under a live session
 > it accepts an unsealed reply only for the three refusals the node makes before it has looked the session
 > up: a `401` for a session it doesn't know, a `421` for a Host name it doesn't serve, and a `503` while an
 > Emergency Reset is in flight. Even those reach the caller as a stand-in carrying only the status and the
 > stable error code (the wire body is unauthenticated and is dropped). Every other unsealed reply is an
 > `UnsealedResponseError`. A `204` would otherwise be the one unsealed answer to a bound request, so the
-> server seals a bodyless answer to an `r: 1` request as an empty `200` (an older client still gets the
-> `204`). Images and file downloads don't use this path: a client that joined by the code fetches them
+> server seals a bodyless answer to a request that asked for a bound response (`r: 1` or `r: 2`) as an
+> empty `200` (an older client still gets the `204`). A tunnelled reply whose descriptor carries a null-body
+> status (101, 103, 204, 205, 304) is rebuilt with a null body, since a `Response` with any body for those
+> statuses throws; before, every tunnelled 204 failed (denying a join request, `POST /api/typing`). Images and file downloads don't use this path: a client that joined by the code fetches them
 > through the tunnel, and a typed-address client on an `optional` node loads them from their direct URL,
 > never through the sealed fetch.
 >
@@ -118,13 +157,25 @@
 > pin, a key-only probe handshake learns it; nothing is derived or kept). A link whose key the node doesn't
 > hold is shown as "this link's key doesn't match the node — rescan the QR at the host", with no Accept.
 > An on-path attacker who can forge the handshake *and* plant the link still gets as far as the prompt;
-> the fingerprints are what the user checks against the host's screen. **Android host WebView:** the
-> launcher injects the key it read from its own server over loopback (`window.__loamHostTransportKey`, see
+> the fingerprints are what the user checks against the host's screen. A fingerprint
+> (`transportFingerprint`) is five symbols from a set of sixteen, so 20 bits. That is enough to notice an
+> accidental mix-up, such as a code from another network, but not to resist someone who generates keys
+> until one matches; the full 32-byte key from the QR is what the client compares. **Android host WebView:** the
+> launcher injects the key it read from its own server over loopback, and only into a page whose origin is
+> `http://127.0.0.1:3000` (`window.__loamHostTransportKey`, see
 > docs/04), and the client adopts it directly over any pin, so a node with an ephemeral DB key — which
 > mints a new transport key every boot — doesn't break the host's own pin on every launch. LAN browsers
 > never get that global; for them a restarted ephemeral-key node is a real key change: pin broken → the
-> gate explains the node's key changed (for example after a restart or reset) → rescan the QR. Message
-> markdown strips any fragment with a `k=` parameter from links. The join/invite QR a client shows others
+> gate explains the node's key changed (for example after a restart or reset) → rescan the QR. A device
+> that slept through the change finds it on its socket reconnect: when `reestablishSession()` fails and the
+> pin is broken (`isHostKeyPinBroken()`), the client opens no socket under the dead session and runs the boot
+> pass again, which raises the rescan gate. Before, it stayed "Offline" over its old content until a reload.
+> The member's identity token is stored with the host key it was issued under and is only ever sent to a
+> session with that key, so a newly accepted key starts a fresh identity: a different network that comes
+> up at the same address never receives the old network's token (docs/20 §8). Message markdown drops the
+> whole fragment from a link that carries a `k=`, `a=`, `i=` or `l=` parameter (the start-up fragments
+> the client acts on), judged as the browser parses the URL, so tab, CR or LF characters, upper case or a
+> percent-encoded name can't slip one past. The join/invite QR a client shows others
 > carries `#k=` **only** from its own QR-verified session key — never the `networkConfig.transportPublicKey`
 > it learned over the plaintext bootstrap — and is suppressed outright when the advertised key contradicts
 > the client's pin. On a live tunnel session the client **never hands an unsealed reply to the caller**:
@@ -135,8 +186,10 @@
 > **Server logs.** Tunnel re-dispatches are never request-logged (a `LogController` recognises the
 > per-boot internal token), so the hidden path/query can't land in logs that outlive an Emergency Reset;
 > only the outer `POST /api/transport/tunnel` is logged, which is all the wire shows too. The request
-> serializer drops query strings from every logged URL (search terms, `?enc=` ids), and a 5xx inside the
-> tunnel is logged path-free on the outer request.
+> serializer logs the matched route's pattern (`/api/dms/:userId`), `[page]` for anything the client build
+> serves, `[unmatched]` or `[tunnelled]`, never the concrete path or its query string (conversation and
+> user ids, search terms, `?enc=` ids), and a 5xx inside the tunnel is logged path-free on the outer
+> request.
 
 
 ## The problem
@@ -210,7 +263,8 @@ unavailable, so ship one):
   show it in the UI (and optionally on the host screen). A MITM *of the protocol* (impersonating the
   host at the handshake) is already prevented by the QR-delivered key, provided the genuine client is
   running (threat 4 above is the case where it isn't); the fingerprint lets humans confirm they scanned
-  the real host and detects a swapped QR poster.
+  the real host and detects a swapped QR poster. As built it is 20 bits (see the pin rules above), so it
+  catches a careless swap, not one made with a key generated until its fingerprint matches.
 
 ### Libraries (must work in an insecure context — no WebCrypto)
 - **`@noble/curves`** (x25519), **`@noble/ciphers`** (xchacha20poly1305), **`@noble/hashes`** (hkdf) —
@@ -294,7 +348,8 @@ be renumbered/read without breaking the tag. Even a tokenless digest is a POST c
 the **response** can be bound to it: the peer seals its reply under `${method} ${path}#${seq}` (the
 request sequence; sync paths carry no query, so `path === url`), and the puller opens it with the exact
 `seq` it sent, so a captured response can't be **replayed or cross-fed** to another request on the same
-route (the tunnel binds its responses `{s,m,p}` the same way). A plaintext-fallback digest stays
+route (the tunnel binds its responses to the sequence and status in the seal, and checks `{s,m,p}` in the
+descriptor). A plaintext-fallback digest stays
 a GET (nothing to seal). **Encrypted sessions authorize
 ONLY via the sealed `tok`** — the `x-loam-sync-token` header is honoured solely on the plaintext path, so
 a captured token can't authorize an attacker's own encrypted session by being attached as a header.
