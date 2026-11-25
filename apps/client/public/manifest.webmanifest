@@ -2,6 +2,7 @@
   "name": "LOAM",
   "short_name": "LOAM",
   "description": "Local-first team chat for a nearby LOAM node.",
+  "id": "/channels",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

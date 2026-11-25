@@ -10,4 +10,13 @@ describe("web app manifest", () => {
     expect(manifest.start_url).toBe("/");
     expect(manifest.scope).toBe("/");
   });
+
+  // Without an id a browser takes the installed app's identity from start_url, which was "/channels"
+  // before routes moved into the fragment; keeping that id lets existing installs update in place
+  // instead of becoming a second app.
+  it("keeps the identity existing installations have", () => {
+    const manifest = JSON.parse(manifestText) as { id?: string; start_url: string };
+    expect(manifest.id).toBe("/channels");
+    expect(manifest.start_url).toBe("/");
+  });
 });

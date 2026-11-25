@@ -99,6 +99,11 @@ export function SearchView({
   const retentionRef = useRef({ channels, heldMessages, nodeTtlMs });
   retentionRef.current = { channels, heldMessages, nodeTtlMs };
   const seenResyncRef = useRef(resyncCount);
+  // A resync that landed while a request was out: the request's answer may predate it, so the search on
+  // screen runs again once nothing is in flight. The count is bumped from the completion path so that run
+  // sees the results this request just put on screen.
+  const resyncPendingRef = useRef(false);
+  const [deferredResyncs, setDeferredResyncs] = useState(0);
   // Whether this mount has run the search it arrived with (or found none to run).
   const arrivalDoneRef = useRef(false);
 
@@ -159,6 +164,10 @@ export function SearchView({
     } finally {
       if (inFlightRef.current === request) {
         inFlightRef.current = undefined;
+        if (resyncPendingRef.current) {
+          resyncPendingRef.current = false;
+          setDeferredResyncs((count) => count + 1);
+        }
       }
       // A later search the person started that replaced this one clears the flag when it lands.
       if (!refresh && !inFlightRef.current) {
@@ -229,19 +238,37 @@ export function SearchView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channels, nodeTtlMs]);
 
+  /** Run the search on screen again after a resync, or, with a request out, once that request has finished. */
+  function refreshAfterResync(): void {
+    if (inFlightRef.current) {
+      resyncPendingRef.current = true;
+      return;
+    }
+    if (shown?.rows.length) {
+      void run(shown.term, true);
+    }
+  }
+
   // The app finished a resync: run the search on screen again, once, so what changed while the socket was down
-  // (deletes, edits, lost access) shows. Nothing on screen, or a request already out, needs no second one.
+  // (deletes, edits, lost access) shows. Nothing on screen needs no second one.
   useEffect(() => {
     if (resyncCount === seenResyncRef.current) {
       return;
     }
     seenResyncRef.current = resyncCount;
-    if (shown?.rows.length && !inFlightRef.current) {
-      void run(shown.term, true);
-    }
+    refreshAfterResync();
     // Only on a new resync; `shown` is read as it is now.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resyncCount]);
+
+  // A resync that waited for a request in flight, now that it has finished.
+  useEffect(() => {
+    if (deferredResyncs > 0) {
+      refreshAfterResync();
+    }
+    // Only when a waiting resync is due; `shown` is read as it is now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferredResyncs]);
 
   function contextLabel(message: Message): string {
     if (message.type === "channelPost" || message.type === "channelReply") {

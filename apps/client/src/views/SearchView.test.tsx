@@ -338,6 +338,28 @@ describe("SearchView keeps its results in step with the app", () => {
     expect(requests).toHaveLength(2);
   });
 
+  it("a resync that lands while a search is out runs the search again once that one has answered", async () => {
+    let land: (response: Response) => void = () => undefined;
+    answer = () => new Promise<Response>((resolve) => (land = resolve));
+    const host = mount();
+    await flush();
+    await submit(host, "bridge");
+
+    rerender(host, { resyncCount: 1 });
+    await flush();
+    expect(requests).toHaveLength(1);
+
+    // The answer was written before the resync caught up: m1 has since been deleted, m2 edited.
+    answer = searchAnswer([post("m2", "the bridge reopened")]);
+    land(new Response(JSON.stringify({ results: [post("m1", "meet at the bridge"), post("m2", "the bridge is closed")] })));
+    await flush();
+    await flush();
+
+    expect(requests.map((request) => request.path)).toEqual(["/api/search?q=bridge", "/api/search?q=bridge"]);
+    expect(shownText(host)).not.toContain("meet at the bridge");
+    expect(shownText(host)).toContain("the bridge reopened");
+  });
+
   it("runs nothing on a resync when no results are on screen", async () => {
     const host = mount();
     await flush();

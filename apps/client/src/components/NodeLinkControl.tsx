@@ -68,11 +68,11 @@ export function NodeLinkControl({ joinUrl }: { joinUrl?: string }) {
               <p className="form-note">{t("nodeLink.note")}</p>
               <p className="form-note">{t("nodeLink.expires", { time: displayTime(shown.expiresAt) })}</p>
             </>
-          ) : (
+          ) : hostKey.key ? (
             // The join URL plus `#k=…&l=…` is past what the QR encoder fits (a long hostname, a full IPv6
-            // address), so there is nothing to scan.
+            // address), so there is nothing to scan. With no key the note above already says why.
             <p className="form-error">{t("nodeLink.addressTooLong")}</p>
-          )}
+          ) : null}
           <div className="card-actions">
             {qrSvg ? (
               <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void showCode()} type="button">

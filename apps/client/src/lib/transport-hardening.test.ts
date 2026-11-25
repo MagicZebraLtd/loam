@@ -134,6 +134,66 @@ describe("a pinned client never sends or accepts plaintext before its session ex
   });
 });
 
+describe("a pin that can't be read is not taken for no pin", () => {
+  /** Make every `localStorage.getItem` throw, as a browser that blocks site data part-way through a load. */
+  function unreadableStorage(): void {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+  }
+
+  it("before any session, an application fetch and a socket refuse; the bootstrap and the handshake still go out", async () => {
+    localStorage.setItem(PIN_KEY(), createTransportIdentity().publicKey);
+    unreadableStorage();
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(encryptedFetch("POST", "/api/messages", { body: "typed before the node answered" })).rejects.toThrow(/encrypted session/);
+    expect(() => wsUrl("ws://x/ws")).toThrow(/encrypted session/);
+    expect(handleWsFrame('{"type":"wipe"}')).toEqual({});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mayFallBackToPlaintext("optional")).toBe(false);
+
+    // The handshake, like the public bootstrap, is a plain fetch the refusal never stops.
+    const host = createTransportIdentity();
+    vi.stubGlobal("fetch", handshakeOnly(host));
+    await ensureSession("optional", host.publicKey);
+    expect(getSession()?.hostPublicKey).toBe(host.publicKey);
+  });
+
+  it("once ensureSession has finished, its outcome decides: a node that offers no session leaves plaintext", async () => {
+    unreadableStorage();
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(() => wsUrl("ws://x/ws")).toThrow(/encrypted session/);
+
+    await ensureSession("off");
+    await encryptedFetch("POST", "/api/messages", { body: "hi" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(wsUrl("ws://x/ws")).toBe("ws://x/ws");
+  });
+
+  it("once ensureSession has finished, a node that requires a key this device can't read raises the rescan gate", async () => {
+    unreadableStorage();
+    await expect(ensureSession("required")).rejects.toBeInstanceOf(TransportNeedsQrError);
+    expect(() => wsUrl("ws://x/ws")).toThrow(/encrypted session/);
+  });
+
+  it("a handshake that fails settles nothing: the plaintext fallback stays shut until a session is made", async () => {
+    unreadableStorage();
+    // Someone on the path can fail a handshake at will; that must not buy plaintext from a device that may be pinned.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 503 })));
+    const host = createTransportIdentity();
+    await expect(ensureSession("optional", host.publicKey)).rejects.toThrow();
+    expect(mayFallBackToPlaintext("optional")).toBe(false);
+    await expect(encryptedFetch("POST", "/api/messages", { body: "hi" })).rejects.toThrow(/encrypted session/);
+
+    vi.stubGlobal("fetch", handshakeOnly(host));
+    await ensureSession("optional", host.publicKey);
+    expect(getSession()?.hostPublicKey).toBe(host.publicKey);
+  });
+});
+
 describe("a socket opened under a session never takes a plaintext frame", () => {
   it("a forged handshake that breaks the pin, then a resync: the socket owner is told and a plaintext wipe frame is ignored", async () => {
     const real = createTransportIdentity();
@@ -320,11 +380,94 @@ describe("one key has one spelling", () => {
   });
 });
 
+describe("a resume answer for a session that was replaced meanwhile touches no stored identity", () => {
+  /**
+   * A node whose key can change (`node.host`). Handshakes answer as the current host; the first session's
+   * resume is held until `node.answerFirstResume(status)` seals the answer under that session's key: a 200
+   * carrying `token-a`, or a 401 refusing the token presented. Every later resume is counted and refused.
+   */
+  function heldResumeNode(initial: Host) {
+    const sessionKeys = new Map<string, string>();
+    let handshakes = 0;
+    let release: ((status: 200 | 401) => void) | undefined;
+    const node = {
+      host: initial,
+      laterResumes: 0,
+      firstResumeHeld: () => release !== undefined,
+      answerFirstResume: (status: 200 | 401) => release?.(status),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url === "/api/transport/handshake") {
+          handshakes += 1;
+          const { clientEphemeralPublic } = JSON.parse(init.body as string) as { clientEphemeralPublic: string };
+          const accepted = transportServerAccept({ hostSecret: node.host.secretKey, clientEphemeralPublic });
+          const id = `sess-${handshakes}`;
+          sessionKeys.set(id, accepted.sessionKey);
+          return new Response(JSON.stringify({ sessionId: id, hostEphemeralPublic: accepted.hostEphemeralPublic, hostPublicKey: node.host.publicKey }));
+        }
+        const sessionId = (init.headers as Record<string, string>)["x-loam-enc"]!;
+        if (url !== "/api/session/resume" || sessionId !== "sess-1" || release !== undefined) {
+          node.laterResumes += 1;
+          return new Response(null, { status: 500 });
+        }
+        const key = sessionKeys.get(sessionId)!;
+        const { s } = JSON.parse(openTransport(key, (JSON.parse(init.body as string) as { enc: string }).enc, "POST /api/session/resume")!) as { s: number };
+        const status = await new Promise<200 | 401>((resolve) => {
+          release = resolve;
+        });
+        const reply = status === 200 ? { s, m: "POST", p: "/api/session/resume", currentUser: { id: "user.a" }, token: "token-a" } : { error: "Unknown identity" };
+        const aad = `loam.transport.response.v2 ${JSON.stringify(["POST", "/api/session/resume", s, status])}`;
+        return new Response(JSON.stringify({ enc: sealTransport(key, JSON.stringify(reply), aad) }), { status, headers: { "x-loam-enc": "1" } });
+      }),
+    );
+    return node;
+  }
+
+  for (const status of [200, 401] as const) {
+    it(`a ${status} for the old session leaves the new host's record as it was`, async () => {
+      const a = createTransportIdentity();
+      const b = createTransportIdentity();
+      const node = heldResumeNode(a);
+      window.location.hash = `#k=${a.publicKey}`;
+      captureJoinKey();
+      await ensureSession("required", a.publicKey);
+      localStorage.setItem(TOKEN_KEY(), JSON.stringify({ k: a.publicKey, t: "token-a-old" }));
+      const resuming = resumeIdentity();
+      await vi.waitFor(() => expect(node.firstResumeHeld()).toBe(true));
+
+      // Meanwhile the host's WebView adopts another key, and the new host's identity is stored.
+      node.host = b;
+      (window as { __loamHostTransportKey?: unknown }).__loamHostTransportKey = b.publicKey;
+      captureJoinKey();
+      await ensureSession("required");
+      expect(getSession()?.hostPublicKey).toBe(b.publicKey);
+      const newRecord = JSON.stringify({ k: b.publicKey, t: "token-b" });
+      localStorage.setItem(TOKEN_KEY(), newRecord);
+
+      node.answerFirstResume(status);
+      if (status === 200) {
+        await resuming;
+      } else {
+        await expect(resuming).rejects.toThrow();
+      }
+
+      expect(localStorage.getItem(TOKEN_KEY())).toBe(newRecord);
+      // No tokenless mint was tried over the old session.
+      expect(node.laterResumes).toBe(0);
+    });
+  }
+});
+
 describe("a device wipe can still revoke its token", () => {
   it("a QR-pinned client whose session died: a fresh handshake, the sealed logout, and nothing of the pin or token left", async () => {
     const host = createTransportIdentity();
     window.location.hash = `#k=${host.publicKey}`;
     const sessionKeys = new Map<string, string>();
+    // The identity token each session was bound with. Only the first session mints (`token-1`); every later
+    // resume must present that token, so the logout below can only land on the original identity.
+    const boundTokens = new Map<string, string>();
     let handshakes = 0;
     const logouts: string[] = [];
     vi.stubGlobal(
@@ -346,13 +489,22 @@ describe("a device wipe can still revoke its token", () => {
         const enc = (JSON.parse(init.body as string) as { enc: string }).enc;
         if (url === "/api/session/resume") {
           const { s, b } = JSON.parse(openTransport(key, enc, "POST /api/session/resume")!) as { s: number; b: { token?: string } };
-          const reply = { s, m: "POST", p: "/api/session/resume", currentUser: { id: "user.me" }, token: b.token ?? "token-1" };
-          return new Response(JSON.stringify({ enc: sealTransport(key, JSON.stringify(reply), `loam.transport.response.v2 ${JSON.stringify(["POST", "/api/session/resume", s, 200])}`) }), {
+          const token = sessionId === "sess-1" && b.token === undefined ? "token-1" : b.token;
+          const status = token === "token-1" ? 200 : 401;
+          const reply = status === 200 ? { s, m: "POST", p: "/api/session/resume", currentUser: { id: "user.me" }, token } : { error: "Unknown identity" };
+          if (status === 200) {
+            boundTokens.set(sessionId!, "token-1");
+          }
+          return new Response(JSON.stringify({ enc: sealTransport(key, JSON.stringify(reply), `loam.transport.response.v2 ${JSON.stringify(["POST", "/api/session/resume", s, status])}`) }), {
+            status,
             headers: { "x-loam-enc": "1" },
           });
         }
         if (url === "/api/session/logout") {
           expect(openTransport(key, enc, "POST /api/session/logout")).not.toBeNull();
+          if (boundTokens.get(sessionId!) !== "token-1") {
+            return new Response(null, { status: 401 });
+          }
           logouts.push(sessionId!);
           return new Response(JSON.stringify({ enc: sealTransport(key, JSON.stringify({ ok: true }), "POST /api/session/logout") }), {
             headers: { "x-loam-enc": "1" },

@@ -1115,6 +1115,43 @@ describe("a DM to the assistant names the destination this screen shows (docs/06
     expect(host.querySelector<HTMLTextAreaElement>(".conversation .composer textarea")?.value).toBe("a question for the local model");
   });
 
+  it("a reload that answers after a live config update never puts the older settings back", async () => {
+    LiveWebSocket.sockets = [];
+    vi.stubGlobal("WebSocket", LiveWebSocket);
+    const { fetchMock } = stubAssistantNode();
+    const host = await boot(`/dm/${bot.id}`);
+    const socket = LiveWebSocket.sockets.at(-1)!;
+    socket.open();
+    await settle();
+
+    // Hold the reload's bootstrap read until the live update has landed.
+    let answerReload: (() => void) | undefined;
+    const reloadHeld = new Promise<void>((resolve) => {
+      answerReload = resolve;
+    });
+    vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+      if (String(input) === "/api/bootstrap") {
+        // The node's answer was written before the live update below.
+        const answer = await fetchMock(input, init);
+        await reloadHeld;
+        return answer;
+      }
+      return fetchMock(input, init);
+    });
+
+    await send(host, "a question for the local model");
+    const lan: Partial<NetworkConfig> = { ...local, assistantDestination: { kind: "lan" }, assistantDestinationRevision: "c".repeat(32) };
+    socket.deliver({ type: "configUpdated", networkConfig: { ...networkConfig, ...lan } });
+    await settle();
+    expect(host.querySelector(".conversation-header")?.textContent).toContain("Runs on a computer on this local network");
+
+    answerReload!();
+    await settle();
+
+    expect(host.querySelector(".conversation-header")?.textContent).toContain("Runs on a computer on this local network");
+    expect(host.querySelector(".conversation-header")?.textContent).not.toContain("chat.example.com");
+  });
+
   it("sends no revision with a DM to a person", async () => {
     const { posts } = stubAssistantNode();
     const host = await boot(`/dm/${ada.id}`);
@@ -1260,6 +1297,31 @@ describe("what this device keeps after a conversation, a wipe or a bad row (revi
       await settle();
 
       expect(await storedReads()).toEqual({ "channel:general": 100 });
+      expect(localStorage.getItem(LAST_CONVERSATION)).toBeNull();
+    });
+
+    it("deleting the last DM with someone takes their marker and the remembered path once the inbox drops them", async () => {
+      await seedCache({ messages: [dmWith("d1", peer.id, "the only DM"), dmWith("d2", troll.id, "still here")] });
+      await seedReads({ "channel:general": 100, [`dm:${peer.id}`]: 100, [`dm:${troll.id}`]: 100 });
+      localStorage.setItem(LAST_CONVERSATION, `/dm/${peer.id}`);
+      const fetchMock = stubContentNode({ "/api/users": [me, troll, peer] });
+      // The node's inbox lists both partners until the DM with `peer` is deleted; then only `troll`, whose
+      // DM this device still holds. A later inbox that leaves `troll` out still keeps them for that DM.
+      let inbox = [inboxEntry(peer.id), inboxEntry(troll.id)];
+      vi.stubGlobal("fetch", async (input: string, init?: RequestInit) =>
+        String(input) === "/api/dms" ? json({ conversations: inbox }) : fetchMock(input, init),
+      );
+
+      await boot("/settings");
+      const socket = FedWebSocket.sockets.at(-1)!;
+      socket.open();
+      await settle();
+      expect(await storedReads()).toEqual({ "channel:general": 100, [`dm:${peer.id}`]: 100, [`dm:${troll.id}`]: 100 });
+
+      inbox = [];
+      socket.deliver({ type: "messageDeleted", messageId: "d1" });
+
+      await vi.waitFor(async () => expect(await storedReads()).toEqual({ "channel:general": 100, [`dm:${troll.id}`]: 100 }));
       expect(localStorage.getItem(LAST_CONVERSATION)).toBeNull();
     });
 
@@ -1605,18 +1667,24 @@ describe("a pinned client takes its network settings through the tunnel (review 
   const bootstrapReads = (fetchMock: ReturnType<typeof vi.fn>): number =>
     fetchMock.mock.calls.filter(([input]) => String(input) === "/api/bootstrap").length;
 
+  // The fake rejects a direct read, and a boot that swallowed that rejection would still pass on the
+  // tunnelled copy alone, so the calls themselves are checked.
+  const directConfigReads = (fetchMock: ReturnType<typeof vi.fn>): number =>
+    fetchMock.mock.calls.filter(([input]) => String(input) === "/api/config").length;
+
   it("shows the tunnelled assistant destination and prunes by the tunnelled retention, not the bootstrap's", async () => {
     const host = createTransportIdentity();
     localStorage.setItem(PIN_KEY, host.publicKey);
     // The plaintext bootstrap names a destination on the host while passing the real revision through, and
     // a longer retention; the tunnelled copy is the node's own.
-    const { state } = stubTunnelNode(host, { ...online, assistantDestination: { kind: "host" }, messageTtlMs: 7 * 86_400_000 }, { ...online, messageTtlMs: 3_600_000 });
+    const { fetchMock, state } = stubTunnelNode(host, { ...online, assistantDestination: { kind: "host" }, messageTtlMs: 7 * 86_400_000 }, { ...online, messageTtlMs: 3_600_000 });
     const root = await boot(`/dm/${bot.id}`);
 
     const header = root.querySelector(".conversation-header")?.textContent ?? "";
     expect(header).toContain("Answers come from chat.example.com, an online service");
     expect(header).not.toContain("Runs on the host's computer");
     expect(state.tunnelledConfigReads).toBeGreaterThan(0);
+    expect(directConfigReads(fetchMock)).toBe(0);
     await vi.waitFor(async () => expect(await getAllRecords("sync")).toContainEqual({ id: "retention", messageTtlMs: 3_600_000 }));
   });
 
@@ -1641,6 +1709,7 @@ describe("a pinned client takes its network settings through the tunnel (review 
     expect(bootstrapReads(fetchMock)).toBe(before.bootstraps);
     expect(state.handshakes).toBe(before.handshakes);
     expect(state.resumes).toBe(before.resumes);
+    expect(directConfigReads(fetchMock)).toBe(0);
   });
 
   it("a failed tunnelled config read fails the boot; the bootstrap copy is never used instead", async () => {

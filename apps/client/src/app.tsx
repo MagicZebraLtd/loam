@@ -504,6 +504,9 @@ function LoamApp() {
   const [cachedNodeTtlMs, setCachedNodeTtlMs] = useState<number>();
   // Counts live `configUpdated` events, so the admin screen re-reads the full config it edits.
   const [configVersion, setConfigVersion] = useState(0);
+  // Bumped by every live `configUpdated`, so a config reload that was in flight when one landed drops its
+  // older answer instead of putting a stale assistant destination revision back.
+  const liveConfigGenerationRef = useRef(0);
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   // The app-level error notice. `persistent` marks a connectivity failure (kept until the next boot pass
   // succeeds or the user dismisses it); everything else is a one-off action error that dismisses itself.
@@ -1374,7 +1377,11 @@ function LoamApp() {
       if (!isTunnelActive() && plaintextRefused()) {
         return;
       }
+      const generation = liveConfigGenerationRef.current;
       const next = isTunnelActive() ? await fetchTunnelledConfigJson() : await fetchBootstrapJson();
+      if (generation !== liveConfigGenerationRef.current) {
+        return;
+      }
       setConfig((previous) => (previous ? { ...previous, networkConfig: next.networkConfig } : previous));
     } catch {
       // Unreachable or refused: a resend names the old revision and is refused again, so nothing leaks.
@@ -2450,6 +2457,7 @@ function LoamApp() {
         }
 
         if (payload.type === "configUpdated") {
+          liveConfigGenerationRef.current += 1;
           setConfigVersion((version) => version + 1);
           setConfig((previous) => {
             // A live transport-mode flip only takes effect through `ensureSession`, which runs on the
@@ -2617,12 +2625,18 @@ function LoamApp() {
       void fetchJson<unknown>("/api/dms")
         .then((payload) => {
           if (epoch === inboxEpochRef.current) {
-            setDmInbox(parseDmInboxEntries(payload));
+            const nextInbox = parseDmInboxEntries(payload);
+            setDmInbox(nextInbox);
+            // Prune as boot does: a partner neither in the inbox nor in any DM still held takes their read
+            // marker and the remembered conversation along. Nothing was dropped from the cache here, so
+            // every held DM counts.
+            const dmPeerIds = heldDmPeers(nextInbox, messagesRef.current, new Set(), currentUserIdRef.current);
+            forgetConversations((key) => isConversationGone(key, { dmPeerIds }));
           }
         })
         .catch(() => undefined);
     }, 400);
-  }, []);
+  }, [forgetConversations]);
   useEffect(() => () => window.clearTimeout(inboxRefreshTimerRef.current), []);
 
   const dmPeers = useMemo(

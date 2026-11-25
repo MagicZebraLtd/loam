@@ -1814,6 +1814,91 @@ describe("transport", () => {
           setMintSuppressed(false);
         }
       });
+
+      it("a bare token still reaches the next resume when the browser refuses to store its record", async () => {
+        const a = createTransportIdentity();
+        const node = switchableNode(a);
+        localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, a.publicKey);
+        localStorage.setItem(legacyTokenKey(), "legacy-tok");
+        // Reads work, writes fail: a full quota.
+        const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+          throw new DOMException("quota", "QuotaExceededError");
+        });
+        try {
+          captureJoinKey();
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+        } finally {
+          setItem.mockRestore();
+        }
+
+        expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "legacy-tok" }]);
+        // The bare token is gone, so a later pin change can't claim it.
+        expect(localStorage.getItem(legacyTokenKey())).toBeNull();
+      });
+
+      describe("a key stored in another spelling of the same bytes", () => {
+        const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        const PIN_KEY = (): string => `loam.transportHostKey.${window.location.origin}`;
+
+        /** The same 32-byte key with the last character's two unused low bits set. */
+        function respelled(key: string): string {
+          return key.slice(0, 42) + BASE64URL[BASE64URL.indexOf(key[42]!) | 1];
+        }
+
+        it("a respelled or padded pin is read in its one spelling, and the node's answer keeps it", async () => {
+          for (const stored of [(key: string) => respelled(key), (key: string) => `${key}=`]) {
+            resetTransportStateForTests();
+            localStorage.clear();
+            const a = createTransportIdentity();
+            switchableNode(a);
+            localStorage.setItem(PIN_KEY(), stored(a.publicKey));
+
+            expect(getCachedHostPublicKey()).toBe(a.publicKey);
+            await ensureSession("required", a.publicKey);
+            expect(isHostKeyPinBroken()).toBe(false);
+            expect(getSession()?.hostPublicKey).toBe(a.publicKey);
+          }
+        });
+
+        it("a token record whose key is respelled is still presented to that key", async () => {
+          const a = createTransportIdentity();
+          const node = switchableNode(a);
+          localStorage.setItem(PIN_KEY(), a.publicKey);
+          seedTokenRecord(respelled(a.publicKey), "tok-1");
+
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+
+          expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "tok-1" }]);
+        });
+
+        it("a bare token migrates bound to the respelled pin's one spelling", async () => {
+          const a = createTransportIdentity();
+          const node = switchableNode(a);
+          localStorage.setItem(PIN_KEY(), respelled(a.publicKey));
+          localStorage.setItem(legacyTokenKey(), "legacy-tok");
+
+          captureJoinKey();
+          expect(storedTokenRecord()).toEqual({ k: a.publicKey, t: "legacy-tok" });
+          await ensureSession("required", a.publicKey);
+          await resumeIdentity();
+          expect(node.presented).toEqual([{ hostKey: a.publicKey, token: "legacy-tok" }]);
+        });
+
+        it("a stored pin of other bytes still breaks against the node's key, and one that is not 32 bytes is absent", async () => {
+          const a = createTransportIdentity();
+          switchableNode(a);
+          localStorage.setItem(PIN_KEY(), createTransportIdentity().publicKey);
+          await expect(ensureSession("required", a.publicKey)).rejects.toBeInstanceOf(TransportNeedsQrError);
+          expect(isHostKeyPinBroken()).toBe(true);
+
+          resetTransportStateForTests();
+          localStorage.clear();
+          localStorage.setItem(PIN_KEY(), a.publicKey.slice(0, 42));
+          expect(getCachedHostPublicKey()).toBeUndefined();
+        });
+      });
     });
   });
 
@@ -2072,8 +2157,9 @@ describe("review fixes 2026-09-04 (client transport)", () => {
     });
 
     it("clearCachedHostPublicKey forgets the per-origin cached key", () => {
-      localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, "abc");
-      expect(getCachedHostPublicKey()).toBe("abc");
+      const pinned = createTransportIdentity().publicKey;
+      localStorage.setItem(`loam.transportHostKey.${window.location.origin}`, pinned);
+      expect(getCachedHostPublicKey()).toBe(pinned);
       clearCachedHostPublicKey();
       expect(getCachedHostPublicKey()).toBeUndefined();
     });

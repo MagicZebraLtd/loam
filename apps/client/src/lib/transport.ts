@@ -131,8 +131,9 @@ export function snapshotForWipe(): void {
 }
 
 /**
- * Parse a stored identity token record. Anything but a JSON object with a non-empty string `k` and `t` is
- * unreadable and counts as no token at all.
+ * Parse a stored identity token record, its `k` in its one spelling (`canonicalHostKey`), so a record an
+ * earlier release wrote with another spelling of the same key still matches that key. Anything but a JSON
+ * object with a 32-byte key `k` and a non-empty string `t` is unreadable and counts as no token at all.
  */
 function parseIdentityTokenRecord(raw: string | undefined): IdentityTokenRecord | undefined {
   if (raw === undefined) {
@@ -142,8 +143,9 @@ function parseIdentityTokenRecord(raw: string | undefined): IdentityTokenRecord 
     const value: unknown = JSON.parse(raw);
     if (value !== null && typeof value === "object") {
       const { k, t } = value as { k?: unknown; t?: unknown };
-      if (typeof k === "string" && k !== "" && typeof t === "string" && t !== "") {
-        return { k, t };
+      const key = canonicalHostKey(k);
+      if (key !== undefined && typeof t === "string" && t !== "") {
+        return { k: key, t };
       }
     }
   } catch {
@@ -187,10 +189,15 @@ function migrateLegacyIdentityToken(): void {
       return;
     }
     try {
-      const pin = localStorage.getItem(HOST_KEY_STORAGE_PREFIX + origin);
+      const pin = canonicalHostKey(localStorage.getItem(HOST_KEY_STORAGE_PREFIX + origin));
       if (token !== "" && pin && readIdentityTokenRecord() === undefined) {
         const record: IdentityTokenRecord = { k: pin, t: token };
-        localStorage.setItem(IDENTITY_TOKEN_STORAGE_PREFIX + origin, JSON.stringify(record));
+        try {
+          localStorage.setItem(IDENTITY_TOKEN_STORAGE_PREFIX + origin, JSON.stringify(record));
+        } catch {
+          // Storage refused the write: this page load keeps the token, as `storeIdentityToken` does.
+          memoryTokenRecord = { origin, record };
+        }
       }
     } finally {
       localStorage.removeItem(legacyKey);
@@ -477,9 +484,29 @@ function readStorage(key: string): string | undefined {
 export function getCachedHostPublicKey(): string | undefined {
   // The in-memory copy wins: it is set only by a scan on THIS load, so it is never staler than the stored
   // copy — and if the storage write failed, the stored copy may be a PREVIOUS key that must not outrank
-  // the one just scanned (it would break the new pin as "changed").
-  return memoryHostKey ?? readStorage(HOST_KEY_STORAGE_PREFIX + keyStorageOrigin());
+  // the one just scanned (it would break the new pin as "changed"). The stored copy is read in its one
+  // spelling, so a pin an earlier release wrote padded or with the unused bits set still matches the node.
+  if (memoryHostKey !== undefined) {
+    return memoryHostKey;
+  }
+  try {
+    return canonicalHostKey(localStorage.getItem(HOST_KEY_STORAGE_PREFIX + keyStorageOrigin()));
+  } catch {
+    pinUnreadable = true;
+    return undefined;
+  }
 }
+
+/**
+ * Set when reading the stored pin threw: this device may hold a pin it can't see, so until an `ensureSession`
+ * has gone through (`transportPolicySettled`) the client refuses plaintext as a pinned one would. Never set
+ * while storage works.
+ */
+let pinUnreadable = false;
+
+/** Set once an `ensureSession` call has gone through: from then on its outcome (`lastParams`, the session) is
+ * the policy and an unreadable pin no longer refuses plaintext by itself. A call that threw leaves it unset. */
+let transportPolicySettled = false;
 
 /** Whether the pinned key for this origin has been contradicted by the node (see `handshake`). */
 export function isHostKeyPinBroken(): boolean {
@@ -774,6 +801,9 @@ export async function ensureSession(mode: TransportEncryption, configHostKey?: s
   if (during !== before) notifyImageTransportChanged();
   try {
     await pending;
+    // Only a call that went through settles the policy: one that threw (a handshake someone on the path
+    // blocked, say) must not open the plaintext fallback to a device that may hold a pin it can't read.
+    transportPolicySettled = true;
   } finally {
     if (getImageTransportMode() !== during) notifyImageTransportChanged();
   }
@@ -874,10 +904,16 @@ export function mayFallBackToPlaintext(advertisedMode: TransportEncryption): boo
  * `/api/bootstrap` has answered and `ensureSession` has run (a slow node, a tab reloaded off the hotspot: the
  * cached conversation is on screen with a live composer by then), and a storage hiccup that left `lastParams`
  * stale can never authorise plaintext for a pinned origin. The fetch path, the socket URL, the socket frame
- * handler, the image mode, the plaintext fallback and the boot's cookie config all ask this.
+ * handler, the image mode, the plaintext fallback and the boot's cookie config all ask this. A pin whose read
+ * threw counts as a pin until an `ensureSession` has gone through (`pinUnreadable`).
  */
 export function plaintextRefused(): boolean {
-  return lastParams?.mode === "required" || getCachedHostPublicKey() !== undefined || launcherHostKey() !== undefined;
+  return (
+    lastParams?.mode === "required" ||
+    getCachedHostPublicKey() !== undefined ||
+    launcherHostKey() !== undefined ||
+    (pinUnreadable && !transportPolicySettled)
+  );
 }
 
 /** Thrown by the fetch/WebSocket entry points when the effective mode is `required` but no session exists
@@ -1049,11 +1085,16 @@ async function resumeAttempt(
   // a forgery: the outer status and the `x-loam-enc` header are outside the AEAD, so an on-path attacker
   // can fake both. Never discard the identity on one; let it propagate so the caller re-handshakes with
   // the token still stored.
+  // The module session may have been replaced while this request was out (another host key adopted). The
+  // stored record then belongs to the new session's host, so this answer may neither store nor clear it,
+  // and no fresh identity is minted over a session nothing uses any more.
+  const stillActive = session === active;
+
   if (response.status === 401) {
     if (opened === null) {
       throw new Error("Identity resume failed: 401");
     }
-    if (token !== undefined && !retriedFreshMint) {
+    if (token !== undefined && !retriedFreshMint && stillActive) {
       clearStoredIdentityToken();
       return resumeAttempt(active, init, true);
     }
@@ -1081,7 +1122,7 @@ async function resumeAttempt(
     throw new Error("Identity resume response did not match the request");
   }
 
-  if (typeof result.token === "string") {
+  if (typeof result.token === "string" && stillActive) {
     storeIdentityToken(result.token, active.hostPublicKey);
   }
   active.bound = true;
@@ -1884,6 +1925,8 @@ export function resetTransportStateForTests(): void {
   wipeServerUrlSnapshot = undefined;
   wipeHostKeySnapshot = undefined;
   memoryTokenRecord = undefined;
+  pinUnreadable = false;
+  transportPolicySettled = false;
   wsSocket = { sealed: false, gap: false };
   clearImageObjectUrls();
   imageUrlHolders.clear();

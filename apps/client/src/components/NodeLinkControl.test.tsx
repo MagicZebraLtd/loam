@@ -89,6 +89,26 @@ describe("NodeLinkControl", () => {
     expect(host.textContent).toContain("This node's address is too long for a code.");
   });
 
+  it("a shown code whose key this device no longer holds says only that, not that the address is too long", async () => {
+    const element = <NodeLinkControl joinUrl="http://192.168.0.10:3000" />;
+    const host = mount(element);
+    await act(async () => {
+      host.querySelector("button")?.click();
+      await flush();
+    });
+    expect(host.querySelector(".invite-qr svg")).not.toBeNull();
+
+    transport.hostKey = { key: undefined, suppressed: false };
+    await act(async () => {
+      render(<NodeLinkControl joinUrl="http://192.168.0.10:3000" />, host);
+      await flush();
+    });
+
+    expect(host.querySelector(".invite-qr")).toBeNull();
+    expect(host.textContent).toContain("didn't join by scanning");
+    expect(host.textContent).not.toContain("This node's address is too long for a code.");
+  });
+
   it("won't show a code from a device that can't vouch for the network's key", () => {
     transport.hostKey = { key: undefined, suppressed: false };
     const host = mount(<NodeLinkControl joinUrl="http://192.168.0.10:3000" />);
