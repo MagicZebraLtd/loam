@@ -53,8 +53,8 @@ Three kinds of process, one contract.
 | **Licence notices** | `scripts/third-party-notices.mjs desktop` → `dist/THIRD_PARTY_NOTICES.txt` | The open-source packages the bundles above inline, and Electron, each with its licence (docs/14 "Licence notices"). Electron's own `LICENSE.electron.txt` and `LICENSES.chromium.html` travel with every installer too: electron-builder puts them in the app folder on Windows and Linux, and `mac.extraResources` copies them into the Mac bundle's `Contents/Resources`. |
 
 Preloads are `.cts` and compiled to CommonJS `.cjs`: a sandboxed preload cannot be an ES module, and `electron`
-is the only module it may require. Electron 44.9.1 is pinned exactly (a bump means a native re-check); its Node
-is 24.21 and its Chromium 152, so the main process is built for `node24` and the renderer for `chrome120`.
+is the only module it may require. Electron 45.3.0 is pinned exactly (a bump means a native re-check). Its Node
+is on the 24 line, so the main process is built for `node24`, and the renderer is built for `chrome120`.
 
 ### The IPC contract
 
@@ -93,7 +93,9 @@ Electron. Operations are serialised, so a double-clicked Start cannot boot two s
 3. Pick the port: the saved one, else 3000, stepping past a taken one (up to 120 ports, so a Windows reserved block is crossed, probing the wildcard and
    both loopback addresses, a port of `cli/bin/port.js`). A saved port this computer will not allow falls back
    to 3000.
-4. Clear the env the launcher owns, then set exactly what the server reads: `NODE_ENV=production`,
+4. Clear the env the launcher owns (`LAUNCHER_ENV`, which includes `LOAM_REQUIRE_TRANSPORT_ENCRYPTION`: that
+   is the Android launcher's switch, and the desktop keeps the profile's transport mode, so a value from the
+   shell can't force it), then set exactly what the server reads: `NODE_ENV=production`,
    `LOAM_DATA_DIR`, `LOAM_CLIENT_DIST`, `PORT`, `HOST=0.0.0.0`, `LOAM_VERSION`, `LOAM_DB_ENCRYPTION_MODE`,
    `LOAM_DB_KEY` when there is one, and `LOAM_JOIN_HOST` when a saved join address is still on this computer.
    `LOAM_DB_KEY` is deleted from the env again as soon as the server has read it, so nothing the app launches
@@ -110,6 +112,19 @@ network" refuses to destroy the key or empty the folder under it), its close is 
 boots until it has finished**: the next Start waits for it again, bounded the same way. Once a given-up node
 does finish, the screen moves to Stopped by itself. Quit stays bounded on its own (`before-quit` exits after
 10 s whatever the node did).
+
+**Discarding a network finishes once it has begun.** "Start a new network" (`newNetwork()`) first writes a
+durable `discardPending` mark into `desktop.json`, before anything is reset or destroyed, and sets
+`clientCopyStale` in that same write, so a window copy a later step can't erase is erased at the launch
+after. It then asks a running node to reset, which tells the devices connected to it to purge their
+copies. That reset is an attempt: if it throws, the failure is logged and the discard goes on, so those
+devices may not have been told. Then `finishDiscard` closes the node (nothing is
+destroyed while it hasn't closed; that fails as `stop_timeout` and leaves the mark), destroys
+the key, empties the data folder and the client window's copy, and drops the network record and the mark
+in one last write. Each step can run again, and `initialize()` (a launch) and `start()` (Try again) finish
+a pending discard before anything boots. Before, a discard that failed part-way left the record in place,
+and the next launch could boot an empty network under the old name. If the mark itself can't be written,
+nothing is erased.
 
 `NODE_ENV=production` is also set at the top of `index.ts`, before the server bundle is ever imported, so the
 shipped app refuses Developer Mode exactly as the Android host does.
@@ -147,13 +162,15 @@ The mirror of the Android launcher (`apps/app/src/lib/db-encryption.ts`). A rand
 | `passphrase` (With a passphrase) | `SHA-256(passphrase + ":" + deviceSecret)`, hex | SQLCipher |
 | `persistent` (Kept in this computer's keychain) | the device secret itself | SQLCipher |
 
-The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2 and 44.9.1),
+The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2 and 44.9.1, not yet re-checked under 45.3.0),
 so an unencrypted network has no native dependency, as with the CLI. Presets pick the default: **Private**
 is `ephemeral`; **Community** and **Choose every setting myself** are `persistent`, or `passphrase` when this
 computer has no keychain.
 
 **The passphrase** is typed at Setup (minimum 8 characters) and on every start, held in memory only and dropped
-on Stop. The hash includes the device secret, so a passphrase network needs both the passphrase and the secret
+on Stop. The main process holds a new network's passphrase to the same 8-character minimum as the Setup form
+(`MIN_PASSPHRASE` in `ipc.ts`). Unlocking takes any length, so a short wrong answer is reported as a wrong
+passphrase. The hash includes the device secret, so a passphrase network needs both the passphrase and the secret
 to open. Reset removes the secret file. On Linux without a keychain, the secret was stored unprotected in
 `device-secret.key`, so someone who recovers it from flash storage and knows the passphrase can still read
 recovered database pages. Reset does not reach an earlier OS backup (Time Machine, File History, Déjà Dup).
@@ -249,17 +266,27 @@ Two windows, both created with `contextIsolation: true`, `sandbox: true`, `nodeI
 - **Host window** (960 by 760, minimum 360 by 480): the launcher's own page, from `file://`, with the host
   preload. **Closing it hides it and the network keeps running**; the tray icon (and the dock on macOS) brings it
   back. Only **Quit** stops the node (`before-quit` waits for the node to close, capped at 10 s). A second
-  launch focuses the existing window (single-instance lock, one launcher per computer user).
+  launch focuses the existing window (single-instance lock, one launcher per computer user). A crashed host
+  renderer (out of memory, a GPU reset) is reloaded, at most 3 times in 60 s (`crash-reload.ts`); past that
+  the window is destroyed, so the tray (or the dock) opens a fresh one rather than the blank one.
 - **Client window** (1100 by 820): the web client at `http://127.0.0.1:<port>/`, loopback so it never depends on
-  which network is up, with the client preload. On each new boot (a new token, maybe a new port or key) the page
-  is reloaded so the preload injects what that boot accepts. The token reaches the page only through the preload;
-  it is never in a URL, where anyone could craft one.
+  which network is up, with the client preload. On each new boot (a new token, maybe a new port or key) an open
+  page is reloaded so the preload injects what that boot accepts; an in-process reset reloads it too. When the
+  node stops (Stop, the fixed-key reset handoff, a Retry), the client window closes and its remembered origin is
+  cleared; the host window or the tray opens it again once the node runs. Nothing of LOAM's holds the port while
+  the node is stopped, so another program could take it, and a reload of the dead page would load that
+  program's page where the host's identity is stored. The token reaches the page only through the preload;
+  it is never in a URL, where anyone could craft one. The window opens at `/`, or at `/#/admin?section=llm` for
+  Settings' "Set up the assistant": the web client keeps its routes in the URL fragment, so the path is
+  always `/`.
 
 Rules for every page the app creates:
 
 - **Navigation.** `will-navigate` and `will-redirect` are refused unless it is the client window staying on its
-  own origin; a refused navigation to a web page opens in the computer's browser instead. `setWindowOpenHandler`
-  denies every new window, opening http(s) links in the browser.
+  own origin. `setWindowOpenHandler` denies every new window. A refused navigation or a window open goes to the
+  computer's browser by `windowOpenDecision` (`trust.ts`): from the client window any http(s) page, from the
+  host window only a page LOAM knows (`isKnownExternalUrl`, the rule `openExternal` follows, below), so a page
+  that got into the host shell can't send the browser anywhere.
 - **External links.** The host window may ask only for LOAM's pages: `https://loamnet.com/`, the GitHub project,
   its Ko-fi page, and pages of the running node (loopback, or this computer's addresses, on the node's port). The
   client window's links may be any http(s) page without credentials in the URL, as in a browser; other schemes
@@ -276,8 +303,8 @@ Rules for every page the app creates:
   worker's build-file cache are what persist. Both partitions are created without an HTTP cache, so pictures
   served in the clear never land on the disk either. Both are erased natively (`clearStorageData` +
   `clearCache`) on every Emergency Reset and when a network is discarded. The Android host's WebView injects
-  the same flag and runs without an HTTP cache on every encrypted network, but never clears its storage
-  natively (docs/04).
+  the same flag and runs without an HTTP cache on every encrypted network. It clears its storage natively only
+  when LOAM closes after an Emergency Reset run from the host app (docs/04).
 - **CSP.** The built host shell carries `default-src 'self'`, `script-src 'self'`, `style-src 'self'`,
   `img-src 'self' data:`, `connect-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'none'`:
   no network, no inline script. (Added at build time only; Vite's dev server injects `<style>` elements.) The web
@@ -297,7 +324,12 @@ Rules for every page the app creates:
 - **No telemetry, no calls home.** The only outbound request is the tap-only **Check for updates**: one GET to
   GitHub's latest-release API (10 s timeout, no cookies, no LOAM data; only a strict `vX.Y.Z` tag is read). The
   result says whether a newer version exists and opens the releases page in the browser. Nothing checks on
-  launch and nothing is downloaded. There is **no auto-updater, by design**: LOAM phones nowhere.
+  launch and nothing is downloaded. There is **no auto-updater, by design**: LOAM phones nowhere. The
+  installed version it compares with comes from `installedVersion()` (`updates.ts`): a tag build stamps
+  `dist/main/release-tag.txt` from `LOAM_RELEASE_TAG` (`scripts/build.mjs`, which refuses anything but
+  vX.Y.Z, -rc.N or -beta.N), and a stamp whose X.Y.Z matches the app's version names the suffix, so a release
+  candidate's check sees the final release as newer. The suffix stays out of `package.json`'s version,
+  which macOS and Windows want as plain numbers; any other build reads the app's own version.
 
 ## Joining
 
@@ -393,12 +425,16 @@ State today: **macOS builds are signed and notarized** (since 2026-10-22). Windo
   five repository secrets behind it: `CSC_LINK` (the certificate as a base64-encoded `.p12`), `CSC_KEY_PASSWORD`
   (its password), `APPLE_API_KEY` (the contents of the App Store Connect `AuthKey_XXXX.p8`, Team key, Developer
   access), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The packaging step is the only step that sees them; it
-  writes the `.p8` to a 0600 file under `RUNNER_TEMP` for notarytool and removes it after. `CSC_LINK` without
-  the API key signs but does not notarize, and the build warns. The certificate's private key lives in the
+  writes the `.p8` to a 0600 file under `RUNNER_TEMP` for notarytool and removes it after. On a manual run,
+  `CSC_LINK` without the API key signs but does not notarize, and the build warns. The certificate's private key lives in the
   owner's login keychain (created from Xcode, Settings, Accounts, Manage Certificates); the `.p8` is kept
   outside the repository. Apple's notary service took 57 minutes for the team's first submission, so the
   macOS job's timeout is 180 minutes (two architectures, two submissions).
-  **Without the secrets** (a fork, or a local `dist` with no certificate) the build ad-hoc signs the bundle
+  **On a tag the full set is required:** the packaging step fails unless `CSC_LINK` and the three App Store
+  Connect secrets are all set, because an ad-hoc signed update can't read the keychain item ("LOAM Safe
+  Storage") the signed app created, which would lock people out of an encrypted network. The API key file is
+  removed by a trap however the step ends. A manual run keeps the fallbacks below.
+  **Without the secrets** (a fork, a manual run, or a local `dist` with no certificate) the build ad-hoc signs the bundle
   (`-c.mac.identity=- -c.mac.hardenedRuntime=false`; the hardened runtime has to be off for an ad-hoc
   signature, whose missing Team ID would otherwise make dyld refuse Electron's own framework): without that,
   Apple Silicon reports a downloaded copy as "damaged" instead of offering **Open Anyway** (System Settings,
@@ -435,8 +471,10 @@ State today: **macOS builds are signed and notarized** (since 2026-10-22). Windo
   restricts unprivileged user namespaces) → `attest` (tags only; the only job with `id-token` and
   `attestations: write`; records build provenance for all five files) → `release` (tags only; the only job
   with `contents: write`; runs no repo code; writes the `.sha256` files after any signing and attaches
-  everything; a `-rc.N` or `-beta.N` tag is a GitHub pre-release). Each build job runs the desktop typecheck and
-  tests first. Signing secrets reach only the one step that needs them, never a job. The workflow has to exist
+  everything; a `-rc.N` or `-beta.N` tag is a GitHub pre-release; it shares the concurrency group
+  `github-release-<ref>` with `build-apk.yml`'s release job, so the two publish to the Release one after the
+  other instead of both creating it at once). Each build job runs the desktop typecheck and
+  tests first, and on a tag its build step passes `LOAM_RELEASE_TAG` (the update check, above). Signing secrets reach only the one step that needs them, never a job. The workflow has to exist
   in the tagged commit to fire.
 - A download is checked with `sha256sum -c LOAM-mac-arm64.dmg.sha256` and
   `gh attestation verify LOAM-mac-arm64.dmg --repo MagicZebraLtd/loam`.
@@ -444,11 +482,14 @@ State today: **macOS builds are signed and notarized** (since 2026-10-22). Windo
 
 ## Tests
 
-29 files, 202 tests, in `src/**/*.test.ts(x)` (excluded from the `tsc` builds; `vitest.config.ts` merges the
+33 files, 269 tests, in `src/**/*.test.ts(x)` (excluded from the `tsc` builds; `vitest.config.ts` merges the
 renderer's Vite config). Main-process suites start with `// @vitest-environment node`.
 
 - Pure logic: settings parsing, key derivation and the key store (with a fake `safeStorage`), the wipe-phase
-  reader, port stepping, the join URL, the update check, boot-error mapping, external-link rules, the log feed.
+  reader, port stepping, the join URL, the update check and the release-tag stamp, boot-error mapping,
+  external-link and window-open rules, the crash-reload budget, the log feed.
+- `node-controller.test.ts` also covers a discard that fails at each step and is finished by the next launch
+  or Try again.
 - `node-controller.test.ts`: every transition with a fake server, including the fixed-key reset handoff.
 - `node-controller.real.test.ts`: the same state machine against the **real** server bundle and SQLCipher driver
   under plain Node, so the launcher/kill-switch/journal contract is checked end to end. It skips until `build`
@@ -469,6 +510,8 @@ Written and tested in code and CI, but not run where they matter (the checks are
   packaged build; a **browser-downloaded signed build** launching with no Gatekeeper step on an Intel Mac.
 - The **Intel Mac build**: `native.mjs` skips its load check for a foreign architecture, and CI builds it on an
   Apple Silicon runner without running it.
+- The client window closing when the node stops, and "Set up the assistant" opening the admin page at its
+  Assistant section, are covered by unit tests only, not yet run on a packaged build.
 - **Linux without a tray.** A GNOME desktop with no tray extension shows no icon; closing the window then leaves
   the network running with no way back except launching the app again (a second launch focuses the window).
 

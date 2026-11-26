@@ -56,6 +56,15 @@ updates:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
 
+  # cli/ (the published `loamnet` package) is outside the pnpm workspace and has no lockfile, so the entry
+  # above never sees it: this one bumps its own dependency ranges.
+  - package-ecosystem: "npm"
+    directory: "/cli"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 1
+
   # The workflows pin every action to a full commit SHA (with the tag in a trailing comment), so nothing
   # moves them unless this bumps them. `directory: "/"` covers .github/workflows/*.yml.
   - package-ecosystem: "github-actions"

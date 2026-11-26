@@ -25,6 +25,12 @@ export type DesktopSettings = {
    * first, so a crash between the two can't leave it behind.
    */
   clientCopyStale?: true;
+  /**
+   * The host chose to discard the network and its destructive steps have begun: set before the first of them,
+   * dropped together with `network` by the last. A launch or a start that finds it finishes the discard before
+   * anything boots, so a failure part-way can't boot an empty network under the old record.
+   */
+  discardPending?: true;
 };
 
 export const SETTINGS_FILE = "desktop.json";
@@ -69,6 +75,9 @@ export function parseSettings(raw: unknown): DesktopSettings {
   }
   if (value.clientCopyStale === true) {
     settings.clientCopyStale = true;
+  }
+  if (value.discardPending === true) {
+    settings.discardPending = true;
   }
   return settings;
 }

@@ -50,6 +50,7 @@ type SetDbModeHintResult = import("@/lib/db-encryption").SetDbModeHintResult;
 const PASSPHRASE_ITEM = "loam-db-encryption-passphrase";
 const PASSPHRASE_CANDIDATE_ITEM = "loam-db-encryption-passphrase-candidate";
 const PASSPHRASE_SET_ITEM = "loam-db-encryption-passphrase-set";
+const DEVICE_SECRET_ITEM = "loam-db-encryption-device-secret";
 
 function sha256Hex(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
@@ -300,6 +301,48 @@ describe("registerDbEncryption", () => {
       await flushMicrotasks();
 
       expect(channel.posted).toEqual([{ name: "loam-db-key-response", payload: { mode: "error" } }]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("mints no device secret and answers nothing until the wait it is given has settled", async () => {
+    await setDbEncryptionMode("persistent");
+    let finishClear!: () => void;
+    const clearRunning = new Promise<void>((resolve) => {
+      finishClear = resolve;
+    });
+    const channel = makeFakeChannel();
+    const cleanup = registerDbEncryption(channel, { waitBeforeKeyResolve: () => clearRunning });
+    try {
+      channel.emit("loam-db-key-request", { requestId: "after-reset" });
+      await flushMicrotasks();
+      expect(channel.posted).toEqual([]);
+      expect(await secureStoreMock.getItemAsync(DEVICE_SECRET_ITEM)).toBeNull();
+
+      finishClear();
+      await flushMicrotasks();
+      const secret = await secureStoreMock.getItemAsync(DEVICE_SECRET_ITEM);
+      expect(secret).toEqual(expect.any(String));
+      expect(channel.posted).toEqual([
+        { name: "loam-db-key-response", payload: { mode: "persistent", key: secret, requestId: "after-reset" } },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("still answers when the wait it is given rejects", async () => {
+    await setDbEncryptionMode("persistent");
+    const channel = makeFakeChannel();
+    const cleanup = registerDbEncryption(channel, {
+      waitBeforeKeyResolve: () => Promise.reject(new Error("clear failed")),
+    });
+    try {
+      channel.emit("loam-db-key-request", { requestId: "r1" });
+      await flushMicrotasks();
+      expect(channel.posted).toHaveLength(1);
+      expect((channel.posted[0]!.payload as { mode: string }).mode).toBe("persistent");
     } finally {
       cleanup();
     }

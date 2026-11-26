@@ -159,13 +159,19 @@ export type DesktopState = DesktopPhase & {
 
 export const MAX_NODE_NAME = 80;
 export const MAX_PASSPHRASE = 1024;
+/**
+ * The shortest passphrase the main process accepts for a new network, as Setup asks (`MIN_NEW_PASSPHRASE` in
+ * the renderer). Unlocking takes any length: a short mistyped answer should be told it didn't open the
+ * network, like any other wrong one, not that the request was malformed.
+ */
+export const MIN_PASSPHRASE = 8;
 
 export const SetupRequestSchema = z
   .object({
     nodeName: z.string().max(MAX_NODE_NAME),
     preset: z.enum(SETUP_PRESETS as unknown as [SetupPreset, ...SetupPreset[]]),
     encryption: DbEncryptionModeSchema,
-    passphrase: z.string().min(1).max(MAX_PASSPHRASE).optional(),
+    passphrase: z.string().min(MIN_PASSPHRASE).max(MAX_PASSPHRASE).optional(),
   })
   .refine((request) => (request.encryption === "passphrase") === (request.passphrase !== undefined), {
     message: "A passphrase is required exactly when encryption is 'passphrase'.",
@@ -194,8 +200,12 @@ export const CopyRequestSchema = z.object({ text: z.string().max(4096) });
 /** Which page of the web client to open: its first page, or the admin page's assistant section. */
 export const OpenClientRequestSchema = z.object({ page: z.enum(["home", "assistant"]).optional() });
 export type OpenClientRequest = z.infer<typeof OpenClientRequestSchema>;
-/** The path each `OpenClientRequest.page` loads; the main process allows nothing else. */
-export const CLIENT_PAGE_PATHS: Record<NonNullable<OpenClientRequest["page"]>, string> = { home: "/", assistant: "/admin#admin-llm" };
+/**
+ * The address each `OpenClientRequest.page` loads after the origin; the main process allows nothing else. The
+ * web client keeps its route in the fragment (`/#/admin?section=llm`, its lib/location.tsx), so the path is
+ * always `/`.
+ */
+export const CLIENT_PAGE_PATHS: Record<NonNullable<OpenClientRequest["page"]>, string> = { home: "/", assistant: "/#/admin?section=llm" };
 export const OpenExternalRequestSchema = z.object({ url: z.string().url().max(2048) });
 export const MakeAdminRequestSchema = z.object({ userId: IdSchema });
 export const RevokeCodeRequestSchema = z.object({ code: z.string().max(128) });

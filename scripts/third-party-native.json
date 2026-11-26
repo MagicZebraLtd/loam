@@ -7,7 +7,7 @@
       "versionFrom": { "dir": "apps/desktop", "package": "electron" },
       "license": "MIT",
       "url": "https://github.com/electron/electron",
-      "note": "The desktop app's runtime (Chromium and Node.js). Chromium and the libraries it bundles are under their own licences, listed in the LICENSES.chromium.html file inside every Electron release download (https://github.com/electron/electron/releases); the Windows and Linux installs also carry it in the app's folder, beside Electron's LICENSE.electron.txt.",
+      "note": "The desktop app's runtime (Chromium and Node.js). Chromium and the libraries it bundles are under their own licences, listed in the LICENSES.chromium.html file inside every Electron release download (https://github.com/electron/electron/releases); every install also carries it beside Electron's LICENSE.electron.txt, in the app's folder on Windows and Linux and in the app bundle's Contents/Resources on a Mac.",
       "licenseFrom": { "dir": "apps/desktop", "package": "electron", "file": "LICENSE" }
     },
     {

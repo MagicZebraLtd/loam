@@ -11,6 +11,19 @@ All in `apps/server/src/llm.ts`, gated on a backend being enabled (`activeLlmPro
   is switched on: on-device, then the service, then Ollama; the admin screens switch exactly one on, so
   the two never disagree. One 5-minute timeout covers a streamed reply whichever backend answers
   (`streamLines` reads the body line by line for both parsers). See "The OpenAI-compatible service" below.
+- **No redirect is followed**, on any network or profile: chat requests and the model list use
+  `redirect: "manual"`, so a 3xx answer is refused, never sent on (a 307/308 keeps the POST body, and would
+  carry a member's question and DM history to an origin other than the one members were told). A refused
+  chat request logs the status and the redirect target's hostname only ("the assistant does not follow
+  redirects, so set the service's final address"), and the member sees the plain failure line; the model
+  list answers `llm_bad_response`. Configure the service's final address.
+- **What a backend can make the node hold is bounded**: a streamed line longer than 256 Ki characters
+  without a newline fails the reply; a reply is kept to `ASSISTANT_REPLY_MAX_CHARS` (64 000 characters,
+  every backend, on-device included): past it the node keeps what fits, finalises the message with
+  `ASSISTANT_REPLY_CUT_OFF_NOTE` after a blank line, ends the stream, and only then stops reading the backend
+  (an on-device reply then holds its in-flight slot until the phone's model ends, as for any early stop). A
+  model list is read through an 8 MiB cap (over it is `llm_bad_response`), and a failed response's body is
+  read for its first 4 KiB only.
 - **DM-only bot**: `createAssistantResponse()` fires when a user DMs the configured bot user (`type: "bot"`).
   There is no channel participation and no `@mention` support.
 - **Bot identity is bounded**: `llm.ollama.botId` must be an `llm.*` id (`BotIdSchema`, ≤64 chars) and
@@ -60,28 +73,46 @@ shared by every backend, so switching keeps the same DM contact.
 has to present it), and never returned: `GET /api/admin/config` and the host API's `config()` replace it
 with `apiKeySet: true|false` (`redactedConfig`). An update that leaves `apiKey` out keeps the stored key, an
 empty string clears it, and the read-only `apiKeySet` a screen echoes back is stripped by `mergeConfig`.
+**The key is only sent to the origin it was saved for:** an admin save (`PATCH /api/admin/config` or the
+host API, both `applyConfigUpdate`) that moves `baseUrl` to another origin (scheme, host and port,
+`sameUrlOrigin` in `@loam/schema`) without a new non-empty key drops the saved key; a change of path on the
+same origin keeps it. Boot keeps the drop: when the DB row gives an address and no key, a key from
+`config.json` is kept only if `config.json`'s own address has the same origin (`withoutFileKeyForOtherOrigin`
+in `app.ts`). So a key a save cleared stays cleared after a restart, and a config an older version saved
+with a `config.json` key under a DB address on another origin loses that key at boot and needs it entered
+again. The web admin's key field then says no key is saved and offers no Clear, with a
+line saying a saved key is only used with the address it was saved for; the TUI's address save says the
+key was dropped.
 The key goes in the `Authorization: Bearer` header of the two requests the node makes and nowhere else
 (a `user:pass@host` base URL would ride in the request too; the schema allows it, so don't). A service's
-error text (which can echo a key's prefix or the URL) goes to the log only: the first line of a failed
-chat request at error level with the stack, a failed model list at debug level; a member sees the plain
-`ASSISTANT_FAILURE_BODY`. A fixed-key Emergency Reset strips the key from the config snapshot it carries
+error text (which can echo a key's prefix, the URL or the member's question) goes to the debug log only, cut
+to 200 characters with key-shaped text replaced. At error level a failed chat request logs only the
+provider and HTTP status, or that the backend's stream reported an error, or that it sent a line that is
+not JSON. A failed model list logs at debug level. A member sees the plain `ASSISTANT_FAILURE_BODY`.
+A fixed-key Emergency Reset strips the key from the config snapshot it carries
 across the restart (`sanitizeConfigForRestart`, like `sync.token`) and switches the service off, so the
 key never lands in `config.json` or `.loam-wipe-phase`; the admin pastes it again afterwards.
 
 **`POST /api/admin/llm/models`** (admin only; the host API's `llmModels` for the TUI) asks a backend which
 models it offers: Ollama's `GET /api/tags` or the service's `GET /models`, 15-second timeout, names
 deduplicated, sorted and capped at 500. The request names the backend and may carry the connection to
-try (`baseUrl`, `apiKey`), so a screen can test before saving; a key left out means the stored key. A
-backend's failure is the answer, not an HTTP error: 200 with `{ ok: false, code }` where `code` is
-`llm_unreachable`, `llm_unauthorized` (401/403 from the backend), `llm_bad_response` or `llm_not_allowed`.
+try (`baseUrl`, `apiKey`), so a screen can test before saving; a key left out means the stored key, but
+only when the request leaves `baseUrl` out too or gives one with the saved address's origin (a key typed
+into the request is sent where the admin asked). A backend's failure is the answer, not an HTTP error: 200
+with `{ ok: false, code }` where `code` is `llm_unreachable`, `llm_unauthorized` (401/403 from the
+backend), `llm_bad_response` (also a redirect, or a list over 8 MiB) or `llm_not_allowed`.
 (A 401 from this node would read to the client's transport as its own session expiring.)
 
-**Hardened networks keep messages local.** Under `security.profile: "hardened"` the service may only be a
-local one (`isLocalNetworkUrl`: loopback, RFC 1918, link-local, `.local`/`.localhost`, a bare host name);
+**Hardened networks take only an address that reads as local.** Under `security.profile: "hardened"` the
+service's address must be a local one by its text (`isLocalNetworkUrl`: loopback, the name `localhost`,
+RFC 1918, link-local, `.local`, a bare host name; not a `*.localhost` name, which Node's `fetch` resolves like any other, so it can be another machine);
 `PATCH /api/admin/config` refuses a cloud `baseUrl` with `llm_cloud_not_allowed` (also when switching an
 already-cloud node to hardened), `ensureBotUser` treats a hand-edited config.json that pairs them as
 "assistant off" with a boot warning, and the models endpoint answers `llm_not_allowed`. Ollama is held to
-the same rule (its address can point anywhere); only the on-device model is local by construction.
+the same rule (its address can point anywhere); only the on-device model is local by construction. The check
+reads the address and resolves nothing, so it is not a promise that traffic stays on the local network: a
+bare host name that the system resolver maps to a public address (through a search domain, say) is
+accepted like any other.
 
 **Networks the Android app hosts reach another machine only over HTTPS.** The Android launcher sets
 `LOAM_REQUIRE_TRANSPORT_ENCRYPTION=1` (`AppOptions.requireTransportEncryption`, see docs/08), and on such a
@@ -92,7 +123,7 @@ that already had one (a hand-edited config.json, or a phone upgraded with a LAN 
 assistant off and a warning, the admin config carries the read-only `llm.refusal` code so the Assistant
 panel says why, and a save that leaves that backend exactly as it was still goes through (otherwise no
 other setting could be saved). The same holds for a hardened network's online service. The models endpoint answers `llm_unencrypted` (so the key never goes
-over plain HTTP either), and no redirect is followed (one could turn HTTPS into HTTP). An Ollama or LM Studio
+over plain HTTP either), and, as on every network, no redirect is followed (one could turn HTTPS into HTTP). An Ollama or LM Studio
 server on the LAN therefore needs HTTPS in front of it to serve a phone-hosted network.
 
 **Where it is set up.** The web admin page's Assistant panel (`LlmPanel.tsx`: a "where the assistant runs"
@@ -100,9 +131,10 @@ picker, a service preset, address, key field with Clear, Test connection that fi
 note naming the host the messages go to when the service is a cloud one); the `loamnet` TUI's Settings
 screen (the same rows, the key typed blind, the model picked from the backend's list); the desktop host's
 Settings has an Assistant card that opens the web admin page at that section (`openClient({ page:
-"assistant" })` loads `/admin#admin-llm`, the only non-home page the main process allows; the admin page
-jumps to a `#admin-<section>` hash once its config has loaded); the Android host's model manager
-(menu, AI assistant) links to the same admin section for hosts who'd rather use a laptop or a service.
+"assistant" })` loads `/#/admin?section=llm`, the only non-home page the main process allows; the admin
+page jumps to the section named in the route's `section` query once its config has loaded); the Android
+host's model manager (menu, AI assistant) links to the same admin section, by setting the WebView's
+`location.hash`, for hosts who'd rather use a laptop or a service.
 
 **Still not built:** channel participation / `@mention` (docs/29 Track 3's consent model), a token
 budget, cancellation, tool use.
@@ -114,9 +146,10 @@ assistant's own DM, whichever backend answers.
 
 - **`NetworkConfig.assistantDestination`** (in `/api/bootstrap`, `/api/config` and every `configUpdated`;
   present exactly when `enableLLMChat` is): `{ kind: "onDevice" }` for the host phone's model, `host` for a
-  loopback address (`localhost`, `*.localhost`, `127.*`, `::1`), `lan` for any other `isLocalNetworkUrl`
+  loopback address by its spelling (`localhost`, `127.*`, `::1`), `lan` for any other `isLocalNetworkUrl`
   address, and `{ kind: "online", host }` otherwise, named by its lower-cased hostname alone (no scheme,
-  port, path or credentials). `classifyBackendUrl` in `llm.ts` decides it.
+  port, path or credentials). `classifyBackendUrl` in `llm.ts` decides it. A `*.localhost` name is resolved
+  like any other name, so `http://ollama.localhost:11434` is `{ kind: "online", host: "ollama.localhost" }`.
 - **The DM header** shows it in place of presence ("Runs on the host's computer", "Answers come from
   openrouter.ai, an online service"). For an `online` destination the DM also carries a notice: what the
   member writes there and the chat's recent history go to that service under its own privacy policy, the
@@ -125,10 +158,15 @@ assistant's own DM, whichever backend answers.
   device (`loam.assistantAck.<host>` in localStorage, `lib/assistant-ack.ts`), so a switch to a different
   online service asks again, and it is cleared with the cached content by a wipe or identity change.
 - **History never crosses a destination change.** The server keeps `{ key, since }` in the config table
-  under `assistantDestination` (`key` = provider plus the endpoint: hostname, port and path, never credentials
-  or query, so two tenants on one host are two recipients; or `onDevice`). `syncAssistantDestination`
+  under `assistantDestination` (`key` = provider plus the endpoint: scheme, hostname, port and path, never
+  credentials or query, as in `openai:https://host/path`, so two tenants on one host are two recipients and
+  so are `http` and `https` on one host; or `onDevice`). A record an earlier version keyed without the
+  scheme, for the same destination, is rewritten in place under the new key and keeps its cut-off and
+  revision. `syncAssistantDestination`
   runs from `ensureBotUser` (boot and every config save) and before each reply: a key that differs from the
-  stored one records `since = now` (logged as provider and hostname only), so `llmMessagesForUser` sends only
+  stored one records a new `since` (logged as provider and hostname only): the later of the clock and one
+  more than the newest DM to or from the assistant, so a host clock that went back can't let old turns
+  through to the new destination. `llmMessagesForUser` then sends only
   DM turns written at or after `since` (still at most `MAX_LLM_CONTEXT_MESSAGES`, system prompt kept, and
   always the message being answered). Switching a local model to an online service therefore uploads
   none of the conversation members had while it was local. The first record (an upgrade, a fresh node)
@@ -137,6 +175,25 @@ assistant's own DM, whichever backend answers.
   so turning the same one off and on again keeps it too; an unreadable record counts as a change.
   `wipeAll` deletes the record (it says when the host changed the assistant), and an encrypted reset's fresh
   database starts without one.
+- **A message to the assistant names the destination its sender saw.** Beside `assistantDestination`,
+  `NetworkConfig` carries `assistantDestinationRevision` (present exactly when it is): 32 random hex
+  characters minted each time the destination changes and stored in the record above (`destinationRevision`
+  in `llm.ts`; a record an earlier version wrote gets one when it is next read). It is the same across
+  restarts and saves that keep the destination, and different after any change, including a switch away and
+  back. It is random and not derived from the destination, so a member can't use it to check a guess at the
+  service's address or path. The app sends it with every DM to the
+  assistant. When it is missing or no longer current, `POST /api/messages` refuses the DM (409
+  `assistant_destination_changed`) before anything is stored, broadcast or sent to a backend, and before the
+  busy check, so a refusal never holds the assistant's slot. The field is never stored or broadcast with the
+  message. The app keeps the draft, reads the config again (so the DM header, and the acknowledgement for an
+  online service, show the new destination first) and says the assistant now answers from somewhere else.
+  That read goes through the tunnel when the tunnel is active, and never starts a handshake or a resume; a
+  pinned client whose tunnel is down keeps the config it has.
+  This covers a switch the member's screen had not yet heard of (a reconnecting socket, a `configUpdated`
+  still in flight). The reply checks once more just before it starts: if the destination changed after the
+  DM was accepted, no backend is contacted and the reply ends with the usual failure sentence. A record
+  that can't be read (a store an incomplete reset left closed) leaves the revision out and refuses every DM
+  to the assistant. A DM to a person ignores the field, and nothing is checked while the assistant is off.
 
 ## On-device model (Android host) — optional, off by default
 
@@ -202,6 +259,13 @@ Node 18 / ABI-108 android-arm64 runtime, the same class of problem the on-device
 solve with a cross-compiled, vendored prebuild). GGUF is also the format users are most likely to find, and it's added later, not
 shipped.
 
+**Known gap: prompt tokens in the system log.** llama.rn 0.12.6, used as its prebuilt native library,
+writes each prompt's token ids to Android's system log at info level (tag `RNLlama`,
+`prompt_tokens = …`). Token ids decode to text with the model's public vocabulary, so the question and
+the chat history sent to the on-device model can be read back from logcat (`adb logcat`, a bug report).
+This holds until the library is built from source with that line removed (docs/04 "What the host phone
+logs").
+
 ## Improvements to investigate (roughly ordered)
 
 1. ~~**Provider abstraction.**~~ **Built (2026-10-22, above):** `streamChat` switches on
@@ -231,7 +295,8 @@ shipped.
 8. **Tool use / function calling** (advanced). Ollama and OpenAI-compatible backends support tools; could
    let the assistant take structured actions (post to a channel, look up local info). Gate carefully.
 9. **Safety.** Message bodies are untrusted input — harden against prompt injection (especially in
-   channel/RAG mode), cap output length, and never let the bot bypass DM/channel audience rules.
+   channel/RAG mode), and never let the bot bypass DM/channel audience rules. (Output length is capped:
+   `ASSISTANT_REPLY_MAX_CHARS`, above.)
 10. **Backend health surfacing.** Report whether the LLM backend is reachable; the current error path
     appends an "LLM error" note — extend to a clear status in the UI.
 

@@ -77,6 +77,24 @@ adb install -r apps/app/loam-host.apk
   dead SSID/QR); close and reopen it after turning tethering off and the hotspot restarts.
 - [ ] **Ephemeral mode.** Trigger the kill switch / Emergency Reset: the key is rotated and the previous
   ciphertext is unreadable afterwards.
+- [ ] **A reset from the host clears the WebView's storage.** On an unencrypted network (where the web
+  client keeps IndexedDB), open a few conversations in the host's WebView, then run Emergency Reset from the
+  host menu or Encryption settings. LOAM closes. Before launching it again, check that the WebView holds no
+  cookies, localStorage or IndexedDB (on a debug build, `adb shell run-as <pkg> ls app_webview/Default/IndexedDB`
+  and `app_webview/Default/Local Storage` show no entry for `http_127.0.0.1_3000`, and `app_webview/Default/Cookies`
+  holds no `loam_session`). Launch: setup doesn't name the erased network or offer Continue.
+  (`deleteAllWebData` compiles but has not run on a device.)
+- [ ] **A live fixed-key reset closes LOAM with the setup record gone.** On a Community (persistent) or
+  passphrase network, run Emergency Reset from the web admin page while LOAM is open. LOAM closes once the
+  device key is cleared. Launch it again: setup opens with no Continue and doesn't name the erased network.
+- [ ] **A resumed reset keeps the new setup and boots.** On a persistent network, start Emergency Reset and
+  force-stop LOAM (`adb shell am force-stop <pkg>`) after the wipe journal reaches `key-clear-ready` and before
+  the key is cleared. Launch LOAM and go through setup for a new network. The key is cleared, LOAM stays
+  open, and the new network boots under the name and settings just chosen; setup doesn't ask again on the
+  next launch.
+- [ ] **A locked start-fresh shows no `boot_timeout`.** From the locked or unreadable-database screen, choose
+  "Preserve old database & start fresh" on a passphrase network, so it ends on the passphrase prompt. Leave
+  it for more than five minutes: the lock screen's details show no `boot_timeout`.
 - [ ] **Wipe lifecycle under process kill.** On API 31+ / 34, start a wipe and force-kill the app mid-wipe
   (`adb shell am force-stop <pkg>`), then relaunch. The two-phase wipe resumes and completes: a fresh DB, the
   config (kill switch / panic token / profile / retention) survives, and there is no perpetual re-wipe loop.
@@ -90,6 +108,40 @@ adb install -r apps/app/loam-host.apk
 - [ ] **Notification permission (API 33+).** On a fresh install the `POST_NOTIFICATIONS` prompt appears
   once, while the app is in the foreground and never on top of the hotspot permission dialogs. Deny it:
   hosting still works, and the share screen notes that notifications are off.
+- [ ] **A message notification goes when its message does.** With LOAM in the background, have a second
+  device send the host's person a direct message: the notification shows its text. Delete that message
+  from the second device: the notification disappears without opening LOAM. Repeat with an edit, and
+  with a channel post in a private channel the host's person is then removed from. Then send two messages
+  in one conversation and delete only the first: the notification stays, showing the second. (The native
+  `clearMessageNotification` call has not been run on a device.)
+- [ ] **Notifications go when LOAM is swiped away.** With a message notification showing, swipe LOAM away
+  in the recent-apps screen: hosting stops and the message notification is gone. Start LOAM again with a
+  notification left from an earlier run (force-stop with `adb shell am force-stop <pkg>` while one shows):
+  it is gone once the host screen opens. (`LoamHostService.onTaskRemoved` calling
+  `MessageNotifications.clearAll` compiles but has not run on a device.)
+- [ ] **No watch bridging.** With a watch paired (Wear OS or a Galaxy Watch) and LOAM in the background,
+  have a second device send the host's person a direct message: the notification shows on the phone and
+  not on the watch. (`setLocalOnly(true)` in `MessageNotifications.show` compiles but has not run on a
+  device.)
+- [ ] **Notification taps and Back with fragment routes.** Tap a message notification from cold (LOAM not
+  running, so the conversation waits for LOAM's own page to load) and while LOAM runs: the WebView opens that
+  conversation (its address is `http://127.0.0.1:3000/#/dm/<id>` or
+  `#/channel/<id>`). Press the hardware Back button in a conversation, a thread and the admin page: each
+  goes where it did before the routes moved to the fragment, and Back on the start screen behaves as
+  before. Open the assistant settings from the model manager: the admin page opens at its Assistant
+  section.
+- [ ] **A link tapped while a model file is verified comes back to LOAM.** Start verifying a downloaded
+  model (the JS thread is busy hashing it), and meanwhile tap an outside link in a message in the host's
+  WebView. Either the link opens outside LOAM, or the outside page is stopped and LOAM loads again in the
+  WebView. The host stays admin, and the outside page never sees the host token: in a remote-debugged
+  WebView (`chrome://inspect`), `window.__loamHostDeviceToken` is undefined on any page that isn't
+  `http://127.0.0.1:3000`.
+- [ ] **Links leave the WebView only for the browser.** In a message in the host's WebView, tap an
+  `https://` link: it opens in the system browser and LOAM stays on its page. Tap an `intent:` link and a
+  `tel:` link: nothing happens (no app opens, no dialer).
+- [ ] **Leaving display mode** (still open, needs a decision). Turn on display mode, then press and hold to
+  leave it, once with Android's "ask for PIN before unpinning" on and once with it off, and once with
+  pinning refused: note whether the phone asks for its screen lock. Nothing in LOAM itself asks today.
 - [ ] **Deep links are ignored.** `adb shell am start -a android.intent.action.VIEW -d 'loam://anything'`
   opens (or keeps) the host screen and navigates nowhere else.
 - [ ] **Themed icon.** With themed icons on (Android 13+), the launcher shows the monochrome LOAM mark.
@@ -104,7 +156,7 @@ adb install -r apps/app/loam-host.apk
 
 ## 5. Desktop app (macOS / Windows / Linux)
 
-The desktop app ([docs/24](24-electron-desktop.md)) is covered by 202 Vitest tests, a CI typecheck and, for
+The desktop app ([docs/24](24-electron-desktop.md)) is covered by 269 Vitest tests, a CI typecheck and, for
 the Linux AppImage only, a packaged `--smoke` run. Everything below needs a real machine. Download the
 installers from the tag build (or run `pnpm --filter @loam/desktop dist` on the machine), start from a clean
 user account or delete the app's `LOAM` data folder first, and note the OS version, architecture and build with
@@ -160,6 +212,29 @@ desktop with a secret service (GNOME Keyring or KWallet) and one without.
   protocol=tcp` lists blocks the system denies to everyone (EACCES, not "in use"); if one covers 3000, the app
   still starts, on the first port past the block, and the TUI (`loamnet`) does the same.
 - [ ] **Windows durable writes.** The same crash and power-cut check as docs/25 O3, with the packaged app.
+- [ ] **The client window closes with the node.** With **Open LOAM** showing a conversation, press Stop: the
+  client window closes. Start the node again and reopen it from the host window or the tray: it loads LOAM
+  and the host is still admin. Repeat with a Retry from the Failed screen and with an Emergency Reset on a
+  persistent or passphrase network (the fixed-key handoff). An Off or ephemeral network's in-process reset
+  reloads the open window instead of closing it.
+- [ ] **The assistant page opens at its section.** Settings, Assistant card: the client window opens at
+  `http://127.0.0.1:<port>/#/admin?section=llm` and scrolls to the Assistant section once the admin page has
+  loaded.
+
+## 6. Web client in a real browser and `loamnet`
+
+- [ ] **A reload sends only `/`.** In a desktop browser on another machine, join a network by its QR or join
+  link, open a direct message (the address ends `/#/dm/<id>`), open the browser's network panel with
+  "Preserve log" on, and reload. The only page request is `GET /`; no request path carries the
+  conversation id. Repeat on a phone browser (remote debugging) with a plain-HTTP LAN address, where the
+  service worker doesn't register. Then type an old-style address (`http://<node>/dm/<id>`): it opens, and
+  the address bar shows `/#/dm/<id>` afterwards.
+- [ ] **`loamnet`'s admin link opens on `127.0.0.1`.** Run `npx loamnet`, press `o` (open as admin): the
+  browser opens `http://127.0.0.1:<port>#k=…&a=…` (not `localhost`) and the session becomes admin. Separately, check that a code nobody used
+  is retired: press `o`, then `p` for the phone's code, note its link without opening it, close the panel,
+  and open that link in a private window: it no longer grants admin. In plain mode
+  (`--plain`), "Open on this device" prints `http://127.0.0.1:<port>`. Start it again with `CLIENT_PORT` set
+  to a port other than `PORT`: both links use the port LOAM listens on, not `CLIENT_PORT`.
 
 ## Reporting
 

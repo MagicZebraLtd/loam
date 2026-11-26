@@ -53,6 +53,15 @@ export type OpenUrlOptions = {
   timeoutMs?: number;
 };
 
+/**
+ * `env` without LOAM's own variables, for the opener: it can start the browser itself (`xdg-open`, `start`),
+ * which would inherit them, and some are secrets (`LOAM_DB_KEY`, `LOAM_DB_KEY_MIGRATE_FROM`, `LOAM_HOST_TOKEN`).
+ */
+export function openerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // Any case: Windows reads variable names without it.
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !name.toUpperCase().startsWith("LOAM_")));
+}
+
 /** Openers hand the URL to the browser and exit at once; one still running after this long is the browser. */
 const OPENER_TIMEOUT_MS = 3_000;
 
@@ -62,7 +71,8 @@ const OPENER_TIMEOUT_MS = 3_000;
  * it can't be started, or it exits with an error (no browser to hand the URL to).
  */
 export function openUrlWith(url: string, options: OpenUrlOptions = {}): Promise<boolean> {
-  const opener = openCommand(options.platform ?? process.platform, options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const opener = openCommand(options.platform ?? process.platform, env);
   if (!opener) {
     return Promise.resolve(false);
   }
@@ -82,6 +92,7 @@ export function openUrlWith(url: string, options: OpenUrlOptions = {}): Promise<
         stdio: "ignore",
         detached: true,
         windowsVerbatimArguments: opener.verbatim === true,
+        env: openerEnv(env),
       });
       child.once("error", () => settle(false));
       child.once("exit", (code) => settle(code === 0));

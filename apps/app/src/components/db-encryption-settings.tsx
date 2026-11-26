@@ -383,6 +383,8 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        autoComplete="off"
+                        importantForAutofill="no"
                         returnKeyType="next"
                         style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
                       />
@@ -394,6 +396,8 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        autoComplete="off"
+                        importantForAutofill="no"
                         returnKeyType="done"
                         onSubmitEditing={() => void handleSavePassphrase()}
                         style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
@@ -440,6 +444,8 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        autoComplete="off"
+                        importantForAutofill="no"
                         returnKeyType="next"
                         style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}
                       />
@@ -451,6 +457,8 @@ export function DbEncryptionSettingsOverlay({ visible, onClose, channel, onEmerg
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        autoComplete="off"
+                        importantForAutofill="no"
                         returnKeyType="done"
                         onSubmitEditing={() => void handleSavePassphrase()}
                         style={[styles.textInput, { color: theme.text, borderColor: theme.textSecondary }]}

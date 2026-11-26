@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { SetupRequestSchema } from "../../shared/ipc";
+import { MIN_PASSPHRASE, SetupRequestSchema, UnlockRequestSchema } from "../../shared/ipc";
+import { MIN_NEW_PASSPHRASE } from "./limits";
 import { availableEncryption, defaultEncryption, type SetupForm, validateSetup } from "./setup-form";
 
 const keychain = { platform: "darwin" as const, keychain: true };
@@ -30,6 +31,15 @@ describe("setup form", () => {
     const result = validateSetup(form({ encryption: "passphrase", passphrase: "correct horse", confirm: "correct horse" }), keychain);
     expect(result.ok && result.request.passphrase).toBe("correct horse");
     expect(result.ok && SetupRequestSchema.safeParse(result.request).success).toBe(true);
+  });
+
+  it("holds the main process to the same 8-character minimum as the form", () => {
+    const setup = (passphrase: string) => SetupRequestSchema.safeParse({ nodeName: "", preset: "community", encryption: "passphrase", passphrase });
+    expect(setup("x".repeat(7)).success).toBe(false);
+    expect(setup("x".repeat(8)).success).toBe(true);
+    expect(MIN_PASSPHRASE).toBe(MIN_NEW_PASSPHRASE);
+    // Unlocking takes any length, so a short wrong answer is reported as a wrong passphrase.
+    expect(UnlockRequestSchema.safeParse({ passphrase: "x" }).success).toBe(true);
   });
 
   it("refuses a missing, short or mismatched passphrase", () => {

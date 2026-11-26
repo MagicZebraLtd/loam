@@ -46,12 +46,14 @@ vi.mock('@/hooks/use-theme', () => ({ useTheme: () => ({}) }));
 vi.mock('@/lib/on-device-llm', () => ({ registerOnDeviceLlm: () => () => undefined }));
 vi.mock('@/lib/save-file', () => ({ clearSharedFiles: async () => undefined, parseSaveFileMessage: () => undefined, shareReceivedFile: async () => undefined }));
 vi.mock('@/mesh/mesh-courier', () => ({ registerMeshCourier: () => () => undefined }));
+vi.mock('@/lib/reset-close', () => ({ clearWipeKeyAfterReset: vi.fn(), closeLoamAfterReset: vi.fn() }));
 vi.mock('@/lib/message-notifications', () => ({
   alertLevelForClientMessage: () => undefined,
   conversationPath: () => undefined,
   messageNotifier: {
     load: async () => 'dms',
     notice: () => false,
+    withdraw: () => false,
     setLevel: () => undefined,
     appBecameActive: () => undefined,
     clearAll: () => undefined,
@@ -125,10 +127,88 @@ describe('the host WebView addresses its server by IP literal (F-004)', () => {
     const source = readFileSync(join(__dirname, '../app/index.tsx'), 'utf8');
     expect(source).not.toMatch(/localhost/i);
     expect(source).toMatch(/const LOAM_URL = HOST_WEBVIEW_ORIGIN;/);
-    expect(source).toMatch(/originWhitelist=\{\[LOAM_URL\]\}/);
     expect(source).toMatch(/fetch\(`\$\{LOAM_URL\}\/api\/bootstrap`/);
     // Request native cleanup of the old origin on launch without navigating to it.
     expect(source).toMatch(/deleteWebOriginData\(LEGACY_HOST_WEBVIEW_ORIGIN\)/);
+  });
+});
+
+/** index.tsx with its comment lines left out, so a commented-out prop can't satisfy a check. */
+function screenCode(): string {
+  return readFileSync(join(__dirname, '../app/index.tsx'), 'utf8')
+    .split('\n')
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join('\n');
+}
+
+describe('every WebView navigation reaches the screen', () => {
+  it("lets every URL past the WebView's own whitelist, which would otherwise hand it to Android unasked", () => {
+    // react-native-webview sends a URL that fails `originWhitelist` straight to `Linking.openURL`, never to
+    // `onShouldStartLoadWithRequest`; only `['*']` lets the screen decide every navigation.
+    const code = screenCode();
+    expect(code.match(/originWhitelist=/g)).toHaveLength(1);
+    expect(code).toMatch(/originWhitelist=\{\['\*'\]\}/);
+  });
+
+  it('decides with navigationDecision, and opens the system browser only for an external address', () => {
+    const code = screenCode();
+    const handler = code.slice(code.indexOf('onShouldStartLoadWithRequest={'));
+    const body = handler.slice(0, handler.indexOf('onError='));
+    expect(body).toMatch(/navigationDecision\(request\.url\)/);
+    expect(body).toMatch(/if \(decision === 'external'\) \{\s*void Linking\.openURL\(request\.url\)/);
+    expect(body).toMatch(/return decision === 'load';/);
+    expect(body.match(/Linking\.openURL/g)).toHaveLength(1);
+  });
+});
+
+describe("a waiting conversation opens only on LOAM's page", () => {
+  it('asks pendingConversationAfterLoad with the loaded page, and keeps what it says to keep', () => {
+    const code = screenCode();
+    const onLoadEnd = code.slice(code.indexOf('onLoadEnd={'), code.indexOf('onNavigationStateChange='));
+    expect(onLoadEnd).toMatch(/pendingConversationAfterLoad\(pendingConversationRef\.current, nativeEvent\.url\)/);
+    expect(onLoadEnd).toMatch(/pendingConversationRef\.current = keep;/);
+    expect(onLoadEnd).toMatch(/if \(open\) \{\s*openConversationInWebView\(open\);/);
+  });
+});
+
+describe('the re-bootstrap after a reset the web client reports', () => {
+  it('waits out a device-key clear that is under way or failed', () => {
+    const code = screenCode();
+    const wipe = code.slice(code.indexOf("parsed.type === 'loam-wipe'"));
+    const timer = wipe.slice(wipe.indexOf('setTimeout('), wipe.indexOf('retryBootstrap();'));
+    expect(timer).toMatch(/if \(!mayRebootstrapAfterWipe\(wipeKeyClearStateRef\.current\)\) \{\s*return;\s*\}/);
+  });
+
+  it('remembers which kind of clear main.js asked for, so Retry repeats the same kind', () => {
+    const code = screenCode();
+    expect(code).toMatch(/const onWipeRestart = \(payload: unknown\) => \{\s*wipeKeyClearKindRef\.current = wipeRestartKind\(payload\);/);
+    // Every Retry calls the same function, which reads the remembered kind.
+    expect(code.match(/attemptWipeKeyClear\(\)/g)!.length).toBeGreaterThanOrEqual(3);
+    expect(code).not.toMatch(/attemptWipeKeyClear\([^)]/);
+  });
+});
+
+describe('only one device-key clear runs at a time', () => {
+  it('joins a clear already in flight instead of starting a second one', () => {
+    // A second `loam-wipe-restart` (main.js asks again after its wait timed out) or a Retry while a clear
+    // runs must not start another clear: that one could delete the secret minted once the first one acks.
+    const code = screenCode();
+    expect(code).toMatch(/const \[wipeKeyClearFlight\] = useState\(\(\) => createSingleFlight<void>\(\)\);/);
+    expect(code).toMatch(/const attemptWipeKeyClear = \(\) =>\s*wipeKeyClearFlight\.run\(async \(\) => \{\s*const kind = wipeKeyClearKindRef\.current;/);
+    // The only call of the clear is inside the joined work.
+    const body = code.slice(code.indexOf('const attemptWipeKeyClear = '));
+    const work = body.slice(0, body.indexOf('\n    });\n') + 1);
+    expect(work).toMatch(/clearWipeKeyAfterReset\(/);
+    expect(code.match(/clearWipeKeyAfterReset\(/g)).toHaveLength(1);
+  });
+
+  it('answers a database key request only once no clear is running', () => {
+    // A late `loam-wipe-restart` can start a clear just before main.js asks for a key; minting the device
+    // secret while that clear runs would let the clear delete it.
+    const code = screenCode();
+    expect(code).toMatch(
+      /registerDbEncryption\(nodejs\.channel, \{ waitBeforeKeyResolve: wipeKeyClearFlight\.settled \}\)/,
+    );
   });
 });
 

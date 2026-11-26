@@ -7,6 +7,7 @@ export { createTui, MIN_COLUMNS, MIN_ROWS, SCREENS, type Tui } from "./app.js";
 export { clean, plain, renderLine, textWidth, type Line } from "./ansi.js";
 export { parseKeys, type Key } from "./keys.js";
 export { createKioskGuard, hashKioskPassword, verifyKioskPassword } from "./kiosk.js";
+export { localLinkHost, localOrigin } from "./local-link.js";
 export { createLogBook, type LogBook, type LogEntry } from "./log.js";
 export { qrBlock } from "./qr.js";
 export { cliSettingsPath, parseCliSettings, readCliSettings, writeCliSettings, type CliSettings } from "./settings.js";

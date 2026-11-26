@@ -1,6 +1,51 @@
-import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { closeAfterReset, requestEmergencyReset, resetOutcome } from './emergency-reset';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  closeAfterReset,
+  finishWipeKeyClear,
+  mayRebootstrapAfterWipe,
+  requestEmergencyReset,
+  resetOutcome,
+  wipeKeyClearStateAfter,
+  wipeRestartKind,
+  type WipeKeyClearSteps,
+} from './emergency-reset';
+
+// What `closeLoamAfterReset` (reset-close.ts) wires in: the native close and web-storage delete, the share
+// cache and the setup record. Each records its step, so the tests can check what happened before the close.
+const steps = vi.hoisted(() => ({ order: [] as string[], webData: undefined as undefined | (() => Promise<void>) }));
+vi.mock('../../modules/loam-hotspot', () => ({
+  closeApp: vi.fn(() => {
+    steps.order.push('close');
+  }),
+  deleteAllWebData: vi.fn(async () => {
+    steps.order.push('web-data');
+    await steps.webData?.();
+  }),
+  deleteWebOriginData: vi.fn(async (origin: string) => {
+    steps.order.push(`web-data ${origin}`);
+  }),
+}));
+vi.mock('./save-file', () => ({
+  clearSharedFiles: vi.fn(async () => {
+    steps.order.push('shared-files');
+  }),
+}));
+vi.mock('./new-network', () => ({
+  clearSetupRecord: vi.fn(async () => {
+    steps.order.push('setup-record');
+  }),
+}));
+
+const { HOST_WEB_DATA_TIMEOUT_MS, clearWipeKeyAfterReset, closeLoamAfterReset } = await import('./reset-close');
+
+beforeEach(() => {
+  steps.order.length = 0;
+  steps.webData = undefined;
+});
 
 /** A bridge double: records posts, lets the test answer like main.js would. */
 function fakeChannel() {
@@ -104,7 +149,15 @@ describe('closeAfterReset', () => {
           resolve();
         };
       });
-    const pending = closeAfterReset(clear, () => order.push('close'));
+    const pending = closeAfterReset(
+      {
+        clearSharedFiles: clear,
+        clearSetupRecord: async () => undefined,
+        deleteHostWebData: async () => undefined,
+        closeApp: () => order.push('close'),
+      },
+      1000,
+    );
     await Promise.resolve();
     expect(order).toEqual([]);
     release();
@@ -112,9 +165,216 @@ describe('closeAfterReset', () => {
     expect(order).toEqual(['clear', 'close']);
   });
 
-  it('still closes LOAM when the clear fails', async () => {
+  it('clears the setup record before closing, after the shared files', async () => {
+    const order: string[] = [];
+    await closeAfterReset(
+      {
+        clearSharedFiles: async () => void order.push('files'),
+        clearSetupRecord: async () => void order.push('setup-record'),
+        deleteHostWebData: async () => void order.push('web-data'),
+        closeApp: () => order.push('close'),
+      },
+      1000,
+    );
+    expect(order).toEqual(['files', 'setup-record', 'web-data', 'close']);
+  });
+
+  it('still closes LOAM when every step fails', async () => {
     const close = vi.fn();
-    await closeAfterReset(() => Promise.reject(new Error('cache gone')), close);
+    const fail = () => Promise.reject(new Error('gone'));
+    await closeAfterReset(
+      {
+        clearSharedFiles: fail,
+        clearSetupRecord: fail,
+        deleteHostWebData: () => {
+          throw new Error('no module');
+        },
+        closeApp: close,
+      },
+      1000,
+    );
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('closeLoamAfterReset (both reset paths)', () => {
+  it("forgets the network's name and deletes all of the host WebView's storage before LOAM closes", async () => {
+    // A reset used to leave `loam.setup` behind (setup then offered "Continue <name>") and relied on the page
+    // hearing the `wipe` frame to purge its own storage. The WebView only ever shows LOAM, so all of it goes,
+    // not one origin's share that the WebView may not clear for an IP-literal site.
+    await closeLoamAfterReset();
+    expect(steps.order.at(-1)).toBe('close');
+    expect(steps.order).toEqual(['shared-files', 'setup-record', 'web-data', 'close']);
+  });
+
+  it('waits for the WebView storage delete before closing', async () => {
+    let release!: () => void;
+    steps.webData = () => new Promise<void>((resolve) => (release = resolve));
+    const pending = closeLoamAfterReset();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+    expect(steps.order).toContain('web-data');
+    expect(steps.order).not.toContain('close');
+    release();
+    await pending;
+    expect(steps.order.at(-1)).toBe('close');
+  });
+
+  it('still closes LOAM when the WebView storage delete never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      steps.webData = () => new Promise<void>(() => undefined);
+      const pending = closeLoamAfterReset();
+      await vi.advanceTimersByTimeAsync(HOST_WEB_DATA_TIMEOUT_MS - 1);
+      expect(steps.order).not.toContain('close');
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(steps.order.at(-1)).toBe('close');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is how the host-menu reset and the device-key clear both close LOAM', () => {
+    const screen = readFileSync(join(__dirname, '../app/index.tsx'), 'utf8');
+    const overlay = readFileSync(join(__dirname, '../components/emergency-reset.tsx'), 'utf8');
+    const wiring = readFileSync(join(__dirname, 'reset-close.ts'), 'utf8');
+    // `attemptWipeKeyClear` (index.tsx) goes through the kind-aware sequence, which closes through
+    // `closeLoamAfterReset` on a live reset; the reset screen closes through it directly.
+    expect(screen).toMatch(
+      /const attemptWipeKeyClear = \(\) =>\s*wipeKeyClearFlight\.run\(async \(\) => \{\s*const kind = wipeKeyClearKindRef\.current;[\s\S]*?await clearWipeKeyAfterReset\(\s*kind,/,
+    );
+    expect(screen).not.toMatch(/closeLoamAfterReset\(|import \{[^}]*closeLoamAfterReset/);
+    expect(wiring).toMatch(/closeLoam: closeLoamAfterReset/);
+    expect(overlay.match(/closeLoamAfterReset\(\)/g)).toHaveLength(2);
+    for (const source of [screen, overlay]) {
+      expect(source).not.toMatch(/closeAfterReset\(/);
+      expect(source).not.toMatch(/finishWipeKeyClear\(/);
+    }
+  });
+});
+
+describe('which device-key clear main.js asks for', () => {
+  it('reads a resume only from an explicit `resume: true`', () => {
+    expect(wipeRestartKind({ resume: true })).toBe('resume');
+    for (const payload of [undefined, null, {}, { resume: false }, { resume: 'true' }, { resume: 1 }, 'resume', true]) {
+      expect(wipeRestartKind(payload), JSON.stringify(payload)).toBe('live');
+    }
+  });
+});
+
+/** Steps that record their order, with a key clear that answers `result`. */
+function keyClearSteps(result: { ok: boolean; error?: string } | (() => Promise<{ ok: boolean; error?: string }>)) {
+  const order: string[] = [];
+  const record = (name: string) => async () => void order.push(name);
+  const stepsUnderTest: WipeKeyClearSteps = {
+    clearSetupRecord: record('setup-record'),
+    clearSharedFiles: record('shared-files'),
+    deleteHostWebData: record('web-data'),
+    clearKeyAndAck: async () => {
+      order.push('key-clear');
+      return typeof result === 'function' ? result() : result;
+    },
+    closeLoam: record('close'),
+  };
+  return { order, steps: stepsUnderTest };
+}
+
+describe('finishWipeKeyClear', () => {
+  it('on a live reset, forgets the setup record first, then clears the key, then closes LOAM', async () => {
+    const { order, steps: s } = keyClearSteps({ ok: true });
+    await expect(finishWipeKeyClear('live', s, 1000)).resolves.toEqual({ ok: true });
+    expect(order).toEqual(['setup-record', 'key-clear', 'close']);
+  });
+
+  it('on a live reset whose key clear fails, neither closes nor claims success, and the record stays gone', async () => {
+    const { order, steps: s } = keyClearSteps({ ok: false, error: 'key still there' });
+    await expect(finishWipeKeyClear('live', s, 1000)).resolves.toEqual({ ok: false, error: 'key still there' });
+    expect(order).toEqual(['setup-record', 'key-clear']);
+  });
+
+  it('on a live reset, still clears the key when forgetting the setup record fails', async () => {
+    const { order, steps: s } = keyClearSteps({ ok: true });
+    s.clearSetupRecord = () => Promise.reject(new Error('store gone'));
+    await expect(finishWipeKeyClear('live', s, 1000)).resolves.toEqual({ ok: true });
+    expect(order).toEqual(['key-clear', 'close']);
+  });
+
+  it('on a resume, clears the shared file and the WebView storage, then the key, and keeps the new setup', async () => {
+    // The setup screens already ran in this launch: the record now names the network just set up, and the
+    // boot carries on in this process, so nothing may close.
+    const { order, steps: s } = keyClearSteps({ ok: true });
+    await expect(finishWipeKeyClear('resume', s, 1000)).resolves.toEqual({ ok: true });
+    expect(order).toEqual(['shared-files', 'web-data', 'key-clear']);
+    expect(order).not.toContain('setup-record');
+    expect(order).not.toContain('close');
+  });
+
+  it('on a resume whose key clear fails, reports the failure and touches nothing else', async () => {
+    const { order, steps: s } = keyClearSteps({ ok: false, error: 'keystore busy' });
+    await expect(finishWipeKeyClear('resume', s, 1000)).resolves.toEqual({ ok: false, error: 'keystore busy' });
+    expect(order).toEqual(['shared-files', 'web-data', 'key-clear']);
+  });
+
+  it('on a resume, clears the key once the WebView storage delete has had its time, even if it never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const { order, steps: s } = keyClearSteps({ ok: true });
+      s.deleteHostWebData = () => new Promise<void>(() => undefined);
+      const pending = finishWipeKeyClear('resume', s, 1500);
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(order).toEqual(['shared-files']);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual({ ok: true });
+      expect(order).toEqual(['shared-files', 'key-clear']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts a key clear that throws as a failure, in either kind', async () => {
+    for (const kind of ['live', 'resume'] as const) {
+      const { order, steps: s } = keyClearSteps(() => Promise.reject(new Error('bridge gone')));
+      await expect(finishWipeKeyClear(kind, s, 1000)).resolves.toEqual({ ok: false, error: 'bridge gone' });
+      expect(order).not.toContain('close');
+    }
+  });
+});
+
+describe('the re-bootstrap after a reset the web client reports', () => {
+  it('runs only while no device-key clear is under way or failed', () => {
+    expect(mayRebootstrapAfterWipe('idle')).toBe(true);
+    expect(mayRebootstrapAfterWipe('clearing')).toBe(false);
+    expect(mayRebootstrapAfterWipe('failed')).toBe(false);
+  });
+
+  it('is allowed again after a resumed clear, but not after a live one, which closes LOAM', () => {
+    expect(wipeKeyClearStateAfter('resume', { ok: true })).toBe('idle');
+    expect(wipeKeyClearStateAfter('live', { ok: true })).toBe('clearing');
+    expect(wipeKeyClearStateAfter('resume', { ok: false })).toBe('failed');
+    expect(wipeKeyClearStateAfter('live', { ok: false })).toBe('failed');
+  });
+});
+
+describe('clearWipeKeyAfterReset (the wiring index.tsx calls)', () => {
+  it('on a resume, deletes all WebView storage and keeps the setup record and the app', async () => {
+    const clear = vi.fn(async () => {
+      steps.order.push('key-clear');
+      return { ok: true };
+    });
+    await expect(clearWipeKeyAfterReset('resume', clear)).resolves.toEqual({ ok: true });
+    expect(steps.order).toEqual(['shared-files', 'web-data', 'key-clear']);
+  });
+
+  it('on a live reset, forgets the setup record before the key clear and closes LOAM after it', async () => {
+    const clear = vi.fn(async () => {
+      steps.order.push('key-clear');
+      return { ok: true };
+    });
+    await expect(clearWipeKeyAfterReset('live', clear)).resolves.toEqual({ ok: true });
+    expect(steps.order[0]).toBe('setup-record');
+    expect(steps.order.indexOf('key-clear')).toBe(1);
+    expect(steps.order.at(-1)).toBe('close');
   });
 });

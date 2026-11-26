@@ -84,6 +84,11 @@ export function saveSetupRecord(record: SetupRecord): Promise<void> {
   return SecureStore.setItemAsync(SETUP_RECORD_ITEM, JSON.stringify(record)).catch(() => undefined);
 }
 
+/** Forget the setup record (an Emergency Reset erased the network it describes). Never rejects. */
+export function clearSetupRecord(): Promise<void> {
+  return SecureStore.deleteItemAsync(SETUP_RECORD_ITEM).catch(() => undefined);
+}
+
 export type PrepareResult = { ok: true } | { ok: false; error: string };
 
 /**

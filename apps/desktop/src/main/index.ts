@@ -24,6 +24,7 @@ import { loadServerModule } from "./server-module.js";
 import { fileSettingsStore } from "./settings.js";
 import { runSmoke } from "./smoke.js";
 import { createTray, installAppMenu, type TrayHandle } from "./tray.js";
+import { installedVersion } from "./updates.js";
 import { createWindowManager } from "./windows.js";
 
 // Before the server bundle is ever imported (it is imported lazily, at the first boot): the shipped app must
@@ -62,9 +63,17 @@ async function runApp(): Promise<void> {
   const platform = process.platform as DesktopPlatform;
   const userData = app.getPath("userData");
   const dataDir = nodeDataDir(userData);
-  const version = app.getVersion();
+  // A release candidate's version names its suffix, so its update check sees the final release as newer.
+  const version = installedVersion(appPaths.releaseTag, app.getVersion());
   const log = createLogFeed(createLogBook(), clean);
-  const windows = createWindowManager({ icon: appPaths.icon });
+  const windows = createWindowManager({
+    icon: appPaths.icon,
+    // Read at each navigation, after the controller below exists.
+    knownNode: () => {
+      const port = controller.localPort();
+      return port === undefined ? undefined : { port, hosts: lanAddresses() };
+    },
+  });
   let tray: TrayHandle | undefined;
 
   const controller = new NodeController({

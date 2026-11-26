@@ -78,7 +78,7 @@ function startLoam(bin, args, env) {
     const timer = setTimeout(() => reject(new Error(`loam did not start within 30 s:\n${output}`)), 30_000);
     const onData = (chunk) => {
       output += chunk;
-      const match = /Open on this device:\s+http:\/\/localhost:(\d+)/.exec(output);
+      const match = /Open on this device:\s+http:\/\/127\.0\.0\.1:(\d+)/.exec(output);
       if (match) {
         clearTimeout(timer);
         const stop = () =>

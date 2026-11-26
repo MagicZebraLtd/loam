@@ -9,10 +9,9 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAppLocale } from '@/hooks/use-app-locale';
 import { useTheme } from '@/hooks/use-theme';
 import type { BridgeChannel } from '@/lib/db-encryption';
-import { closeAfterReset, requestEmergencyReset, resetOutcome } from '@/lib/emergency-reset';
-import { closeApp } from '../../modules/loam-hotspot';
+import { requestEmergencyReset, resetOutcome } from '@/lib/emergency-reset';
 import { t } from '@/lib/i18n';
-import { clearSharedFiles } from '@/lib/save-file';
+import { closeLoamAfterReset } from '@/lib/reset-close';
 
 type Phase =
   | { kind: 'idle' }
@@ -27,8 +26,8 @@ type Phase =
  * Emergency reset, from the host menu: one screen, a plain explanation, and a press-and-hold button. The
  * wipe runs in the server through the launcher bridge (no admin session needed: whoever holds this phone
  * owns the network). Clients clear themselves through the server's `wipe` broadcast. Once the wipe has
- * run, LOAM empties the share-sheet cache (lib/save-file.ts: the last file someone saved from this phone)
- * and closes itself completely: there's no "erased" screen to give away what just happened, and the next
+ * run, LOAM empties the share-sheet cache (lib/save-file.ts: the last file someone saved from this phone),
+ * forgets the setup record and deletes its WebView's storage (lib/reset-close.ts), and closes itself completely: there's no "erased" screen to give away what just happened, and the next
  * launch is a clean start on the setup screens. Only then, though (`resetOutcome`): an encrypted
  * fixed-key node still has its device key to clear, which index.tsx does and then closes LOAM itself (this
  * screen shows that clear's failure, with a retry); and an erase that couldn't be verified complete stays
@@ -61,7 +60,7 @@ export function EmergencyResetOverlay({
     const result = await requestEmergencyReset(channel);
     switch (resetOutcome(result)) {
       case 'close':
-        await closeAfterReset(clearSharedFiles, closeApp);
+        await closeLoamAfterReset();
         return;
       case 'key-clear':
         setPhase({ kind: 'key-clear' });
@@ -115,7 +114,7 @@ export function EmergencyResetOverlay({
                   <ThemedText style={{ color: theme.danger }}>
                     {t(phase.recorded ? 'reset.incomplete' : 'reset.notRecorded')}
                   </ThemedText>
-                  <ActionButton label={t('reset.closeApp')} onPress={() => void closeAfterReset(clearSharedFiles, closeApp)} />
+                  <ActionButton label={t('reset.closeApp')} onPress={() => void closeLoamAfterReset()} />
                 </>
               ) : phase.kind === 'key-clear' ? (
                 keyClearError ? (

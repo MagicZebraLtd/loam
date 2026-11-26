@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { PLAIN_MIN_LEVEL, createPlainLogPrinter, formatPlainLogLine, levelLabel } from "../bin/plain-log.js";
+import { PLAIN_MIN_LEVEL, createPlainLogPrinter, formatCrashReport, formatPlainLogLine, levelLabel } from "../bin/plain-log.js";
 
 const base = { pid: 4242, hostname: "ada-laptop", time: 1760000000000 };
 const json = (fields) => JSON.stringify({ ...base, ...fields });
@@ -67,5 +67,20 @@ describe("createPlainLogPrinter", () => {
     const printer = createPlainLogPrinter((text) => out.push(text), { verbose: true });
     printer.write(`${json({ level: 30, msg: "shown" })}\n`);
     assert.deepEqual(out, ["[info] shown\n"]);
+  });
+});
+
+describe("formatCrashReport", () => {
+  it("keeps the stack's lines but none of the control characters an error message can carry", () => {
+    const error = new Error("bad name \u001b]0;owned\u0007\u001b[2J\u202eevil");
+    const report = formatCrashReport(error);
+    assert.ok(report.startsWith("Error: bad name ]0;owned[2Jevil\n"));
+    assert.ok(report.split("\n").length > 1);
+    assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202e]/.test(report));
+  });
+
+  it("reports a thrown value that isn't an Error", () => {
+    assert.equal(formatCrashReport("plain \u0007text"), "plain text");
+    assert.equal(formatCrashReport(undefined), "undefined");
   });
 });

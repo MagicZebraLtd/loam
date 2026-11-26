@@ -157,7 +157,9 @@ open **reports** are parsed per row (`loadOpenReports`/`getReport`). A report 0.
 whose id is longer than 128 characters no longer validates. It is skipped and left on disk, and it is counted
 under `reports` in the boot warning, so neither the one-time `synced_users` backfill (which reads open
 reports) nor `GET /api/moderation/reports` can fail on it. Resolving it answers 404. Reports have no quarantine
-set because their ids are minted locally. A **mesh identity** row whose user is quarantined isn't loaded
+set because their ids are minted locally. Resolved reports are deleted on the 30 s reaper tick once their
+resolution (`resolvedAt` in the stored JSON, else the filing time) is older than `retention.messageTtlMs`,
+or 30 days on a node that keeps messages. Open and escalated reports are never expired. A **mesh identity** row whose user is quarantined isn't loaded
 either, like that user's sessions: delivering to it would build a DM naming an id the schema refuses. Mesh
 contacts are re-validated on load (`MeshIdentityCardSchema`), the stored config row is repaired or fails
 closed (`sanitizeLegacyConfigJson`), and a malformed transport identity is regenerated.
@@ -265,6 +267,13 @@ launcher side) talk over the existing `nodejs.channel` bridge, mirroring the req
 **Codec check.** After every keyed open, `openStore` checkpoints and refuses a file that still starts
 with the plaintext `SQLite format 3\0` header (`assertNotPlaintextSqliteFile`): a driver build without
 the cipher codec would silently ignore `PRAGMA key` and write plaintext.
+
+**Temporary files stay in memory.** Every store, keyed or not, sets `PRAGMA temp_store = MEMORY`. SQLite
+spills a large sort (the message load's `ORDER BY`) to temporary storage. The SQLCipher driver is built to
+put that in files in the OS temp directory, and the cipher does not encrypt them: once the message rows
+passed about 16 MB, the load wrote whole rows there in the clear, outside the data folder, where no
+Emergency Reset reaches. With the pragma, SQLite writes no sort spill file. The rollback journal and WAL
+files are transaction files, not temporary ones in this sense, and are still written beside the database.
 
 **The key never touches plaintext disk, and is never logged.** `resolveDbKey()`'s three encrypted
 branches all end in `expo-secure-store` (Android Keystore) or pure RAM (`ephemeral`); no branch writes

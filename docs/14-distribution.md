@@ -30,6 +30,23 @@ settings, Emergency Reset, and a kiosk mode (`loam --kiosk`, a password-locked s
 the QR). Without a terminal on both ends (a service, a pipe, `--plain`) it prints the join address, the
 QR and a one-time admin link instead. The web app, messages and moderation stay in the browser.
 
+Every link the command opens or prints for this computer (the terminal UI's local link and its `o` admin
+link, plain mode's "Open on this device" and its local admin link) uses `http://127.0.0.1:<port>`, never
+`localhost`. The node listens on `0.0.0.0`, IPv4 only, and `localhost` can resolve to `[::1]` first, where
+another account on the computer could listen and read the admin code from the fragment. The port is the
+one the server listens on (`PORT`, or the free one it moved to), not the `CLIENT_PORT` it advertises to
+joiners: with the two set apart, a link built from the advertised port pointed at a port LOAM doesn't hold
+and carried the admin code there. The address follows `HOST` (`packages/tui` `local-link.ts`):
+`127.0.0.1` when it is unset, a wildcard (`0.0.0.0`, `::`), `127.0.0.1` or `localhost`; `[::1]` when it
+is `::1`; otherwise the one address set. With `HOST=localhost` Node may bind `[::1]` while the link uses
+`127.0.0.1`; that case is still open. The `o` code works once and is retired when the "Open as admin" panel
+closes, claimed or not, or after 10 minutes, as the panel says; a second `o` while the browser is opening
+is ignored. The phone QR from `p` in that panel stops working when the panel closes too. Plain mode's
+printed or `admin-link.txt` link still lasts 10 minutes and is renewed while nobody is admin
+(`cli/bin/admin-link.js`): a leftover `admin-link.txt` from an earlier run is removed at start, no link is
+minted while the node is resetting (it would carry the key being replaced), and a failure to write the file
+is logged and retried on the next tick instead of stopping the node.
+
 That browser is an ordinary tab no launcher injects into, so the node itself tells it to keep no local copy:
 on an encrypted network (`--encrypt`, any mode) `/api/bootstrap` answers a loopback caller with
 `hostNoLocalCache: true`, and the client then keeps no IndexedDB, as the desktop and Android hosts' own
@@ -97,6 +114,15 @@ prompting or booting; if it won't load, it exits with a hint. The driver resolve
 and check the install output for the native build error. A separately installed global copy of the driver
 is never found. (Letting the server try
 instead was unsafe: its keyed-open recovery path could leave a plaintext `loam.db` in a fresh data dir.)
+
+The server reads `LOAM_DB_KEY` once, while it starts, and keeps the key itself. `bin/loam.js` then deletes
+`LOAM_DB_KEY` from its own environment, whether the start worked or not, as the desktop app does. The terminal
+UI starts its URL opener (`open`, `xdg-open`, `start`) with every `LOAM_` variable removed, since the opener can
+start the browser, which would inherit them.
+
+`bin/loam.js` sets `NODE_ENV=production` before it loads the server bundle, unless `NODE_ENV` is already set.
+The server refuses Developer Mode under production, so an inherited `LOAM_DEV_MODE=1` alone can't turn
+transport encryption off; Developer Mode needs an explicit non-production `NODE_ENV` as well.
 
 ## Publishing
 

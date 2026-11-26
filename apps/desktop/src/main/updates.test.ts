@@ -6,6 +6,7 @@ import {
   compareInstalledVersions,
   GITHUB_LATEST_RELEASE_API,
   GITHUB_RELEASES_PAGE,
+  installedVersion,
   parseInstalledVersion,
   parseVersion,
 } from "./updates.js";
@@ -86,5 +87,42 @@ describe("checkForUpdates", () => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
       })) as typeof fetch;
     expect(await checkForUpdates("0.6.4", hanging, 10)).toEqual({ ok: false, error: "timeout" });
+  });
+});
+
+describe("installedVersion", () => {
+  /** A reader that serves `files` by path and fails like a missing file for anything else. */
+  function reading(files: Record<string, string>): (path: string) => string {
+    return (path) => {
+      const text = files[path];
+      if (text === undefined) {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      return text;
+    };
+  }
+
+  it("reads the release candidate a tag build stamped", () => {
+    expect(installedVersion("/dist/main/release-tag.txt", "0.7.0", reading({ "/dist/main/release-tag.txt": "v0.7.0-rc.2\n" }))).toBe(
+      "0.7.0-rc.2",
+    );
+  });
+
+  it("falls back to the app's version without a stamp", () => {
+    expect(installedVersion("/dist/main/release-tag.txt", "0.7.0", reading({}))).toBe("0.7.0");
+  });
+
+  it("ignores a stamp that is junk or names another version", () => {
+    expect(installedVersion("/f", "0.7.0", reading({ "/f": "nightly" }))).toBe("0.7.0");
+    expect(installedVersion("/f", "0.7.0", reading({ "/f": "v0.6.9-rc.1" }))).toBe("0.7.0");
+  });
+
+  it("lets a stamped release candidate see its final release as newer", async () => {
+    const current = installedVersion("/f", "0.7.0", reading({ "/f": "v0.7.0-rc.2" }));
+    expect(await checkForUpdates(current, answering({ tag_name: "v0.7.0" }).fetch)).toMatchObject({
+      ok: true,
+      current: "0.7.0-rc.2",
+      newer: true,
+    });
   });
 });

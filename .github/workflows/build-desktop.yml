@@ -28,9 +28,10 @@ name: Build desktop
 #     `sha256sum -c LOAM-mac-arm64.dmg.sha256`.
 #   - Signing secrets reach ONLY the one step that needs them, never a job.
 #
-# Signing (all optional; without the secrets the build still succeeds, unsigned):
-#   macOS    Signed with the Developer ID certificate and notarized when these repository secrets are present
-#            (set 2026-10-22 for Magic Zebra Limited); without them the .dmg files build unsigned:
+# Signing (optional on a manual run, where the build still succeeds unsigned without the secrets):
+#   macOS    Signed with the Developer ID certificate and notarized with these repository secrets (set
+#            2026-10-22 for Magic Zebra Limited). A tag build FAILS without the full set; a manual run without
+#            them builds the .dmg files ad-hoc signed:
 #              CSC_LINK            the Developer ID Application certificate, a .p12 file, base64-encoded
 #              CSC_KEY_PASSWORD    the password of that .p12
 #              APPLE_API_KEY       the contents of the App Store Connect API key (the AuthKey_XXXX.p8 file)
@@ -130,20 +131,36 @@ jobs:
         run: pnpm --filter @loam/desktop test
 
       - name: Build desktop bundle
+        # LOAM_RELEASE_TAG (tag builds only; empty otherwise) is stamped into dist/main/release-tag.txt, so an
+        # RC's update check knows the final release of its X.Y.Z is newer.
+        env:
+          LOAM_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
         run: pnpm --filter @loam/desktop build
 
-      - name: Package (arm64 and x64), signed when the Apple secrets exist
-        # The ONLY step that sees the Apple secrets. With no CSC_LINK the build is unsigned instead of failing
+      - name: Package (arm64 and x64), signed and notarized on a tag
+        # The ONLY step that sees the Apple secrets. With the full set it signs with the Developer ID
+        # certificate and notarizes through the App Store Connect API key. On a tag the full set is required:
+        # a missing or partial set fails the step, because an ad-hoc signed update can't read the keychain
+        # item ("LOAM Safe Storage") the signed app created, which locks people out of an encrypted network.
+        # A manual run keeps the fallbacks: with no CSC_LINK it builds ad-hoc signed
         # (CSC_IDENTITY_AUTO_DISCOVERY=false stops electron-builder from hunting for a certificate in the
-        # runner's keychain). With the full set it signs with the Developer ID certificate and notarizes
-        # through the App Store Connect API key.
+        # runner's keychain), and with CSC_LINK but no API key it signs without notarizing. The API key file
+        # is removed however the step ends.
         env:
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          trap 'rm -f "$RUNNER_TEMP"/AuthKey_*.p8' EXIT
+          if [ "$IS_TAG" = "true" ]; then
+            if [ -z "$CSC_LINK" ] || [ -z "$APPLE_API_KEY_P8" ] || [ -z "$APPLE_API_KEY_ID" ] || [ -z "$APPLE_API_ISSUER" ]; then
+              echo "::error::A tag build needs CSC_LINK, APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER: refusing to publish a macOS app that is not signed and notarized."
+              exit 1
+            fi
+          fi
           ADHOC=()
           if [ -n "$CSC_LINK" ]; then
             if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
@@ -183,7 +200,6 @@ jobs:
               sleep 30
             done
           done
-          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -239,6 +255,10 @@ jobs:
         run: pnpm --filter @loam/desktop test
 
       - name: Build desktop bundle
+        # LOAM_RELEASE_TAG (tag builds only; empty otherwise) is stamped into dist/main/release-tag.txt, so an
+        # RC's update check knows the final release of its X.Y.Z is newer.
+        env:
+          LOAM_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
         run: pnpm --filter @loam/desktop build
 
       - name: Rebuild native driver
@@ -334,6 +354,10 @@ jobs:
         run: pnpm --filter @loam/desktop test
 
       - name: Build desktop bundle
+        # LOAM_RELEASE_TAG (tag builds only; empty otherwise) is stamped into dist/main/release-tag.txt, so an
+        # RC's update check knows the final release of its X.Y.Z is newer.
+        env:
+          LOAM_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
         run: pnpm --filter @loam/desktop build
 
       - name: Rebuild native driver
@@ -409,6 +433,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # build-apk.yml's release job publishes to the same Release under this group, so the two run one after
+    # the other instead of both creating it at once.
+    concurrency:
+      group: github-release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write # create/update the Release and upload the assets (this job only)
     steps:

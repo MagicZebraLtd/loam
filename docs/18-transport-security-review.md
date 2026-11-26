@@ -6,7 +6,11 @@
 > (`loam.ws.frame.v1 <connectionId>`) with a per-connection sequence, so the "constant `"ws"` aad" and
 > "WS frames are not sequence-numbered" notes below are out of date. And a bound session's tunnelled
 > requests carry its identity as an internal `x-loam-user`, not its cookie. Read docs/08 and docs/20 for
-> the current mechanics.
+> the current mechanics. Two later changes also apply. A direct request's reply is no longer sealed under
+> the bare REST aad for a current client: it asks with `r: 2` and opens only the labelled forms in docs/08
+> "Response binding". And guarantee 5 below covers REST requests only: the page load (`GET /` and the
+> built files) is also on the wire. Client routes live in the URL fragment, so a reload never sends a
+> conversation id, but an address from before that change carries its path once (docs/08).
 
 A map for anyone auditing LOAM's app-layer transport encryption (docs/08): an external reviewer, a
 security researcher, or a future maintainer. It points at the exact code, states the guarantees and

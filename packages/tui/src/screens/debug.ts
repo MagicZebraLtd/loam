@@ -14,12 +14,13 @@ import type { LogEntry } from "../log.js";
 import type { Screen, View } from "../types.js";
 import { clock, isProblem } from "./activity.js";
 
-/** Candidate address tokens: anything made of hex digits, dots, colons, a zone id and brackets. */
-const ADDRESS_TOKEN = /\[?[0-9A-Fa-f:.]*[:.][0-9A-Fa-f:.]*(?:%[\w.-]+)?\]?/g;
+/** Candidate address tokens: anything made of hex digits, dots, colons, a zone id and brackets, and a port. */
+const ADDRESS_TOKEN = /\[?[0-9A-Fa-f:.]*[:.][0-9A-Fa-f:.]*(?:%[\w.-]+)?\]?(?::\d+)?/g;
 
 /**
  * `text` without what could identify people or this machine: IPv4 and IPv6 addresses (every form `net.isIP`
- * accepts, a zone id too), the host of any URL, the data folder and home folder, and ids in request paths.
+ * accepts, a zone id too), the host, query and fragment of any URL, the data folder and home folder, and ids
+ * in request paths.
  * Times like `12:34:56` and version numbers are left alone (they aren't addresses).
  */
 export function redact(value: string, folders: string[] = []): string {
@@ -27,9 +28,17 @@ export function redact(value: string, folders: string[] = []): string {
   for (const folder of folders.filter(Boolean).sort((a, b) => b.length - a.length)) {
     out = out.split(folder).join("<folder>");
   }
-  out = out.replace(/\b(https?|wss?):\/\/[^\s/"'<>]+/g, "$1://<host>");
+  // A URL keeps its scheme and path only: its query and fragment can carry a token, a key or an admin code.
+  out = out.replace(/\b(https?|wss?):\/\/[^\s/?#"'<>]+([^\s?#"'<>]*)(?:\?[^\s#"'<>]*)?(?:#[^\s"'<>]*)?/g, "$1://<host>$2");
   out = out.replace(ADDRESS_TOKEN, (token) => {
-    const bare = token.replace(/^\[|\]$/g, "").replace(/%[\w.-]+$/, "");
+    // A port goes first (`192.168.1.20:11434`, `[fd00::5]:3000`, `fe80::1%eth_0:3000`): with it, the token is
+    // no address to `isIP`. After a zone id the port is unambiguous, since a zone holds no colon here.
+    const bare = token
+      .replace(/^\[([^\]]+)\]:\d+$/, "$1")
+      .replace(/^((?:\d{1,3}\.){3}\d{1,3}):\d+$/, "$1")
+      .replace(/^([^[\]%]+%[\w.-]+):\d+$/, "$1")
+      .replace(/^\[|\]$/g, "")
+      .replace(/%[\w.-]+$/, "");
     return isIP(bare) ? "<address>" : token;
   });
   // Ids in paths (`/api/dms/user.1a2b…`, `/api/attachments/att_…`): keep the route, drop the id.

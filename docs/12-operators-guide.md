@@ -87,8 +87,13 @@ npx loamnet                 # or: npm install -g loamnet && loam
 
 In a terminal it opens a full-screen view that keeps the join QR on screen, with **Activity**, **People**,
 **Settings** and **Debug** screens a number key away (`?` lists the keys). **Press `o` to become admin:**
-your browser opens LOAM already signed in as admin, through a link that works once, for 10 minutes; press
-`p` in that dialog for a QR that makes a phone admin instead (it stops working when the dialog closes). Nobody becomes admin by opening a new network
+your browser opens LOAM already signed in as admin, through a link that works once, until the dialog closes; press
+`p` in that dialog for a QR that makes a phone admin instead (it stops working when the dialog closes too).
+The link is on `http://127.0.0.1`, never `localhost`, which can resolve to the IPv6 address `[::1]`, where
+another account on the computer could be listening. It uses the port LOAM listens on, even when
+`CLIENT_PORT` advertises another to joiners (a proxy in front, say), and if you set `HOST` to one address,
+that address. With `HOST=localhost` the link uses `127.0.0.1`, but Node may bind `[::1]` for that name, and
+then the link misses LOAM (not fixed yet). The link also stops working after 10 minutes. Nobody becomes admin by opening a new network
 first. Your admin identity lives in that browser, so keep using it. **People → m** makes anyone who has
 joined an admin too.
 
@@ -106,11 +111,20 @@ log. Useful options (`loam --help` has them all):
 | `--data-dir <dir>` | Where the data lives (default `$XDG_DATA_HOME/loam` or `~/.loam`). |
 | `--encrypt` | Encrypt the database (pictures and files are stored beside it, unencrypted). The passphrase comes from `$LOAM_DB_KEY` or a prompt; `--encrypt ephemeral` uses a key that lives only in memory. |
 | `--kiosk` | Start locked in kiosk mode. |
-| `--plain` | Print the QR and addresses instead of the full-screen view. `--verbose` adds a line per request. |
+| `--plain` | Print the QR and addresses instead of the full-screen view. `--verbose` adds a line per request, naming the route (`/api/dms/:userId`), never the conversation. |
 
 The terminal's **Settings** screen changes the main network settings live (the same ones as the web
 admin's) and remembers the port, a pinned join address and kiosk mode for the next start, in `cli.json` in
 the data folder.
+
+**Who can read the data folder.** On macOS, Linux and a Pi, a data folder LOAM creates is open only to the
+account that runs it (mode 0700). A folder you made yourself keeps the mode you gave it, often 0755, but
+what LOAM writes inside it stays private to that account: the database files, the files it writes itself
+(`config.json` when it creates one, the reset journal, recovery copies), and every picture and attached
+file, which are 0600 inside `avatars/` and `attachments/` folders that are 0700. LOAM also sets those two
+folders back to 0700 at each start, so folders an older version made are tightened too. A `config.json`
+you wrote yourself keeps your mode when LOAM rewrites it. Windows ignores these modes; there the data
+folder's own permissions decide who can read it.
 
 A node run some other way (`pnpm --filter @loam/server start`, for one) uses the **bootstrap** strategy
 from the config file or **Admin → Bootstrap**:
@@ -192,7 +206,7 @@ reset retires them all.
 
 ## 4. Shaping the network
 
-Everything is in the admin area, **Admin** in the sidebar (`/admin`, "Node configuration"), saved with
+Everything is in the admin area, **Admin** in the sidebar (`/#/admin`, "Node configuration"), saved with
 one **Save** at the bottom. Changes reach connected phones at once.
 
 **Name.** In **Network**: shown in the sidebar and on the join screen. "Camp 3" or "Riverside Outage"
@@ -240,14 +254,14 @@ confirm. Encryption applies to a new database, so switching erases what's on the
 
 ## 5. Managing people
 
-**People and moderation** (`/people`) is for admins, moderators and greeters:
+**People and moderation** (`/#/people`) is for admins, moderators and greeters:
 
 | Action | Who | Effect |
 |---|---|---|
 | **Ban / Unban** | admin, moderator | Takes away this identity's access and ends its sessions. On a network anyone can join, the same person can come back under a new name: a ban is not a lockout. To keep someone out, require approval to join. |
-| **Shadow-ban** | admin, moderator | They can still post, but only they see their new messages. |
+| **Shadow-ban** | admin, moderator | They can still post, but only they see their new messages. Placing or lifting it sends no update to anyone's app, theirs included. |
 | **Timeout** | admin, moderator | Mutes them for up to 7 days, timed on the host's clock. |
-| **Remove a message** | admin, moderator | From the report queue only, in one tap with no confirmation and no reason (the server accepts an optional reason; the app sends none). Readers see "removed by a moderator", its pictures and files are deleted, and it can't be edited, replied to or reacted to afterwards. It can't be undone. A moderator has no remove action in conversations themselves; there, only an admin or the message's author has **Delete**. |
+| **Remove a message** | admin, moderator | From the report queue only, in one tap with no confirmation and no reason (the server accepts an optional reason; the app sends none). Readers see "removed by a moderator", its pictures and files are deleted, and it can't be edited, replied to or reacted to afterwards. It can't be undone. A moderator has no remove action in conversations themselves; there, only an admin or the message's author has **Delete**. The server lets a moderator or admin remove only a message they could read (a public post, or one in a conversation they are in) or one a report in their queue points at. Any other message, such as a direct message between two other people, answers as if it did not exist. |
 | **Moderator / Greeter role** | admin | Moderation powers, or letting people in. |
 | **Make admin** | admin | Promotes someone to admin. There's no demote: see the end of this guide. |
 | **Delete a message** | admin (any), author (their own, if nobody else has replied) | Removes it here, and a linked network won't copy it back. A copy a linked network already pulled stays there: deletions aren't sent to it. |
@@ -255,7 +269,35 @@ confirm. Encryption applies to a new database, so switching erases what's on the
 Admins can't be moderated, and nobody can moderate themselves. Roles never travel to a linked network: a
 moderator there is a stranger here.
 
-**Reports.** Anyone can report a message or a person; reports go to the moderators.
+**Reports.** Anyone can report a message or a person; reports go to the moderators. A resolved report is
+deleted once its resolution is older than the network's message retention, or after 30 days on a network
+that keeps messages. Open and escalated reports stay until someone resolves them. A resolved report stays
+as it was resolved: resolving it again changes nothing, so no moderator can overwrite another's decision
+or keep it from expiring.
+
+Nobody can take a name another person here already has, or the assistant's, by
+editing their profile, and neither can an admin editing someone else's. Names are compared without case,
+extra spaces or hidden characters, so `Ana`, `ana ` and `Ana` with an invisible character added count as
+the same (`display_name_taken`). The hidden characters include ones that are not formally control or
+format characters but still draw nothing, such as the Hangul fillers, the blank Braille pattern,
+variation selectors and tag characters; a stored name keeps them, since a variation selector is part of
+some emoji. A name that shows as blank is refused. A generated picture can't copy another person's either.
+The same rules apply to the author of a post that arrives from a linked network: a copied or blank name is
+replaced by the generated one, and a copied generated picture or an uploaded photo is dropped. A replaced or removed
+profile photo is deleted from the host at once.
+
+Node admins manage a private channel without being in it, but they don't get to read
+it, and they can't add anyone to it, themselves included. Inviting someone, approving a join request, or
+handing the channel to a person outside it needs the one doing it to be in the channel already; otherwise
+the answer is `channel_members_only`. An admin outside the channel can still see its name, owner and
+member list, see and deny join requests, remove members, rename, archive or delete it, and hand it to
+someone who is already a member. An invite or a handover naming a banned person, someone still waiting
+for approval, or a mesh sender is answered as for an unknown person (`user_not_found`), so it can't be
+used to learn that they exist. A reply to a post in another channel is refused as if the post didn't
+exist, so a reply can't test whether a post exists in a channel you can't see.
+
+People who reach this network only through mesh mail are not listed in People and moderation and
+can't be moderated, given roles or approved there.
 
 **Blocking** is personal, not moderation. Anyone can block someone from their direct message (and unblock
 them there or in **Settings → Blocked people**). It stops direct messages both ways, and on the blocker's
@@ -303,9 +345,10 @@ its copy the next time it reaches the network at the same address. What it doesn
   restarts, and a computer that found its port taken uses the next free one. A browser keeps its copy
   under the old address until its site data is cleared.
 - **Linked networks.** They keep the public channels they pulled, and hand them back (below).
-- **Browser caches.** On an unencrypted network, pictures a phone loaded directly (typed-address joiners)
-  can stay in its browser's HTTP cache. With `loamnet`, the browser you opened as admin is an ordinary
-  browser and keeps its own unencrypted copy until the reset reaches it.
+- **Browsers.** Every answer the network sends under `/api/`, pictures included, tells the browser not to
+  store it (`Cache-Control: no-store`), so no browser's HTTP cache holds messages or pictures. A browser's history and
+  address-bar suggestions are outside LOAM's reach. With `loamnet` on an unencrypted network, the browser you
+  opened as admin is an ordinary browser and keeps its own copy until the reset reaches it.
 - **Backups** of the host device (Time Machine, File History and the like).
 
 - **On the host phone:** **Emergency reset** is the last item in the host menu, in red, and also at the
@@ -324,7 +367,9 @@ its copy the next time it reaches the network at the same address. What it doesn
 - **Without logging in:** set a **panic token** (16 characters or more) in the same panel, and a request
   to `POST /api/panic` with it erases the network, from a bookmark or another device. The token is stored
   hashed. It works only while Emergency Reset is enabled: the address answers "not found" unless both are
-  set, and a token left in place after Emergency Reset is turned off looks exactly like no token.
+  set, and a token left in place after Emergency Reset is turned off looks exactly like no token. Tries are
+  counted the same way whether or not a token is set, and an address over the limit gets the same "not
+  found" without its token being checked. Two requests with the right token at once start one reset.
 
 **How thorough it is.** With an encrypted database, the files are deleted and the key is replaced (on the
 host phone, and on a computer using a key that lives only in memory), so whatever is left on the storage

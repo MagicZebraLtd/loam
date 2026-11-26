@@ -4,6 +4,8 @@
  * is downloaded: the answer says a version exists, and the Settings screen opens the releases page in the
  * browser. The request carries no LOAM data: GitHub sees this computer's address and that it asked.
  */
+import { readFileSync } from "node:fs";
+
 import type { UpdateCheckResult } from "../shared/ipc.js";
 
 /** GitHub's "latest release" endpoint for LOAM. Drafts and pre-releases are never "latest". */
@@ -53,6 +55,31 @@ export function compareInstalledVersions(a: InstalledVersion, b: InstalledVersio
     return rank(a.preRelease) - rank(b.preRelease);
   }
   return (a.preRelease?.number ?? 0) - (b.preRelease?.number ?? 0);
+}
+
+/**
+ * This build's version as text: the release tag scripts/build.mjs stamped into `releaseTagFile` on a tag build
+ * (`v0.7.0-rc.2`, which package.json's bare X.Y.Z can't name), else `appVersion`. A stamp that doesn't parse,
+ * or whose X.Y.Z isn't `appVersion`'s, is ignored. The suffix stays out of the app's own version fields
+ * because macOS and Windows want plain numbers there. Never throws.
+ */
+export function installedVersion(
+  releaseTagFile: string,
+  appVersion: string,
+  readText: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): string {
+  let stamped: InstalledVersion | null;
+  try {
+    stamped = parseInstalledVersion(readText(releaseTagFile));
+  } catch {
+    return appVersion;
+  }
+  const app = parseVersion(appVersion);
+  if (!stamped || !app || stamped.version.join(".") !== app.join(".")) {
+    return appVersion;
+  }
+  const pre = stamped.preRelease;
+  return pre ? `${app.join(".")}-${pre.channel}.${pre.number}` : appVersion;
 }
 
 /** True when the error is the abort our own timer fired. */

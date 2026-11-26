@@ -79,6 +79,13 @@ an attacker's own sealed `/resume` and restore the whole attack.
 - **`GET /api/config`** — unchanged for optional/off (authenticated bootstrap, returns `currentUser`).
   For a **bound** session it is reached **through the tunnel** like any content route; a bound client gets
   `currentUser` from resume + tunnelled config, never from a cookie.
+- **A bound client takes its settings from the tunnelled config.** After its resume it reads `version`,
+  `joinUrl`, `websocketPath` and `networkConfig` from a tunnelled `GET /api/config`. Anyone on the path can
+  rewrite the plaintext bootstrap, so it supplies only the mode and advertised key handed to
+  `ensureSession`, and the `hostNoLocalCache` hint. A failed tunnelled read fails the boot pass, which is
+  retried; the bootstrap copy is never used for a bound client. The re-read after a 409
+  `assistant_destination_changed` (docs/06) goes through the tunnel when it is active and never starts a
+  handshake or a resume; a pinned client whose tunnel is down keeps the config it has.
 - **Every fetch a bound/required-mode client makes uses `credentials: "omit"`** — not just bootstrap:
   same-origin `fetch` sends cookies by default, so `resume` and every tunnel POST set it explicitly.
 - **Legacy cookies may still ride the initial document load + the WS upgrade** (JS can't suppress those).
@@ -106,12 +113,13 @@ an attacker's own sealed `/resume` and restore the whole attack.
    → session.authMode:"bound", userId, identityTokenHash set.
    resp (sealed): { currentUser, token }.  Idempotent: cache the result on the session so a
    fresh-sequence RETRY after a lost response returns the SAME user+token (no 2nd mint).
-   Client stores `token` (IndexedDB, per origin); sets currentUser.
+   Client stores `token` (localStorage, per origin, with the host key it was issued under, §8);
+   sets currentUser.
 
 4. All content (incl. /api/config, images)  → SEALED via the tunnel; identity = session.userId.
-   No cookie sent or forwarded.
+   No cookie sent or forwarded. The network settings come from this tunnelled /api/config (§4).
 
-5. WebSocket  GET /ws?enc=<sid>   → §7 key-confirmation before any presence/events.
+5. WebSocket  GET /ws?enc=<sid>&cn=<random>   → §7 key-confirmation before any presence/events.
 
 6. Re-handshake (expiry/reconnect)  → handshake + resume BEFORE retrying; concurrent
    re-handshakes share ONE in-flight handshake+resume.
@@ -143,9 +151,15 @@ A visible session id is not proof of key. After `GET /ws?enc=<sid>` opens, run a
 reflect the ciphertext unchanged):
 
 ```
-server → client   AAD "loam.ws.challenge.v1"   { type:"challenge", connectionId, nonce }
+server → client   AAD "loam.ws.challenge.v1"   { type:"challenge", connectionId, nonce, cn? }
 client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connectionId, nonce }
 ```
+
+- `cn`: the client's own random value for this socket, 16 random bytes as 22 base64url characters, sent in
+  the URL (`/ws?enc=<sid>&cn=<random>`). The server repeats a well-formed `cn` (16 to 64 base64url
+  characters) inside the sealed challenge and ignores a malformed one. The client refuses a challenge that
+  lacks its own `cn`, so an earlier connection's challenge, and the frames after it, can't be replayed onto
+  a new socket. An older client sends none and gets the challenge without it.
 
 - `nonce`: fresh, random, **connection-bound**, **single-use**; short **auth timeout**; a **cap/rate
   limit on unauthenticated sockets**.
@@ -158,6 +172,15 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   on a reconnected socket B under the same transport session: use AAD `loam.ws.frame.v1 ${connectionId}`
   with a **per-connection** sequence (the `connectionId` is the challenge's, fresh per socket). Acceptance
   test: a valid frame from connection A is rejected on connection B.
+- **No gaps.** The server numbers a connection's frames 1, 2, 3 and never skips one, so each frame must
+  carry exactly the previous sequence plus one. A gap means a frame was lost or held back on the way (a
+  delete the client would never hear about): the client takes nothing more from that socket, closes it,
+  reconnects and resyncs. The reconnect backoff grows with each gap in a row and resets once a socket has
+  delivered two heartbeats in sequence.
+- **A session must name a user record.** `/ws` refuses a session whose user record doesn't exist
+  ("Unauthenticated websocket"), like a socket with no session at all, and the event filter sends a
+  recipient with no user record nothing but `wipe`. Such a session would otherwise hear the public feed
+  while sitting in no roster or approval queue.
 - **Admitted sockets are capped too** (review 2026-11-07, F-003): at most 16 per identity (a browser's tabs
   share one, so 8 would refuse a person's own tabs), 64 per address, 256 per IPv6 /64 and 1024 in all.
   A socket still mid-challenge counts against the address, /64 and total caps but not the identity's: its
@@ -191,6 +214,23 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   rebinds. Eviction drops only the session, not the identity — and any confirmed WS socket riding an
   evicted/expired session is closed (§7).
 - **switching origins:** tokens are namespaced per origin (client + server) — never cross-presented.
+- **a different network at the same origin:** two LOAM networks can sit at the same address (the same IP
+  and port at different times or places), so the origin alone doesn't name a network. The client stores
+  the token with the host key it was issued under (`loam.identityToken.v2.<origin>` = `{ k, t }`) and only
+  ever sends it to a session with that key. A newly accepted key (a `#k=` change the user accepts, or the
+  Android launcher's key) starts a fresh identity: the resume carries no token, the node mints one, and
+  that token replaces the old network's record (one record per origin). Going back to the first network
+  therefore mints a new identity there, and the identity that network issued earlier is not resumed. When
+  the key changed because the node's database was wiped, nothing is lost by that: the wipe deleted every
+  identity token with it. A bare token from an earlier release
+  (`loam.identityToken.<origin>`) is bound to the pin stored when it is first read (at start-up, and
+  before any pin is replaced), and deleted when no pin is stored. The wipe snapshot (§12) keeps the key
+  too, so a revocation re-bind only presents it under the same key.
+- **a browser that refuses storage writes** (a full quota, a WebView with none): `storeIdentityToken`
+  keeps the record in memory for the page load when `localStorage.setItem` throws, so the next resume of
+  that page load still presents it instead of being handed a new person on every boot pass. It never
+  outlives the page, like the in-memory pin. Clearing the token, `apiUrl` and the wipe snapshot don't throw
+  on blocked storage.
 - **Mode changes** need no special handling (§6, clean break): a `bound` session keeps its secure rules;
   an `optional`/`off` node simply doesn't *require* binding. No legacy state to preserve or migrate.
 
@@ -202,13 +242,24 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
   client sent `p`, the server echoes the same bytes, so no separate canonicalisation is needed and both
   compare identical values). The client **verifies** them before using the response — especially before
   storing a returned identity **token**. Closes review #3 (constant-aad tunnel responses cross-fed).
+- **The tunnel reply is bound in the seal too.** The tunnel envelope is `{ s, r: 2, b }`, and the client
+  opens its reply only through `openBoundResponse`: the v2 response form for its sequence and the outer
+  status, or `encStatus2` for a status of 400 and above (docs/08 "Response binding"). So a reply to one
+  tunnel request can't open as another's even before the descriptor check, and a refusal from the tunnel
+  route itself (401, 409, 429) reaches the caller with its real status instead of a flat 400. The `{ s, m, p }`
+  check above stays.
 - **The resume reply is bound to its status too** (review 2026-11-07, F-001). The resume envelope carries
-  `r: 1`, so the server seals every answer under `POST /api/session/resume#<seq>#<status>`. The client
-  discards its stored identity token only on a `401` that opens under that binding (the handler refusing
-  the token after decrypting it). An unsealed `401`, or one that doesn't open under this request's
+  `r: 2`, so the server seals every answer under
+  `"loam.transport.response.v2 " + JSON.stringify(["POST", "/api/session/resume", seq, status])` (docs/08
+  "Response binding"). The client opens a resume reply only under that form, never a refusal form, and
+  discards its stored identity token only on a `401` that opens under it for its own sequence (the handler
+  refusing the token after decrypting it). An unsealed `401`, or one that doesn't open under this request's
   sequence and status, is treated as an expired session: the client re-handshakes and keeps the token. The
   outer status and the `x-loam-enc` header travel in the clear, so before this an on-path attacker could
-  answer a resume with a fake `401` and make the member a new person.
+  answer a resume with a fake `401` and make the member a new person. The earlier `r: 1` form,
+  `POST /api/session/resume#<seq>#<status>`, was built from the raw request target, and a stranger's
+  `POST /api/session/resume#1#401` had its refusal sealed under exactly that string; the node now refuses a
+  target containing `#` (400, unsealed) and the client no longer opens that form.
 - **Re-handshake resumes before retrying;** concurrent re-handshakes share one in-flight op.
 - **Unsealed tunnel replies are never used** (pre-release review 2026-09-25). On a live tunnel session the
   client acts on exactly one unsealed reply: a `401` to a `GET`/`HEAD`, which triggers one re-handshake +
@@ -236,9 +287,10 @@ client → server   AAD "loam.ws.proof.v1"        { type:"proof",     connection
 ## 11. Client changes (summary)
 
 - `GET /api/bootstrap` first (credentials:"omit"); handshake; then sealed `/resume` (credentials:"omit")
-  with the stored token → store returned token, set currentUser — **before** opening the WS / content.
+  with the token stored for this session's host key (§8) → store returned token with that key, set
+  currentUser — **before** opening the WS / content.
 - **Every** required-mode/bound fetch uses `credentials:"omit"`.
-- WS: answer the sealed challenge before trusting the socket.
+- WS: send a fresh `cn`, and answer only a sealed challenge that repeats it, before trusting the socket.
 - Image loading **fails closed** (no `src`/placeholder) on a tunnel error — never the raw URL (review #5).
 - Response verification: check the bound `s/m/p` before using/storing a sealed response.
 
@@ -324,7 +376,8 @@ blackholed-network dimensions. The findings below were fixed:
   so the local wipe always proceeds.
 - **Cookie residual after a bound wipe (client, §3):** revoking only the bound token left the legacy
   HttpOnly cookie alive. Fix: the wipe also fires a bare, unconditional `POST /api/session/end` carrying
-  (and clearing) that cookie.
+  (and clearing) that cookie. Once no cookie session still maps to that user, the server also closes the
+  identity's sockets that are not on a bound transport session, admitted and mid-challenge.
 - **Ordering / durability (client):** the "completed" screen could show before local deletion finished,
   and a blackholed server cleanup could be silently forgotten on reload. Fix: **local erasure first** with
   a truthful "Wiping…" state, a **durable `loam.wipePending`** flag driving IndexedDB deletion recovery at
@@ -334,7 +387,9 @@ blackholed-network dimensions. The findings below were fixed:
   snapshots *after* announcing the wipe let a sibling tab clear shared localStorage first, so the
   initiating tab's revocation could lose the token or target the wrong origin. Fix: `snapshotForWipe()`
   (token **and** origin) runs **before** `announceWipe()`; `apiUrl` prefers the origin snapshot during a
-  wipe; only the initiating tab removes `SERVER_URL_KEY`.
+  wipe; only the initiating tab removes `SERVER_URL_KEY`. The snapshot also holds the pinned host key: the
+  wipe erases the pin before it revokes the token, so a QR-pinned device whose session had already died
+  can still re-handshake against the snapshot's key and revoke its token.
 - **Tombstone lifted without a trustworthy rejoin (client, round-5 H2):** the gate was cleared on mere
   `#k=` presence, or on an *unsealed* (forgeable) `session/end` 200. Fix: the tombstone is lifted **only
   after `loadConfig` succeeds** on a QR-pinned handshake — a stale/invalid QR or a crash leaves the gate

@@ -36,6 +36,7 @@ import { useAppLocale } from '@/hooks/use-app-locale';
 import { useTheme } from '@/hooks/use-theme';
 import { colorSchemeForClientMessage } from '@/lib/client-theme';
 import { alertLevelForClientMessage, conversationPath, messageNotifier } from '@/lib/message-notifications';
+import { webViewRouteScript } from '@/lib/webview-route';
 import { t } from '@/lib/i18n';
 import { HOST_WEBVIEW_ORIGIN, LEGACY_HOST_WEBVIEW_ORIGIN, withInviteCode } from '@/lib/join-url';
 import {
@@ -58,13 +59,29 @@ import {
 } from '@/lib/db-encryption';
 import { confirmStartUnencrypted, retryKeyResolution, switchEncryptionOffAndRetry } from '@/lib/driver-missing-recovery';
 import { bootErrorKey, bootNoticeKey, parseLockedReason, type LockedReason } from '@/lib/boot-messages';
-import { closeAfterReset } from '@/lib/emergency-reset';
+import {
+  acceptsWebViewMessage,
+  hostInjectionScript,
+  isForeignPage,
+  isLoamUrl,
+  navigationDecision,
+  pendingConversationAfterLoad,
+} from '@/lib/host-injection';
+import {
+  mayRebootstrapAfterWipe,
+  wipeKeyClearStateAfter,
+  wipeRestartKind,
+  type WipeKeyClearKind,
+  type WipeKeyClearState,
+} from '@/lib/emergency-reset';
 import {
   passphraseEntryProblem,
   passphraseNeedsConfirmation,
   type PassphrasePresenceForConfirm,
 } from '@/lib/passphrase-confirm';
 import { ensureHostService } from '@/lib/host-service';
+import { clearWipeKeyAfterReset } from '@/lib/reset-close';
+import { createSingleFlight } from '@/lib/single-flight';
 import { noteConnectedClients, noteLauncherInterfaces } from '@/hooks/use-hotspot';
 import { parseHostClients, parseHostInterfaces, type HostInterface } from '@/lib/join-display';
 import { registerOnDeviceLlm } from '@/lib/on-device-llm';
@@ -73,7 +90,6 @@ import { registerMeshCourier } from '@/mesh/mesh-courier';
 import {
   addOpenConversationListener,
   clearMessageNotifications,
-  closeApp,
   deleteWebOriginData,
   startKiosk,
   stopKiosk,
@@ -122,18 +138,6 @@ const PORT_IN_USE_CODE = 'port_in_use';
  * a fresh-started database, is exactly the kind of thing the operator must not lose sight of once the
  * WebView is up and everything otherwise looks normal. */
 type BootNotice = { code: string; message?: string };
-
-/** True when `url` belongs to the embedded server's origin (compares origins, not string prefixes). */
-function isLoamUrl(url: string | undefined): boolean {
-  if (!url) {
-    return false;
-  }
-  try {
-    return new URL(url).origin === LOAM_URL;
-  } catch {
-    return false;
-  }
-}
 
 /** Outcome of {@link clearWipeKeyAndAck} — the ack is sent to the launcher ONLY on a verified clear. */
 export type WipeKeyClearOutcome = { ok: boolean; error?: string };
@@ -306,6 +310,14 @@ function HostScreen() {
   // retrying across an app restart; this state is just this screen's live view of the most recent attempt.
   const [wipeClearFailure, setWipeClearFailure] = useState<string | undefined>();
   const [wipeClearBusy, setWipeClearBusy] = useState(false);
+  // Which clear main.js last asked for (`loam-wipe-restart`, lib/emergency-reset.ts `wipeRestartKind`), so a
+  // Retry repeats the same kind, and where it stands, which the `loam-wipe` re-bootstrap timer reads. Refs:
+  // the bridge listener and the timer outlive the render that made them.
+  const wipeKeyClearKindRef = useRef<WipeKeyClearKind>('live');
+  const wipeKeyClearStateRef = useRef<WipeKeyClearState>('idle');
+  // The clear in flight, joined by a repeated request (lib/single-flight.ts): main.js asks again when its
+  // own wait times out, and a second clear could delete the secret minted once the first one acks.
+  const [wipeKeyClearFlight] = useState(() => createSingleFlight<void>());
   // Whether the "Share / Host" overlay (hotspot + two-step join QRs) is open.
   // Opened straight after setup (the join codes, or the admin settings for a hand-configured network).
   const [shareOpen, setShareOpen] = useState(() => afterSetup.openShare);
@@ -393,7 +405,7 @@ function HostScreen() {
   // The new origin cannot reach data left at the old address. Request native cleanup on every launch without
   // navigating there; the native module picks the most complete cleanup supported by this WebView.
   useEffect(() => {
-    deleteWebOriginData(LEGACY_HOST_WEBVIEW_ORIGIN);
+    void deleteWebOriginData(LEGACY_HOST_WEBVIEW_ORIGIN);
   }, []);
 
   // Wire the Android hardware/gesture Back button to the WebView's in-app history. The LOAM web client
@@ -467,27 +479,32 @@ function HostScreen() {
   // `clearStoredDbKeys`'s real success/failure return) — the phase file is left exactly where it is (this
   // screen has no way to touch it directly; main.js's phase file stays until a verified ack arrives) and
   // this screen shows the real failure with a Retry, never a blanket "cleared". Called from the
-  // `loam-wipe-restart` bridge listener below — fired both for a LIVE kill-switch signal and for
-  // main.js's own boot-time RESUME repost (a suspended/backgrounded/killed RN gets another chance).
-  const attemptWipeKeyClear = async () => {
-    setWipeClearBusy(true);
-    // Clear the device key material and, only on a VERIFIED clear, ack the launcher — see
-    // `clearWipeKeyAndAck`. This is the SOLE native path that touches the stored key on a wipe.
-    const result = await clearWipeKeyAndAck(clearStoredDbKeys, () => nodejs.channel.post('loam-wipe-complete'));
-    setWipeClearBusy(false);
+  // `loam-wipe-restart` bridge listener below, fired both for a LIVE kill-switch signal and for main.js's
+  // own boot-time RESUME repost (a suspended/backgrounded/killed RN gets another chance), and from Retry,
+  // which repeats the kind last asked for (`wipeKeyClearKindRef`). A request while a clear runs joins it.
+  const attemptWipeKeyClear = () =>
+    wipeKeyClearFlight.run(async () => {
+      const kind = wipeKeyClearKindRef.current;
+      wipeKeyClearStateRef.current = 'clearing';
+      setWipeClearBusy(true);
+      // Clear the device key material and, only on a VERIFIED clear, ack the launcher (see
+      // `clearWipeKeyAndAck`); this is the SOLE native path that touches the stored key on a wipe. Around it,
+      // what the kind needs (lib/emergency-reset.ts `finishWipeKeyClear`): a live reset's runtime can't restart
+      // in this process (nodejs-mobile starts once per process), so LOAM closes, after forgetting the setup
+      // record and the WebView's storage; a resumed one boots on here, keeping the setup just made.
+      const result = await clearWipeKeyAfterReset(
+        kind,
+        () => clearWipeKeyAndAck(clearStoredDbKeys, () => nodejs.channel.post('loam-wipe-complete')),
+      );
+      wipeKeyClearStateRef.current = wipeKeyClearStateAfter(kind, result);
+      setWipeClearBusy(false);
 
-    if (!result.ok) {
-      setWipeClearFailure(result.error ?? t('boot.keyClearUnknown'));
-      return;
-    }
-
-    setWipeClearFailure(undefined);
-    // The wiped runtime can't restart in this process (nodejs-mobile starts once per process), and a
-    // reopened activity would only reattach to it, stuck. Close LOAM completely instead: the next launch is
-    // a clean start on the setup screens. The last shared file's cached copy goes first (lib/save-file.ts),
-    // or it would sit in the cache until that launch.
-    await closeAfterReset(clearSharedFiles, closeApp);
-  };
+      if (!result.ok) {
+        setWipeClearFailure(result.error ?? t('boot.keyClearUnknown'));
+        return;
+      }
+      setWipeClearFailure(undefined);
+    });
 
   // Display mode: keep the screen awake and pin the app while it's on. Both are best-effort no-ops when
   // unsupported; on unmount we release both so the app is never left stuck in lock-task.
@@ -651,14 +668,16 @@ function HostScreen() {
     // native module only starts its runtime ONCE per process (`_startedNodeAlready` — a second
     // `nodejs.start()` call is a silent no-op, not an error, so it can never be trusted to have actually
     // restarted anything). So after a verified clear `attemptWipeKeyClear` closes LOAM completely
-    // (`closeAfterReset` → the native `closeApp`); the next launch is a clean start on the setup screens.
+    // (`closeLoamAfterReset` → the native `closeApp`); the next launch is a clean start on the setup screens.
     //
-    // main.js also re-fires this SAME event at ITS OWN boot time if its durable `.loam-wipe-phase`
-    // file still reads `key-clear-ready`, i.e. an earlier clear attempt never got far enough to
-    // ack (the server proved artifacts gone but the device key was never confirmed cleared). This
-    // handler doesn't need to (and can't) distinguish that from a live signal; `attemptWipeKeyClear` is
-    // idempotent either way (clearing an already-cleared key just verifies clean and acks again).
-    const onWipeRestart = () => {
+    // main.js also re-fires this event at ITS OWN boot time, with `{ resume: true }`, if its durable
+    // `.loam-wipe-phase` file still reads `key-clear-ready`, i.e. an earlier clear attempt never got far
+    // enough to ack (the server proved artifacts gone but the device key was never confirmed cleared). That
+    // runtime is fresh and boots on once the key is cleared, and the setup screens already ran in this
+    // launch, so a resume keeps the setup record and the app open. The clear itself is idempotent
+    // (clearing an already-cleared key just verifies clean and acks again).
+    const onWipeRestart = (payload: unknown) => {
+      wipeKeyClearKindRef.current = wipeRestartKind(payload);
       void attemptWipeKeyClear();
     };
 
@@ -666,10 +685,16 @@ function HostScreen() {
     nodejs.channel.addListener('loam-hostinfo', onHostInfo);
     nodejs.channel.addListener('loam-wipe-restart', onWipeRestart);
     // A new message for the host phone's own person (the server's `__loamNotifyHost`, via main.js): an
-    // Android notification while LOAM is in the background (lib/message-notifier.ts).
+    // Android notification while LOAM is in the background (lib/message-notifier.ts). The first `load` also
+    // removes any notification an earlier process left, before the runtime starts below.
     void messageNotifier.load();
     nodejs.channel.addListener('loam-message-notice', (payload: unknown) => {
       messageNotifier.notice(payload);
+    });
+    // The server took a notified message back (deleted, changed, or the person lost the channel; its
+    // `__loamWithdrawHostNotice`, via main.js): the notification still showing that text goes.
+    nodejs.channel.addListener('loam-message-withdrawn', (payload: unknown) => {
+      messageNotifier.withdraw(payload);
     });
     // Every Emergency Reset, however it was started (the server's `__loamHostReset`, via main.js): the
     // notifications show the network's messages, so they go even if this WebView never hears the reset.
@@ -686,7 +711,8 @@ function HostScreen() {
     // Answer main.js's DB-encryption key request at boot (docs/01, docs/21). Registered here rather
     // than gated on nodeStarted so it's always listening before/whenever main.js's own request arrives
     // — though main.js's request/response handoff is race-free regardless (it requests and waits).
-    const cleanupDbEncryption = registerDbEncryption(nodejs.channel);
+    // A key is resolved only once no device-key clear is running, since a resolve can mint the secret.
+    const cleanupDbEncryption = registerDbEncryption(nodejs.channel, { waitBeforeKeyResolve: wipeKeyClearFlight.settled });
 
     if (!nodeStarted) {
       nodeStarted = true;
@@ -700,6 +726,7 @@ function HostScreen() {
       nodejs.channel.removeAllListeners('loam-hostinfo');
       nodejs.channel.removeAllListeners('loam-wipe-restart');
       nodejs.channel.removeAllListeners('loam-message-notice');
+      nodejs.channel.removeAllListeners('loam-message-withdrawn');
       nodejs.channel.removeAllListeners('loam-host-reset');
       cleanupLlm();
       cleanupMesh();
@@ -1090,13 +1117,16 @@ function HostScreen() {
     if (!webView) {
       return false;
     }
-    webView.injectJavaScript(
-      `history.pushState(null, '', ${JSON.stringify(path)}); dispatchEvent(new PopStateEvent('popstate')); true;`,
-    );
+    webView.injectJavaScript(webViewRouteScript(path));
     return true;
   }
 
-  const handleWebViewMessage = (event: { nativeEvent: { data: string } }) => {
+  const handleWebViewMessage = (event: { nativeEvent: { data: string; url?: string } }) => {
+    // Only LOAM's own page may talk to this screen (lib/host-injection.ts): the navigation guard fails open,
+    // so an outside page can briefly hold this WebView and its `ReactNativeWebView` bridge.
+    if (!acceptsWebViewMessage(event.nativeEvent.url)) {
+      return;
+    }
     const raw = event.nativeEvent.data;
     // The web client's "Invite someone" can ask the native host to open the share/invite overlay — that
     // overlay (host-share-overlay.tsx) carries the Wi-Fi hotspot QR, which the WebView itself can't render
@@ -1135,6 +1165,11 @@ function HostScreen() {
         // Give the client's own local purge a moment, then rejoin under the node's NEW transport key (see
         // `webViewKey`). Still a native no-op for key material — that stays with the acked protocol above.
         setTimeout(() => {
+          // Only for an in-process reset: while a device-key clear is under way LOAM is closing, and once
+          // one failed the Retry screen shows; a re-bootstrap would remount against a server that is gone.
+          if (!mayRebootstrapAfterWipe(wipeKeyClearStateRef.current)) {
+            return;
+          }
           remountAfterBootstrapRef.current = true;
           // Gate the WebView again while the re-bootstrap runs: if that attempt fails, `gate()` surfaces the
           // existing Retry control instead of leaving the stale WebView mounted with no way to rejoin.
@@ -1211,9 +1246,7 @@ function HostScreen() {
               case 'privacy':
                 // Served by this node (the web client's /rules and /privacy pages): they open in this WebView,
                 // with no internet and no other website involved.
-                webViewRef.current?.injectJavaScript(
-                  `history.pushState(null, '', '/${action}'); dispatchEvent(new PopStateEvent('popstate')); true;`,
-                );
+                webViewRef.current?.injectJavaScript(webViewRouteScript(`/${action}`));
                 return;
               case 'about':
                 setAboutOpen(true);
@@ -1284,7 +1317,7 @@ function HostScreen() {
             // Hand the launcher's per-boot host token to the LOAM client running in THIS WebView (and only
             // here — a LAN joiner never sees it): the client claims admin with it under the `hostDevice`
             // bootstrap. Only by injection, never in the URL: the client trusts these globals (the key
-            // below overrides a pin), and a URL is something anyone can craft. `originWhitelist` + `onShouldStartLoadWithRequest` below pin this frame to the
+            // below overrides a pin), and a URL is something anyone can craft. `onShouldStartLoadWithRequest` below pins this frame to the
             // loopback origin, so the injected globals can't reach another page.
             // Also hand over the host's transport key (read from the loopback bootstrap above) as
             // `__loamHostTransportKey`: the client trusts it over a stale pin, since a node with an ephemeral
@@ -1294,14 +1327,13 @@ function HostScreen() {
             // host's preload does (apps/desktop/src/preload/client.cts): the client then keeps no IndexedDB
             // copy of messages, which would sit in the clear beside the SQLCipher database, and deletes one
             // an older version left (apps/client/src/lib/local-store.ts; docs/04, docs/24).
-            injectedJavaScriptBeforeContentLoaded={
-              (hostAdminToken ? `window.__loamHostDeviceToken = ${JSON.stringify(hostAdminToken)};` : '') +
-              (transportKeyFragment
-                ? `window.__loamHostTransportKey = ${JSON.stringify(decodeURIComponent(transportKeyFragment.slice('#k='.length)))};`
-                : '') +
-              (hostNoLocalCache ? 'window.__loamHostNoLocalCache = true;' : '') +
-              ' true;'
-            }
+            // The script runs on every page start, and the navigation guard below fails open, so it sets
+            // these only when the page's own origin is LOAM's (lib/host-injection.ts).
+            injectedJavaScriptBeforeContentLoaded={hostInjectionScript({
+              hostToken: hostAdminToken,
+              transportKeyFragment,
+              noLocalCache: hostNoLocalCache,
+            })}
             // The LOAM client relies on the loam_session cookie, localStorage, IndexedDB (unless refused
             // above) and a WebSocket — enable them. localStorage holds the identity token and preferences,
             // no messages, so it stays on for every network. The cleartext 127.0.0.1 origin is allowed by the
@@ -1315,35 +1347,43 @@ function HostScreen() {
             // Bridge from the LOAM web client back to this native screen, see `handleWebViewMessage`'s
             // comment.
             onMessage={handleWebViewMessage}
-            onLoadEnd={() => {
-              const pending = pendingConversationRef.current;
-              pendingConversationRef.current = undefined;
-              if (pending) {
-                openConversationInWebView(pending);
+            // A conversation waiting to open is routed once LOAM's own page has loaded; after any other load
+            // (a foreign page that slipped past the guard) it waits for the next one.
+            onLoadEnd={({ nativeEvent }) => {
+              const { open, keep } = pendingConversationAfterLoad(pendingConversationRef.current, nativeEvent.url);
+              pendingConversationRef.current = keep;
+              if (open) {
+                openConversationInWebView(open);
               }
             }}
             // Track whether the client has in-app history so the hardware Back handler (above) knows
             // whether to navigate back or let Android exit the app.
+            // A page that isn't LOAM's got in (`onShouldStartLoadWithRequest` lets a load through when the JS
+            // thread doesn't answer in time): stop it and load LOAM again by remounting the WebView.
             onNavigationStateChange={(navState) => {
               canGoBackRef.current = navState.canGoBack;
+              if (isForeignPage(navState.url)) {
+                webViewRef.current?.stopLoading();
+                setWebViewKey((key) => key + 1);
+              }
             }}
-            // Keep the WebView pinned to the embedded server's origin. originWhitelist is a coarse
-            // prefix guard; onShouldStartLoadWithRequest is the real one — it allows only LOAM-origin
-            // navigations and shunts external links (the client opens them with target=_blank) to the
-            // system browser, so the host frame never leaves LOAM. That needs `setSupportMultipleWindows`
-            // off: with it on (the default), Android hands a target=_blank link to a detached popup
-            // WebView that never consults onShouldStartLoadWithRequest; off, the link navigates this
-            // WebView, which the handler below refuses and opens in the system browser instead.
-            originWhitelist={[LOAM_URL]}
+            // Keep the WebView pinned to the embedded server's origin. `originWhitelist` lets every URL
+            // through on purpose: react-native-webview checks it first and hands a URL that fails it
+            // straight to Android (`Linking.openURL`, so any scheme becomes an intent) without asking
+            // onShouldStartLoadWithRequest. So the handler decides every navigation (lib/host-injection.ts
+            // `navigationDecision`): LOAM's own pages load, other http(s) links (the client opens them with
+            // target=_blank) go to the system browser, and every other scheme is refused. That needs
+            // `setSupportMultipleWindows` off: with it on (the default), Android hands a target=_blank link
+            // to a detached popup WebView that never consults onShouldStartLoadWithRequest; off, the link
+            // navigates this WebView, which the handler refuses and opens in the system browser instead.
+            originWhitelist={['*']}
             setSupportMultipleWindows={false}
             onShouldStartLoadWithRequest={(request) => {
-              if (isLoamUrl(request.url)) {
-                return true;
-              }
-              if (/^https?:\/\//i.test(request.url)) {
+              const decision = navigationDecision(request.url);
+              if (decision === 'external') {
                 void Linking.openURL(request.url).catch(() => undefined);
               }
-              return false;
+              return decision === 'load';
             }}
             onError={({ nativeEvent }) => {
               console.warn('LOAM WebView error', nativeEvent.description);
@@ -1408,9 +1448,7 @@ function HostScreen() {
           onOpenAdmin={() => {
             // The web client's admin page, assistant section, in this WebView (the host is its admin).
             setModelManagerOpen(false);
-            webViewRef.current?.injectJavaScript(
-              `history.pushState(null, '', '/admin#admin-llm'); dispatchEvent(new PopStateEvent('popstate')); true;`,
-            );
+            webViewRef.current?.injectJavaScript(webViewRouteScript('/admin?section=llm'));
           }}
         />
         <DbEncryptionSettingsOverlay
@@ -1502,6 +1540,8 @@ function HostScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       secureTextEntry
+                      autoComplete="off"
+                      importantForAutofill="no"
                       returnKeyType="done"
                       onSubmitEditing={() => {
                         if (!unlockBusy && !startFreshBusy && unlockPassphraseInput) {
@@ -1567,6 +1607,8 @@ function HostScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       secureTextEntry
+                      autoComplete="off"
+                      importantForAutofill="no"
                       returnKeyType={unlockNeedsConfirmation ? 'next' : 'done'}
                       onSubmitEditing={() => {
                         if (!unlockBusy && unlockPassphraseInput && !unlockNeedsConfirmation) {
@@ -1584,6 +1626,8 @@ function HostScreen() {
                         autoCapitalize="none"
                         autoCorrect={false}
                         secureTextEntry
+                        autoComplete="off"
+                        importantForAutofill="no"
                         returnKeyType="done"
                         onSubmitEditing={() => {
                           if (!unlockBusy && unlockPassphraseInput) {

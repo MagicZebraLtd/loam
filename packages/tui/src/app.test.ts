@@ -126,6 +126,7 @@ function setup(
     startLocked?: boolean;
     now?: () => number;
     failSaves?: boolean;
+    listen?: { host: string; port: number };
   } = {},
 ) {
   const host = options.host ?? fakeHost();
@@ -146,7 +147,14 @@ function setup(
     log,
     terminal,
     system,
-    launch: { dataDir: "/home/ada/.loam", nodeVersion: "v24.15.0", platform: "darwin arm64", databaseDriver: "node:sqlite" },
+    launch: {
+      dataDir: "/home/ada/.loam",
+      nodeVersion: "v24.15.0",
+      platform: "darwin arm64",
+      databaseDriver: "node:sqlite",
+      listenHost: options.listen?.host ?? "0.0.0.0",
+      listenPort: options.listen?.port ?? 3000,
+    },
     // The host note is acknowledged unless a test is about it (see "the host note").
     settings: { hostAck: HOST_ACK_VERSION, ...options.settings },
     saveSettings: (next) => {
@@ -202,7 +210,7 @@ describe("the Join screen", () => {
     expect(screen).toContain("LOAM  Field kitchen");
     expect(screen).toContain("1 device");
     expect(screen).toContain("http://192.168.8.159:3000");
-    expect(screen).toContain("http://localhost:3000");
+    expect(screen).toContain("http://127.0.0.1:3000");
     expect(screen).toMatch(/[█▀▄]{10}/);
     expect(screen).toContain("Nobody is admin yet");
   });
@@ -226,13 +234,16 @@ describe("the Join screen", () => {
     const qrRows = (screen: string) => screen.split("\n").filter((line) => line.includes("│") && /[█▀▄]/.test(line)).length;
     const { tui, system, host, screenText } = setup();
     await tui.input("o");
-    expect(system.openUrl).toHaveBeenCalledWith(`http://localhost:3000#k=${KEY}&a=code000000000000000001`);
+    expect(system.openUrl).toHaveBeenCalledWith(`http://127.0.0.1:3000#k=${KEY}&a=code000000000000000001`);
+    // IPv4 loopback, never `localhost`: that name can resolve to [::1] first, where LOAM doesn't listen and
+    // another account on this computer could, and read the code from the fragment.
+    expect(new URL(vi.mocked(system.openUrl).mock.calls[0]![0]).host).toBe("127.0.0.1:3000");
     expect(host.adminClaimCode).toHaveBeenCalledTimes(1);
     expect(screenText()).toContain("signed in as admin");
     // The link stays on screen even when the opener claims success: a browser that never showed up is no dead end.
     expect(screenText()).toContain("If no browser window appeared");
     const dialogText = screenText().split("\n").map((line) => line.replace(/^.*│ /, "").replace(/ *│.*$/, "")).join("");
-    expect(dialogText).toContain(`http://localhost:3000#k=${KEY}&a=code000000000000000001`);
+    expect(dialogText).toContain(`http://127.0.0.1:3000#k=${KEY}&a=code000000000000000001`);
     expect(qrRows(screenText())).toBe(0);
 
     await tui.input("p");
@@ -243,6 +254,47 @@ describe("the Join screen", () => {
     await pressEscape(tui);
     expect(tui.modal).toBeUndefined();
     expect(host.revokeAdminClaimCode).toHaveBeenCalledWith("code000000000000000002");
+  });
+
+  it("opens the admin link on the port and address LOAM listens on, not the advertised port", async () => {
+    // CLIENT_PORT advertises 3000 to joiners while the node itself listens on 3001.
+    const { tui, system, screenText } = setup({ listen: { host: "0.0.0.0", port: 3001 } });
+    expect(screenText()).toContain("http://127.0.0.1:3001");
+    await tui.input("o");
+    expect(system.openUrl).toHaveBeenCalledWith(`http://127.0.0.1:3001#k=${KEY}&a=code000000000000000001`);
+
+    const pinned = setup({ listen: { host: "192.168.8.159", port: 3001 } });
+    await pinned.tui.input("o");
+    expect(pinned.system.openUrl).toHaveBeenCalledWith(`http://192.168.8.159:3001#k=${KEY}&a=code000000000000000001`);
+  });
+
+  it("ignores o while the browser is still being opened", async () => {
+    let finishOpening: (opened: boolean) => void = () => {};
+    const { tui, system, host } = setup();
+    vi.mocked(system.openUrl).mockImplementation(() => new Promise((resolve) => (finishOpening = resolve)));
+    const first = tui.input("o");
+    await tui.input("o");
+    finishOpening(true);
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.adminClaimCode).toHaveBeenCalledTimes(1);
+    expect(system.openUrl).toHaveBeenCalledTimes(1);
+    expect(tui.modal?.kind).toBe("panel");
+  });
+
+  it("says the admin link also stops after 10 minutes", async () => {
+    const { tui, screenText } = setup();
+    await tui.input("o");
+    expect(screenText()).toContain("10 minutes");
+  });
+
+  it("retires the local admin code when the panel closes, claimed or not", async () => {
+    const { tui, host } = setup();
+    await tui.input("o");
+    expect(host.revokeAdminClaimCode).not.toHaveBeenCalled();
+    await pressEscape(tui);
+    expect(tui.modal).toBeUndefined();
+    expect(host.revokeAdminClaimCode).toHaveBeenCalledWith("code000000000000000001");
   });
 
   it("puts the phone's link on the join address, and shows it in full when the QR won't fit", async () => {
@@ -257,7 +309,7 @@ describe("the Join screen", () => {
     expect(screen).toContain("Make the window bigger to show this as a QR code.");
     // Both links, broken across lines but never cut short.
     const joined = screen.split("\n").map((line) => line.replace(/^.*│ /, "").replace(/ *│.*$/, "")).join("");
-    expect(joined).toContain(`http://localhost:3000#k=${KEY}&a=code000000000000000001`);
+    expect(joined).toContain(`http://127.0.0.1:3000#k=${KEY}&a=code000000000000000001`);
     expect(joined).toContain(`http://192.168.8.159:3000#k=${KEY}&a=code000000000000000002`);
   });
 
@@ -710,6 +762,41 @@ describe("the Assistant rows", () => {
     await tui.input("sk-or-secret\r");
     expect(host.updateConfig).toHaveBeenLastCalledWith({ llm: { openai: { apiKey: "sk-or-secret" } } });
     expect(screenText()).not.toContain("sk-or-secret");
+  });
+
+  it("says so when moving the service to another address drops the saved key", async () => {
+    const host = fakeHost();
+    host.config().llm.openai.enabled = true;
+    host.config().llm.openai.apiKeySet = true;
+    // The node drops a saved key when the address moves to another origin.
+    host.updateConfig.mockImplementationOnce((update: LoamConfigUpdate) => {
+      const config = host.config();
+      config.llm.openai = { ...config.llm.openai, baseUrl: update.llm?.openai?.baseUrl ?? config.llm.openai.baseUrl, apiKeySet: false };
+      return { ok: true as const, value: config };
+    });
+    const { tui, screenText } = setup({ host });
+    await openRow(tui, 8);
+    await tui.input("\x1b[B\x1b[B\r");
+    expect(host.updateConfig).toHaveBeenLastCalledWith({ llm: { openai: { baseUrl: "https://api.groq.com/openai/v1" } } });
+    expect(screenText()).toContain("The saved key was for the old address: enter the key for this one.");
+    expect(screenText()).toContain("Not set");
+  });
+
+  it("drops the model list when the host has moved on before it arrives", async () => {
+    for (const moveOn of ["1", "?"]) {
+      const host = fakeHost();
+      host.config().llm.ollama.enabled = true;
+      let answer: (result: LlmModelsResponse) => void = () => {};
+      host.llmModels.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const { tui, screenText } = setup({ host });
+      await openRow(tui, 9);
+      await tui.input(moveOn);
+      const before = tui.modal;
+      answer({ ok: true, models: ["gemma4", "qwen3"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(tui.modal).toBe(before);
+      expect(screenText()).not.toContain("2 models offered");
+    }
   });
 
   it("falls back to a typed model name when the backend can't be asked", async () => {

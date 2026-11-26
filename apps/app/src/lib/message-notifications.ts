@@ -2,7 +2,11 @@
 import * as SecureStore from 'expo-secure-store';
 import { AppState } from 'react-native';
 
-import { clearMessageNotifications, showMessageNotification } from '../../modules/loam-hotspot';
+import {
+  clearMessageNotification,
+  clearMessageNotifications,
+  showMessageNotification,
+} from '../../modules/loam-hotspot';
 import { ALERT_LEVEL_ITEM, createMessageNotifier } from './message-notifier';
 
 export { alertLevelForClientMessage, conversationPath } from './message-notifier';
@@ -11,6 +15,7 @@ export const messageNotifier = createMessageNotifier({
   isAppActive: () => AppState.currentState === 'active',
   show: showMessageNotification,
   clear: clearMessageNotifications,
+  clearConversation: clearMessageNotification,
   readLevel: () => SecureStore.getItemAsync(ALERT_LEVEL_ITEM),
   writeLevel: (level) => SecureStore.setItemAsync(ALERT_LEVEL_ITEM, level),
 });

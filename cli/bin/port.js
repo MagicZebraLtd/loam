@@ -34,10 +34,17 @@ function canBind(port, host) {
   });
 }
 
-/** The addresses to probe for a server listening on `host`: that host, plus loopback for a wildcard. */
+/**
+ * The addresses to probe for a server listening on `host`: that host, plus loopback for a wildcard. For
+ * `localhost`, both loopback addresses: the name may resolve to `::1` alone, so probing the name would miss a
+ * program on `127.0.0.1:<port>`, which is where the local admin link (`http://127.0.0.1:<port>`) points.
+ */
 export function probeHosts(host) {
   const wildcard = host === "0.0.0.0" || host === "::";
-  return wildcard ? [host, "127.0.0.1", "::1"] : [host];
+  if (wildcard) {
+    return [host, "127.0.0.1", "::1"];
+  }
+  return host.toLowerCase() === "localhost" ? ["127.0.0.1", "::1"] : [host];
 }
 
 /** Whether nothing else is listening on `port` for a server that will bind `host`. */
