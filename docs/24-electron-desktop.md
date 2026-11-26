@@ -114,8 +114,11 @@ does finish, the screen moves to Stopped by itself. Quit stays bounded on its ow
 10 s whatever the node did).
 
 **Discarding a network finishes once it has begun.** "Start a new network" (`newNetwork()`) first writes a
-durable `discardPending` mark into `desktop.json`, before anything is reset or destroyed, then runs
-`markClientCopyStale()` and resets a running node. Then `finishDiscard` closes the node (nothing is
+durable `discardPending` mark into `desktop.json`, before anything is reset or destroyed, and sets
+`clientCopyStale` in that same write, so a window copy a later step can't erase is erased at the launch
+after. It then asks a running node to reset, which tells the devices connected to it to purge their
+copies. That reset is an attempt: if it throws, the failure is logged and the discard goes on, so those
+devices may not have been told. Then `finishDiscard` closes the node (nothing is
 destroyed while it hasn't closed; that fails as `stop_timeout` and leaves the mark), destroys
 the key, empties the data folder and the client window's copy, and drops the network record and the mark
 in one last write. Each step can run again, and `initialize()` (a launch) and `start()` (Try again) finish

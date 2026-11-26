@@ -945,6 +945,34 @@ describe("a new network", () => {
     expect(markedFirst).toBe(true);
   });
 
+  it("still erases the window's copy at a later launch when LOAM stopped after the discard's first write", async () => {
+    const made = makeController({ settings: { logLevel: "info", network: community } });
+    await made.controller.initialize();
+    const write = made.settings.write.bind(made.settings);
+    let firstWrite: DesktopSettings | undefined;
+    made.settings.write = (next) => {
+      firstWrite ??= structuredClone(next);
+      write(next);
+    };
+    await made.controller.newNetwork();
+
+    // LOAM stopped right after that write. The next launch finishes the discard but can't erase the window's copy.
+    const relaunched = makeController({ settings: firstWrite! });
+    const deps = (relaunched.controller as unknown as { deps: ControllerDeps }).deps;
+    deps.onNetworkDiscarded = async () => {
+      throw new Error("profile locked");
+    };
+    await relaunched.controller.initialize();
+    expect(relaunched.states.at(-1)).toMatchObject({ phase: "setup" });
+    expect(relaunched.settings.read()).toEqual({ logLevel: "info", clientCopyStale: true });
+
+    // So the launch after that one erases it.
+    const later = makeController({ settings: relaunched.settings.read() });
+    await later.controller.initialize();
+    expect(later.cleared()).toBe(1);
+    expect(later.settings.read()).toEqual({ logLevel: "info" });
+  });
+
   /** Each way the discard can fail after its first destructive step, set up on a running community network. */
   const failures: Record<string, (made: ReturnType<typeof makeController>) => () => void> = {
     "the key can't be destroyed": (made) => {

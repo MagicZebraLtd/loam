@@ -880,20 +880,22 @@ export class NodeController {
   /**
    * Discard this network and go back to setup. The discard is recorded first (`discardPending`), so a launch
    * after LOAM stopped at any later step finishes it instead of booting the old record over an emptied network.
-   * A running node is then reset, so every joined device is told to purge its copy; then the node stops, its
-   * key is destroyed and its folder emptied.
+   * A running node is then asked to reset, so the devices connected to it are told to purge their copies. That
+   * reset is an attempt: one that throws is logged and the discard goes on, so those devices may not have been
+   * told. Then the node stops, its key is destroyed and its folder emptied.
    */
   newNetwork(): Promise<HostResult<void>> {
     return this.serialize(async () => {
       try {
-        this.deps.settings.write({ ...this.deps.settings.read(), discardPending: true });
+        // The stale-copy mark goes in the same write. In a second write, a stop between the two (or that write
+        // failing) left a later launch that couldn't erase the window's copy with nothing to make it try again.
+        this.deps.settings.write({ ...this.deps.settings.read(), discardPending: true, clientCopyStale: true });
       } catch (error) {
         // Unrecorded, a failure part-way would leave the old record to boot: nothing is reset or destroyed yet.
         const detail = `The discard couldn't be recorded, so nothing was erased: ${errorDetail(error)}`;
         this.fail("unknown", detail);
         return { ok: false, error: detail };
       }
-      this.markClientCopyStale();
       if (this.running) {
         this.launcherReset = true;
         try {
