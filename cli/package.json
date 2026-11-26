@@ -36,7 +36,7 @@
     "node": "^22.14.0 || >=23.6.0"
   },
   "optionalDependencies": {
-    "better-sqlite3-multiple-ciphers": "^13.0.3"
+    "better-sqlite3-multiple-ciphers": "^13.2.0"
   },
   "scripts": {
     "prepublishOnly": "cd .. && pnpm -r build && node scripts/build-cli.mjs"
