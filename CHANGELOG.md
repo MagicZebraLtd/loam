@@ -4,7 +4,12 @@ All notable changes to LOAM are recorded here. LOAM is a local-first, off-grid m
 `README.md` and `MISSION.md`). Format loosely follows [Keep a Changelog](https://keepachangelog.com);
 the project is pre-1.0, so the surface can still change. Dates are UTC.
 
-## [Unreleased]
+## [0.8.0] - 2026-11-27
+
+A security and privacy release: the fixes from November's security reviews, external and internal, and from a
+release-readiness review of the result. Every network hosted from the Android app now accepts only
+encrypted connections, the desktop app moves to Electron 45, and addresses carry the screen after `#/`. The
+Google Play bundle is `versionCode` 14.
 
 ### Before you update
 - **Android hosts: on a network that keeps its data, you come back as a new person.** The app now opens LOAM
