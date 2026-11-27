@@ -20,6 +20,22 @@ Galaxy S25 Ultra) against a clean release build.
 If an item here exposes a native-runtime discrepancy, that is a genuine new finding. If they all pass, the
 branch is done.
 
+## Updating over the last release
+
+No test covers an installed app meeting its successor, so do these two before every release.
+
+- **Android.** Install the last release, set up a Community network (it keeps its data), post, send a direct
+  message, create a private channel, and have a second phone join by the code. Install the new build over it
+  and tap Continue. The network opens with its messages, and the second phone is still the same person. For
+  the update from 0.7.0, expect the host to be a new person (the Welcome screen, a new name, admin again):
+  the app's own screen moved from `localhost` to `127.0.0.1` (changelog, "Before you update"). Open LOAM a
+  second time and check the host is still that same new person, which shows that clearing the old address's
+  storage at launch leaves the new one alone.
+- **Desktop, on each OS.** Install the last release, set up a Community network (its key is in the keychain),
+  post, quit. Install the new build over it and open it. The network opens with its messages. If the keychain
+  won't release the old secret the app shows the Failed screen with Try again; note the OS and the keyring.
+  The update from 0.7.0 crosses a major Electron version (44 to 45), which this check has never been run for.
+
 ## Build and install
 
 ```bash

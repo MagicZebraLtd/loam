@@ -163,7 +163,8 @@ supported setup:
 - The live connection (`/ws`) is refused with a 403. The server checks that the page's `Origin` matches
   the `Host` the request came in on, port included. Behind the proxy the page's Origin is
   `https://chat.example.org`, port 443, while the server, which never sees the TLS, reads the bare
-  `Host: chat.example.org` as port 80. Pages load, but nothing updates live.
+  `Host: chat.example.org` as port 80. Pages load, but nothing updates live. Requests that change something
+  are checked the same way, so nothing can be posted either.
 - LOAM ignores `X-Forwarded-For` and `X-Forwarded-Proto` (no `trustProxy`, so a forged header can't dodge
   the per-address limits). Every visitor looks like the proxy's address, so they all share one rate-limit
   budget, including the default of 60 new identities per 10 minutes, and the session cookie isn't
@@ -192,7 +193,10 @@ the address gets less protection: see **Connections** in [§4](#4-shaping-the-ne
   screen on and pins LOAM in front; press and hold to leave it. The network keeps running with the
   screen off either way. After upgrading to the release that made this the rule, anyone who had joined
   your phone's network by typing its address gets a new identity once they scan: their old name, messages
-  and roles stay with the old identity.
+  and roles stay with the old identity. The same release moved the app's own screen from `localhost` to
+  `127.0.0.1`, so on a network that keeps its data the host comes back as a new person too (admin again at
+  once). Hand each private channel you own to another member before updating, so they can invite you back; an
+  admin can also pass a channel's ownership to someone already in it afterwards.
 - **From inside LOAM:** admins and greeters have **Invite someone** in the sidebar, with the code, a
   **Copy link** button and a note on how to join. It includes the encryption key only when that device
   joined by scanning, so a key can't be passed on second-hand.
@@ -372,8 +376,8 @@ its copy the next time it reaches the network at the same address. What it doesn
   found" without its token being checked. Two requests with the right token at once start one reset.
 
 **How thorough it is.** With an encrypted database, the files are deleted and the key is replaced (on the
-host phone, and on a computer using a key that lives only in memory), so whatever is left on the storage
-can't be read. A computer using a fixed passphrase deletes the files but keeps the passphrase. Without
+host phone, in the desktop app, and under `loamnet` with a key that lives only in memory), so whatever is left
+on the storage can't be read. `loamnet` with a fixed passphrase deletes the files but keeps the passphrase. Without
 encryption it's an ordinary delete, which can leave traces on flash storage ([docs/02](02-kill-switch.md)).
 
 **Be honest about the limits.** This raises the bar; it doesn't guarantee safety. A host taken while it's

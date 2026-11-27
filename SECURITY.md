@@ -91,7 +91,8 @@ trade-offs, not open bugs:
 - **Plain HTTP on the LAN** (`http://<lan-ip>`, no TLS/CA on a local hotspot). Not a browser secure
   context, so WebCrypto and service workers are unavailable. **App-layer transport encryption is
   shipped** ([docs/08](docs/08-transport-security.md)): QR-bootstrapped X25519/XChaCha20 session
-  encryption, `optional` by default, `required` in the `hardened` profile. Honest residual:
+  encryption, `optional` by default, `required` in the `hardened` profile and on every network the Android
+  app hosts. Honest residual:
   `optional` mode still accepts a client that joined without the QR key (a manually typed URL). Its
   identity is the session cookie, a plaintext header outside the seal, so a passive listener who captures
   one request can replay it to read that member's DMs and post as them; its pictures and files download in

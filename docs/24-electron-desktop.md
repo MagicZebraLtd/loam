@@ -53,8 +53,10 @@ Three kinds of process, one contract.
 | **Licence notices** | `scripts/third-party-notices.mjs desktop` → `dist/THIRD_PARTY_NOTICES.txt` | The open-source packages the bundles above inline, and Electron, each with its licence (docs/14 "Licence notices"). Electron's own `LICENSE.electron.txt` and `LICENSES.chromium.html` travel with every installer too: electron-builder puts them in the app folder on Windows and Linux, and `mac.extraResources` copies them into the Mac bundle's `Contents/Resources`. |
 
 Preloads are `.cts` and compiled to CommonJS `.cjs`: a sandboxed preload cannot be an ES module, and `electron`
-is the only module it may require. Electron 45.3.0 is pinned exactly (a bump means a native re-check). Its Node
-is on the 24 line, so the main process is built for `node24`, and the renderer is built for `chrome120`.
+is the only module it may require. Electron is pinned to an exact 45.x version in `apps/desktop/package.json`
+(a bump means a native re-check: `build:native` prints the Electron it loaded the SQLCipher driver under, and
+`LOAM_SMOKE_REQUIRE_ENCRYPTION=1 pnpm --filter @loam/desktop smoke` boots a node on it). Its Node is on the
+24 line, so the main process is built for `node24`, and the renderer is built for `chrome120`.
 
 ### The IPC contract
 
@@ -162,7 +164,7 @@ The mirror of the Android launcher (`apps/app/src/lib/db-encryption.ts`). A rand
 | `passphrase` (With a passphrase) | `SHA-256(passphrase + ":" + deviceSecret)`, hex | SQLCipher |
 | `persistent` (Kept in this computer's keychain) | the device secret itself | SQLCipher |
 
-The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2 and 44.9.1, not yet re-checked under 45.3.0),
+The unencrypted driver is `node:sqlite`, built into Electron's Node (verified working under Electron 44.7.2 and 44.9.1, and under 45.5.0 in an unpackaged run on an Apple-silicon Mac),
 so an unencrypted network has no native dependency, as with the CLI. Presets pick the default: **Private**
 is `ephemeral`; **Community** and **Choose every setting myself** are `persistent`, or `passphrase` when this
 computer has no keychain.

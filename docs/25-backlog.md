@@ -27,6 +27,35 @@
 | O15 | **Pictures and files are served to anyone who knows the id.** `GET /api/attachments/:fileName` (public-channel files) and `GET /api/avatars/:fileName` don't check that the caller is a participating member; the id (60 random bits) is the only gate, by design. Decide whether a member check is worth its cost. | 12 | Decision |
 | O16 | **`loamnet` with `HOST=localhost`**: local links use `127.0.0.1`, but Node may bind `[::1]` alone for that name, so the admin link can find nothing listening. The start-up port check looks at both loopback addresses, so it can no longer reach another program that already held the port; one that takes `127.0.0.1` afterwards still could. | 14 | S |
 
+### Releasing: the checklist
+
+Written for the release after 0.7.0 (27 November 2026) and kept for the ones after it. In order:
+
+1. **Dry-run both tag workflows on `master`** (Actions, "Build APK" and "Build desktop", Run workflow). A
+   manual run publishes nothing: the installers are workflow artifacts. Neither workflow has run since
+   `v0.7.0`, Electron 45 has never been packaged, and the desktop tests have never run on the Windows runner
+   with this month's changes. Fix what fails before any tag exists.
+2. **Bump the version**: all 14 manifests (root, `cli`, five apps, six packages, and `expo.version` in
+   `apps/app/app.json`) and raise `expo.android.versionCode` above the last release tag's. Rename
+   `[Unreleased]` in the changelog and date it. `node scripts/check-versions.mjs --release-tag vX.Y.Z` must
+   pass.
+3. **Hand checks** (docs/21), above all the two "Updating over the last release" ones: no test covers an
+   installed app meeting the new one.
+4. **Tag.** Both workflows start on the tag and attach to one Release. The first to finish (the APK, about
+   half an hour) creates it, and GitHub makes it "Latest" at once with empty notes. Until the desktop workflow
+   finishes (notarizing the Mac apps has taken close to an hour), the website's five desktop download links
+   return 404, and they stay broken if a desktop job fails. Two ways to shrink that: tag `vX.Y.Z-rc.1`
+   first (a pre-release is never "Latest", and it exercises signing, notarization, attestation and the
+   release job end to end; it uses up one `versionCode`, so the final needs a higher one), or tag when you
+   can watch both runs and re-run a failed job straight away.
+5. **Check the Release**: the APK and five installers, each with its `.sha256`, 12 files. `spctl --assess`
+   one of the DMGs. Paste the changelog section in as the Release notes, "Before you update" first.
+6. **`npm publish` from `cli/`.** npm has 0.6.0: 0.7.0 was never published there.
+7. **Play**: upload the bundle (`loam-host-aab`, a workflow artifact of the tag build). When it is live,
+   change the Data safety form to the answers in docs/30 ("Encrypted in transit: Yes").
+8. **Website**: it deploys from `master` when something under `apps/site` changed. After the tag, click
+   every download on `/desktop` from a clean browser.
+
 ### Before 0.7.0
 
 The release checklist. 0.7.0 is released: the signed tag `v0.7.0` was pushed on 27 October 2026 (the
