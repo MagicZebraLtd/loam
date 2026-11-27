@@ -11,12 +11,15 @@
 # Whenever the answer can't be worked out it builds: a needless build costs a minute, a missed one leaves
 # the site stale.
 #
-# Vercel's clone holds only the last 10 commits, so the commit to compare with may have to be fetched. A
+# Vercel's clone holds only the last 10 commits, so the commit to compare with may have to be fetched. Its
+# clone has no remote this step can fetch from (seen on this script's first run), so the fetch falls back to
+# the repository's public address, which needs no credentials while the repository is public. A
 # dependency of the site that changes only in pnpm-lock.yaml or pnpm-workspace.yaml doesn't count as a change
 # and ships with the next one. To deploy regardless, use Redeploy in the Vercel dashboard (the commit that is
 # already live always builds), or untick "Use project's Ignore Build Step" there.
 
 production_branch=master
+public_address="https://github.com/${VERCEL_GIT_REPO_OWNER:-}/${VERCEL_GIT_REPO_SLUG:-}.git"
 
 build() {
   echo "vercel-ignore: building: $1"
@@ -28,6 +31,12 @@ skip() {
   exit 0
 }
 
+# Fetch one commit or branch tip, shallow: from the clone's own remote if it has one, else by address.
+fetch() {
+  git fetch --quiet --depth=1 origin "$1" 2>/dev/null ||
+    git fetch --quiet --depth=1 "$public_address" "$1" 2>/dev/null
+}
+
 head=$(git rev-parse --verify --quiet HEAD) || build "git can't read HEAD"
 base=$VERCEL_GIT_PREVIOUS_SHA
 against="the last deployment of this branch"
@@ -36,8 +45,7 @@ if [ -z "$base" ]; then
   if [ "$VERCEL_ENV" = "production" ]; then
     build "there is no earlier production deployment to compare with"
   fi
-  git fetch --quiet --depth=1 origin "$production_branch" 2>/dev/null ||
-    build "couldn't fetch $production_branch to compare with"
+  fetch "$production_branch" || build "couldn't fetch $production_branch to compare with"
   base=$(git rev-parse --verify --quiet "FETCH_HEAD^{commit}") ||
     build "couldn't read the fetched $production_branch"
   against=$production_branch
@@ -48,7 +56,7 @@ if [ "$base" = "$head" ]; then
 fi
 
 if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-  git fetch --quiet --depth=1 origin "$base" 2>/dev/null
+  fetch "$base"
   git cat-file -e "$base^{commit}" 2>/dev/null ||
     build "commit $base isn't in this clone and couldn't be fetched"
 fi
