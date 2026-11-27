@@ -49,7 +49,7 @@
       <div class="wrap legal-body">
         <p class="eyebrow">Legal</p>
         <h1>Privacy policy</h1>
-        <p class="legal-meta">Last updated 11 November 2026</p>
+        <p class="legal-meta">Last updated 27 November 2026</p>
 
         <p>
           This policy covers two things: the <strong>LOAM app</strong> (the Android host app, the desktop app
@@ -96,7 +96,8 @@
           <li>
             <strong>Your identity on that network:</strong> a random user id (such as
             <code>user.1a2b3c4d…</code>), the display name generated from it or one you choose, and your
-            avatar settings or an avatar image you upload. A session cookie links your browser to that id.
+            avatar settings or an avatar image you upload. A session cookie, or a sign-in token kept in your
+            browser's storage when you join by the code, links your browser to that id.
           </li>
           <li>
             <strong>What you post:</strong> channel messages, replies, direct messages, reactions, and any
@@ -147,8 +148,9 @@
             device. The exception is the desktop app on Linux with no keychain, where a passphrase network keeps
             its key in an unprotected file: flash storage may keep that file after it is deleted. A reset does not reach backups of the host device. <code>loamnet</code> with a fixed
             passphrase deletes the database files but keeps the same passphrase. With <code>loamnet</code>, the
-            browser you use as admin is an ordinary browser: like anyone else's, it keeps its own unencrypted
-            copy until the reset reaches it. Uploaded images and files are stored outside the
+            browser you use as admin is an ordinary browser. On an unencrypted network it keeps its own copy,
+            like anyone else's, until the reset reaches it. On an encrypted network a browser on the host
+            computer itself keeps no copy. Uploaded images and files are stored outside the
             database without encryption. A reset deletes them, but on flash storage a deleted image or file may
             still be recoverable.
           </li>
@@ -160,8 +162,8 @@
         <h3>When data leaves the host device</h3>
         <p>
           In the default setup, nothing leaves the host device except the messages delivered to the people
-          on that network, over the local Wi-Fi or hotspot. When you join by scanning the host's QR code, the
-          app encrypts everything between your device and the host: messages, pictures and files, both ways.
+          on that network, over the local Wi-Fi or hotspot. Scanning the host's QR code sets up an encrypted
+          session for messages, pictures and files, both ways.
           Android hosts always require encrypted connections. Someone who types the address instead of
           scanning gets much less protection, unless the host requires encrypted connections (then they are
           asked to scan). Their sign-in cookie travels unencrypted, so

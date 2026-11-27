@@ -17,6 +17,14 @@ Point Vercel at this repo with **Root Directory = `apps/site`**. It auto-detects
 pins the build command, output directory, and a few security headers. Set the production domain to
 `loamnet.com`.
 
+Vercel builds the site only when something under `apps/site` has changed. `vercel.json` names
+`scripts/vercel-ignore.sh` as its Ignored Build Step: it compares this folder with the last deployment of the
+same branch, or with `master` on a branch's first deployment, and builds whenever it can't tell. A change
+that reaches the site only through `pnpm-lock.yaml` or `pnpm-workspace.yaml` (Vite, a dependency's own
+dependencies) ships with the next change to this folder. To deploy regardless, use Redeploy in the Vercel
+dashboard: the commit that is already live always builds, and unticking "Use project's Ignore Build Step"
+builds any other.
+
 ## Structure
 
 - `index.html`: the landing page (semantic sections, accessible).

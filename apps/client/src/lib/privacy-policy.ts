@@ -12,7 +12,7 @@ export { CONTACT_EMAIL, ISSUE_TRACKER, WEBSITE };
 export type PolicyBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
 export type PolicySection = { heading: string; blocks: PolicyBlock[] };
 
-export const PRIVACY_POLICY_UPDATED = "11 November 2026";
+export const PRIVACY_POLICY_UPDATED = "27 November 2026";
 
 export const PRIVACY_POLICY: PolicySection[] = [
   {
@@ -68,8 +68,8 @@ export const PRIVACY_POLICY: PolicySection[] = [
         kind: "list",
         items: [
           "**Your identity on that network:** a random user id (such as `user.1a2b3c4d…`), the name generated " +
-            "from it or one you choose, and your avatar settings or a picture you upload. A session cookie links " +
-            "your browser to that id.",
+            "from it or one you choose, and your avatar settings or a picture you upload. A session cookie, or a " +
+            "sign-in token kept in your browser's storage when you join by the code, links your browser to that id.",
           "**What you post:** channel messages, replies, direct messages, reactions, and any pictures or files " +
             "you attach. A location appears only if you add it to a message yourself.",
           "**That you agreed to the network rules**, and which version of them.",
@@ -111,8 +111,9 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "desktop app on Linux with no keychain, where a passphrase network keeps its key in an unprotected " +
             "file: flash storage may keep that file after it is deleted. A reset does not " +
             "reach backups of the host device. `loamnet` with a fixed passphrase deletes the database files but " +
-            "keeps the same passphrase. With `loamnet`, the browser you use as admin is an ordinary browser: " +
-            "like anyone else's, it keeps its own unencrypted copy until the reset reaches it. Pictures and " +
+            "keeps the same passphrase. With `loamnet`, the browser you use as admin is an ordinary browser. " +
+            "On an unencrypted network it keeps its own copy, like anyone else's, until the reset reaches it. " +
+            "On an encrypted network a browser on the host computer itself keeps no copy. Pictures and " +
             "files are stored beside the " +
             "database without encryption. A " +
             "reset deletes them, but on flash storage a deleted picture or file may still be recoverable.",

@@ -123,7 +123,9 @@ if (posthogKey) {
     capture_pageleave: false,
     disable_session_recording: true,
     disable_surveys: true,
-    advanced_disable_decide: true,
+    // No feature-flag or remote-config requests, so the only host contacted is the one above. (This was
+    // `advanced_disable_decide`, which posthog-js has deprecated and will remove in a major version.)
+    advanced_disable_flags: true,
   });
 
   // The interest signals beyond a pageview: a Google Play, download or GitHub click, and copying the npx command.
