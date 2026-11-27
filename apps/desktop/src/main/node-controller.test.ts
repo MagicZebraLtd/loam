@@ -1008,6 +1008,12 @@ describe("a new network", () => {
     },
   };
 
+  // Windows has no folder permission that stops its files being deleted (chmod there only sets the read-only
+  // flag), so that arrangement can't make the discard fail. The desktop tag build runs this suite on Windows.
+  if (process.platform === "win32") {
+    delete failures["the folder can't be emptied"];
+  }
+
   for (const [name, arrange] of Object.entries(failures)) {
     it(`finishes the discard at Try again when ${name}, and never boots under the old record`, async () => {
       const made = makeController({ settings: { logLevel: "info", network: community } });

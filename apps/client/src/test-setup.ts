@@ -11,4 +11,8 @@ import { afterAll, vi } from "vitest";
 afterAll(async () => {
   vi.useRealTimers();
   await new Promise((resolve) => setTimeout(resolve, 80));
+  // One more turn of the timer queue. Preact's 35 ms timer only schedules the cleanups; a second, zero-delay
+  // timer runs them. When the machine stalls, that timer and the wait above come due together, and the wait
+  // would end with the cleanups still queued. A timer set now runs after theirs.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
