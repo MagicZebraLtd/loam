@@ -340,7 +340,8 @@ export type BootstrapResponse = {
   /** Sent only to a browser on the host machine while the database is encrypted: keep no IndexedDB copy
    *  (`applyHostNoLocalCacheHint` in local-store.ts). */
   hostNoLocalCache?: true;
-  /** The node's clock when it answered, in milliseconds (`noteNodeClock` in retention.ts). Absent on older nodes. */
+  /** The node's clock when it answered, in milliseconds (`noteNodeClock` in retention.ts). Only `/api/config`
+   *  carries it; absent on older nodes. */
   serverTime?: number;
 };
 

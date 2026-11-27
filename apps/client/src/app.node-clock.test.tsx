@@ -122,9 +122,9 @@ describe("retention on a network whose host clock is behind this device's", () =
       "fetch",
       vi.fn(async (input: string, init?: RequestInit) => {
         const url = String(input);
-        const bootstrap = { joinUrl: "http://node.test/", websocketPath: "/ws", networkConfig, serverTime: serverClock() };
+        const bootstrap = { joinUrl: "http://node.test/", websocketPath: "/ws", networkConfig };
         if (url === "/api/bootstrap") return json(bootstrap);
-        if (url === "/api/config") return json({ ...bootstrap, currentUser: me });
+        if (url === "/api/config") return json({ ...bootstrap, currentUser: me, serverTime: serverClock() });
         if (url === "/api/users/me/blocks") return json({ blockedUserIds: [] });
         if (url === "/api/channels") return json([general]);
         if (url === "/api/users") return json([me, other]);

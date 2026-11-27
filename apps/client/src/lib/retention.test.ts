@@ -135,6 +135,14 @@ describe("the node's clock", () => {
       noteNodeClock(deviceNow + HOUR, deviceNow);
       restoreNodeClock(records);
       expect(nodeNow(deviceNow)).toBe(deviceNow + HOUR);
+
+      // A remembered lead that puts the node ahead is not used: if this device's clock has been set right
+      // since it was saved, it would expire messages early.
+      await persistRetentionTtl(HOUR);
+      const ahead = await getAllRecords<{ id: string }>("sync");
+      forgetNodeClockForTests();
+      restoreNodeClock(ahead);
+      expect(nodeNow(deviceNow)).toBe(deviceNow);
     } finally {
       await destroyDatabase().catch(() => undefined);
       resetLocalStoreForTests();

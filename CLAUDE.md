@@ -323,14 +323,14 @@ still drive everything through `buildApp()` + `inject`, so the split is invisibl
   stands alone. Clients apply the same rule to what they hold (`lib/retention.ts`, `pruneExpiredMessages` in
   `app.tsx`): the node TTL from `NetworkConfig.messageTtlMs` (remembered in the `sync` store as `retention`
   for an offline start) and each channel's own, at hydration, on a TTL/channel change and every 60 s, with
-  "now" = max(the node's clock as estimated, newest held `createdAt`): `/api/bootstrap` and `/api/config` carry `serverTime`, and `noteNodeClock`/`nodeNow` (`lib/retention.ts`) keep the difference from the device clock (remembered with the TTL), since every `createdAt` is the node's stamp and a host's clock can be hours off (a Pi has no battery clock).
+  "now" = max(the node's clock as estimated, newest held `createdAt`): `/api/config` carries `serverTime` (never the unsealed `/api/bootstrap`), and `noteNodeClock`/`nodeNow` (`lib/retention.ts`) keep the difference from the device clock (remembered with the TTL; a remembered one is used at an offline start only when it puts the node behind), since every `createdAt` is the node's stamp and a host's clock can be hours off (a Pi has no battery clock).
 - **Kill switch** (off by default; `killSwitch.enabled`): `executeKillSwitch()` deletes avatars,
   invalidates sessions, broadcasts `wipe` (clients purge IndexedDB/localStorage/SW caches and show a
   neutral disconnected screen), closes sockets, and re-seeds defaults. Config survives. The data
   wipe depends on encryption: **encrypted** (`LOAM_DB_KEY` set) → close store, delete DB files, and
   (ephemeral mode) rotate to a fresh key — a cryptographic wipe that makes flash remnants
   unreadable; the store is reopened so `app.store` is a **getter**, not a snapshot. **Unencrypted** →
-  `store.wipeAll()` + `VACUUM` + checkpoint (the `config` row is rewritten only if one existed; a node set up by `config.json` alone gets just `{sync:{enabled:false}}`, and only when sync was on, so the file is still read afterwards) (plaintext stores run `PRAGMA secure_delete`, so the file keeps
+  `store.wipeAll()` + `VACUUM` + checkpoint (only `sync.enabled` is written into the `config` row, `configRowWithSyncOff`, and only when the reset turned sync off: a node set up by `config.json` alone gets just `{sync:{enabled:false}}`, so the file is still read afterwards) (plaintext stores run `PRAGMA secure_delete`, so the file keeps
   no deleted text, but it is **not** secure erasure on flash — docs/02). Every branch also sweeps
   `.loam-recovery-*` snapshots (a start-fresh's moved-aside DB + media): fail-closed in the encrypted
   branches, best-effort (warns on a survivor) in the plaintext one. A client that was offline during the

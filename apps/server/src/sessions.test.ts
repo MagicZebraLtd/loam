@@ -212,8 +212,9 @@ describe("ending a session", () => {
 
 describe("the node's clock in its answers", () => {
   // Messages carry this node's clock as `createdAt`. A client judges retention by it (`serverTime`), since its
-  // own clock may be hours from the host's off-grid.
-  it("stamps /api/bootstrap and /api/config with the time it answered", async () => {
+  // own clock may be hours from the host's off-grid. Only `/api/config` says it: a member who joined by the
+  // code reads that answer sealed, while `/api/bootstrap` is always in clear.
+  it("stamps /api/config with the time it answered, and leaves /api/bootstrap without one", async () => {
     const app = await makeApp();
     const session = await newSession(app);
 
@@ -224,10 +225,9 @@ describe("the node's clock in its answers", () => {
     ).json() as { serverTime?: number };
     const after = Date.now();
 
-    for (const stamp of [bootstrap.serverTime, config.serverTime]) {
-      expect(Number.isSafeInteger(stamp)).toBe(true);
-      expect(stamp).toBeGreaterThanOrEqual(before);
-      expect(stamp).toBeLessThanOrEqual(after);
-    }
+    expect(Number.isSafeInteger(config.serverTime)).toBe(true);
+    expect(config.serverTime).toBeGreaterThanOrEqual(before);
+    expect(config.serverTime).toBeLessThanOrEqual(after);
+    expect(bootstrap.serverTime).toBeUndefined();
   });
 });

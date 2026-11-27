@@ -260,7 +260,6 @@ async function fetchBootstrapJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Boots
 
     // The host machine's own browser on an encrypted node keeps no IndexedDB copy (docs/02).
     applyHostNoLocalCacheHint(bootstrap.hostNoLocalCache === true);
-    noteNodeClock(bootstrap.serverTime);
     return bootstrap;
   } finally {
     window.clearTimeout(timeout);

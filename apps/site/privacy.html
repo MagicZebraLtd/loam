@@ -150,7 +150,9 @@
             passphrase deletes the database files but keeps the same passphrase. With <code>loamnet</code>, the
             browser you use as admin is an ordinary browser. On an unencrypted network it keeps its own copy,
             like anyone else's, until the reset reaches it. On an encrypted network a browser on the host
-            computer itself keeps no copy. Uploaded images and files are stored outside the
+            computer keeps no copy when it opens LOAM by the link <code>loamnet</code> gives for that computer (a
+            <code>127.0.0.1</code> address). Opened by the network's own address, it is an ordinary member's
+            browser and keeps a copy. Uploaded images and files are stored outside the
             database without encryption. A reset deletes them, but on flash storage a deleted image or file may
             still be recoverable.
           </li>

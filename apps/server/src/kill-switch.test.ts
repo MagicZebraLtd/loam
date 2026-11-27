@@ -469,6 +469,10 @@ describe("kill switch", () => {
     expect(reset.statusCode).toBe(200);
     expect(JSON.parse(app.store.getConfigValue("config") ?? "null")).toEqual({ sync: { enabled: false } });
 
+    // A second reset finds that small row. It must not swap it for the whole running config.
+    expect((await app.emergencyReset()).complete).toBe(true);
+    expect(JSON.parse(app.store.getConfigValue("config") ?? "null")).toEqual({ sync: { enabled: false } });
+
     writeFileSync(join(dataDir, "config.json"), JSON.stringify({ ...fileConfig, node: { name: "Renamed in config.json" } }));
     const next = await reopenApp(app, dataDir);
     const bootstrap = (await next.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as {
@@ -481,6 +485,47 @@ describe("kill switch", () => {
     ).json() as { sync: { enabled: boolean; peers: unknown[] } };
     expect(stored.sync.enabled).toBe(false);
     expect(stored.sync.peers).toHaveLength(1);
+  });
+
+  it("stores the sync pause when the first attempt at a reset failed part-way and the second went through", async () => {
+    const { app } = await makeApp({
+      killSwitch: { enabled: true },
+      sync: { enabled: true, peers: [{ url: "http://192.0.2.10:3000" }] },
+    });
+    const wipeAll = app.store.wipeAll.bind(app.store);
+    let failedOnce = false;
+    app.store.wipeAll = () => {
+      if (!failedOnce) {
+        failedOnce = true;
+        throw new Error("disk full");
+      }
+      wipeAll();
+    };
+
+    // The first attempt turned sync off in memory and stopped before the database. The second finds sync
+    // already off, and still has that pause to store.
+    expect((await app.emergencyReset()).complete).toBe(false);
+    expect((await app.emergencyReset()).complete).toBe(true);
+    expect(JSON.parse(app.store.getConfigValue("config") ?? "null")).toEqual({ sync: { enabled: false } });
+  });
+
+  it("turns sync off in the settings an admin saved and changes nothing else in them", async () => {
+    const { app } = await makeApp({ killSwitch: { enabled: true } });
+    const admin = await newSession(app);
+    const saved = await app.server.inject({
+      method: "PATCH",
+      url: "/api/admin/config",
+      headers: { cookie: admin.cookie },
+      payload: { node: { name: "Saved by an admin" }, sync: { enabled: true, peers: [{ url: "http://192.0.2.10:3000" }] } },
+    });
+    expect(saved.statusCode).toBe(200);
+    const before = JSON.parse(app.store.getConfigValue("config") ?? "null") as { sync: { enabled: boolean } };
+    expect(before.sync.enabled).toBe(true);
+
+    expect((await app.emergencyReset()).complete).toBe(true);
+
+    const after = JSON.parse(app.store.getConfigValue("config") ?? "null") as { sync: { enabled: boolean } };
+    expect(after).toEqual({ ...before, sync: { ...before.sync, enabled: false } });
   });
 
   it("leaves no pre-reset host key in the checkpointed plaintext file, so a power cut after the reset cannot bring the old join QR back", async () => {

@@ -38,7 +38,7 @@ function usableLead(value: unknown): number | undefined {
 }
 
 /**
- * Record the node's clock from an answer it stamped (`serverTime` on `/api/bootstrap` and `/api/config`).
+ * Record the node's clock from an answer it stamped (`serverTime` on `/api/config`).
  * The answer's travel time is in the result, which is seconds against retentions of minutes and more. An
  * answer with no stamp (an older node) changes nothing.
  */
@@ -57,13 +57,20 @@ export function nodeNow(deviceNow = Date.now()): number {
   return deviceNow + (nodeClockLeadMs ?? 0);
 }
 
-/** Use the lead remembered from an earlier visit until the node answers, for an offline start. */
+/**
+ * Use the lead remembered from an earlier visit until the node answers, for an offline start, but only one
+ * that says the node is behind this device. A remembered lead is as old as the last visit: if this device's
+ * clock was wrong then and has been set right since, a lead that put the node ahead would expire messages
+ * early, from the screen and from the local copy. One that puts the node behind can only keep a message
+ * longer, as a slow device clock always could. The node's next answer replaces either.
+ */
 export function restoreNodeClock(records: readonly { id: string }[]): void {
   if (nodeClockLeadMs !== undefined) {
     return;
   }
   const record = records.find((entry) => entry.id === RETENTION_RECORD_ID) as Partial<RetentionRecord> | undefined;
-  nodeClockLeadMs = usableLead(record?.nodeClockLeadMs);
+  const remembered = usableLead(record?.nodeClockLeadMs);
+  nodeClockLeadMs = remembered !== undefined && remembered < 0 ? remembered : undefined;
 }
 
 /** Forget the node's clock, so one test's node can't set the next one's time. */

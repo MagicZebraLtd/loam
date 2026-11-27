@@ -24,10 +24,11 @@ Google Play bundle is `versionCode` 14.
   typed address now only shows the scan screen. A laptop that can't scan opens the whole join link from the
   host's share screen ("Share or copy the link"). (docs/08)
 - **`loamnet`: "Open on this device" is now `http://127.0.0.1:<port>`**, not `http://localhost:<port>`. To
-  your browser that is a different site, so there you are a new person until you use the admin link again.
-  Your old admin identity is still at `http://localhost:<port>`. On an `--encrypt` node, open that old address
-  once (or clear its site data in the browser): the earlier version kept an unencrypted copy of what it
-  showed there, and the new version removes it when that address is opened. (docs/14)
+  your browser that is a different site, so there you are a new person until you use the admin link again,
+  and your old admin identity stays behind with the old address. The earlier version also kept an unencrypted
+  copy of what it showed under `localhost`, on `--encrypt` nodes too: clear the site data for `localhost` in
+  the browser's settings. Don't open the old address to do it. The link moved because another account on
+  the same computer can answer for `localhost`. (docs/14)
 - **`loamnet` users update from 0.6.0**, since 0.7.0 was not published to npm. Everything under 0.7.0 below
   is new to you as well, and members are asked to agree to the rules once more.
 - **Mesh mail does not cross between this version and 0.3.0 to 0.7.x**, in either direction. Update every
@@ -331,7 +332,7 @@ Google Play bundle is `versionCode` 14.
   kept one unencrypted, beside the encrypted database. (docs/02, docs/14)
 - **Phones and browsers drop their cached messages once the network's retention has passed**, at start and
   every minute, including while away from the host. Retention is judged by the host's clock, which the node
-  now reports, since a member's clock and the host's can be hours apart off-grid. (docs/07)
+  now reports to its members, since a member's clock and the host's can be hours apart off-grid. (docs/07)
 - **A member can hold at most 16 live connections, one address 64, and a node 1,024.** Further ones are
   refused. When a save makes a network require encryption, connections that aren't encrypted are closed at
   once. (docs/12)

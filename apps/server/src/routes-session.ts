@@ -49,9 +49,6 @@ export function registerSessionRoutes(ctx: AppContext): void {
     joinUrl: `http://${ctx.currentJoinHost()}:${ctx.clientPort}`,
     websocketPath: "/ws",
     networkConfig: ctx.currentNetworkConfig(),
-    // This node's clock. Every message carries it as `createdAt`, so a client judges retention by it and not
-    // by its own clock, which may be hours from this one off-grid (`noteNodeClock` in the client).
-    serverTime: Date.now(),
     ...(ctx.dbState.encryptionEnabled && ctx.requestFromLoopback(request) ? { hostNoLocalCache: true } : {}),
   }));
 
@@ -65,6 +62,10 @@ export function registerSessionRoutes(ctx: AppContext): void {
       websocketPath: "/ws",
       currentUser: ctx.rolesVisibleUser(currentUser),
       networkConfig: ctx.currentNetworkConfig(),
+      // This node's clock. Every message carries it as `createdAt`, so a client judges retention by it and
+      // not by its own clock, which may be hours from this one off-grid (`noteNodeClock` in the client). It is
+      // here and not in `/api/bootstrap`: that answer is never sealed, and a client that joined by the code
+      // must not take the time from something anyone on the network can rewrite.
       serverTime: Date.now(),
     };
   });

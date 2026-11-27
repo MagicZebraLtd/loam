@@ -113,7 +113,9 @@ export const PRIVACY_POLICY: PolicySection[] = [
             "reach backups of the host device. `loamnet` with a fixed passphrase deletes the database files but " +
             "keeps the same passphrase. With `loamnet`, the browser you use as admin is an ordinary browser. " +
             "On an unencrypted network it keeps its own copy, like anyone else's, until the reset reaches it. " +
-            "On an encrypted network a browser on the host computer itself keeps no copy. Pictures and " +
+            "On an encrypted network a browser on the host computer keeps no copy when it opens LOAM by the " +
+            "link `loamnet` gives for that computer (a `127.0.0.1` address). Opened by the network's own address, " +
+            "it is an ordinary member's browser and keeps a copy. Pictures and " +
             "files are stored beside the " +
             "database without encryption. A " +
             "reset deletes them, but on flash storage a deleted picture or file may still be recoverable.",

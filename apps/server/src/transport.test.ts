@@ -847,17 +847,16 @@ describe("transport encryption transparent round-trip", () => {
     const session = await openSession(app);
     await resumeIdentity(app, session, 1);
 
+    // Every request the budget allows is answered, by the tunnel and by the route behind it (a refusal
+    // from an inner limit would come back inside an outer 200).
     let seq = 2;
-    for (let sent = 0; sent < 350; sent += 1) {
+    for (let sent = 0; sent < TUNNEL_REQUESTS_PER_MINUTE; sent += 1) {
       const res = await tunnel(app, session, seq, { m: "GET", p: "/api/channels" });
       expect(res.statusCode, `tunnelled request ${sent + 1}`).toBe(200);
+      expect(openTunnel(session, res).status, `inner answer ${sent + 1}`).toBe(200);
       seq += 1;
     }
     // The budget is still a limit.
-    for (let sent = 350; sent < TUNNEL_REQUESTS_PER_MINUTE; sent += 1) {
-      await tunnel(app, session, seq, { m: "GET", p: "/api/channels" });
-      seq += 1;
-    }
     expect((await tunnel(app, session, seq, { m: "GET", p: "/api/channels" })).statusCode).toBe(429);
   }, 60_000);
 
