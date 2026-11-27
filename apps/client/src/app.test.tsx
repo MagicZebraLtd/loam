@@ -1564,8 +1564,9 @@ describe("the route stays in the address's fragment (a reload never sends a conv
     });
     const host = await boot("/mesh");
     LiveWebSocket.sockets.at(-1)!.open();
-    await settle();
-    expect(host.textContent).toContain("Old friend");
+    // The address book arrives after the screen's effect has run, which Preact does after a paint: a count
+    // of timer turns (`settle`) can end before that on a slow machine, so wait for the name itself.
+    await vi.waitFor(() => expect(host.textContent).toContain("Old friend"), { timeout: 5000 });
 
     // The node hands this browser a new identity while the socket is down (its session was reset).
     newcomerConfirmed = true;
