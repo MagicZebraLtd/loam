@@ -3,7 +3,16 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { destroyDatabase, getAllRecords, resetLocalStoreForTests } from "./local-store";
-import { cachedRetentionTtl, expiredMessageIds, persistRetentionTtl, retentionTtlFor } from "./retention";
+import {
+  cachedRetentionTtl,
+  expiredMessageIds,
+  forgetNodeClockForTests,
+  nodeNow,
+  noteNodeClock,
+  persistRetentionTtl,
+  restoreNodeClock,
+  retentionTtlFor,
+} from "./retention";
 
 // Client-side retention (review 2026-11-07 F-030): a device that was away when the node's reaper ran must
 // still drop what has expired, by the node TTL and each channel's own shorter one.
@@ -83,10 +92,61 @@ describe("expiredMessageIds", () => {
   });
 });
 
+describe("the node's clock", () => {
+  beforeEach(forgetNodeClockForTests);
+  afterEach(forgetNodeClockForTests);
+
+  const deviceNow = 1_800_000_000_000;
+
+  it("is this device's clock until the node reports its own", () => {
+    expect(nodeNow(deviceNow)).toBe(deviceNow);
+    noteNodeClock(undefined, deviceNow);
+    noteNodeClock(Number.NaN, deviceNow);
+    noteNodeClock(-5, deviceNow);
+    expect(nodeNow(deviceNow)).toBe(deviceNow);
+  });
+
+  it("follows a host whose clock is behind, so a message it just stamped is not expired", () => {
+    const hostNow = deviceNow - 2 * HOUR;
+    noteNodeClock(hostNow, deviceNow);
+    expect(nodeNow(deviceNow)).toBe(hostNow);
+    // A minute later on both clocks.
+    expect(nodeNow(deviceNow + 60_000)).toBe(hostNow + 60_000);
+
+    const fresh = { id: "m1", type: "channelPost", channelId: "general", authorId: "user.a", body: "hi", createdAt: hostNow } as Message;
+    const general = { id: "general", name: "general", visibility: "public", createdAt: 1 } as Channel;
+    expect([...expiredMessageIds([fresh], [general], HOUR, deviceNow)]).toEqual(["m1"]);
+    expect([...expiredMessageIds([fresh], [general], HOUR, nodeNow(deviceNow))]).toEqual([]);
+  });
+
+  it("is remembered with the TTL for an offline start, and a fresh report wins over the remembered one", async () => {
+    globalThis.indexedDB = new IDBFactory();
+    resetLocalStoreForTests();
+    try {
+      noteNodeClock(deviceNow - 2 * HOUR, deviceNow);
+      await persistRetentionTtl(HOUR);
+      const records = await getAllRecords<{ id: string }>("sync");
+      expect(cachedRetentionTtl(records)).toBe(HOUR);
+
+      forgetNodeClockForTests();
+      restoreNodeClock(records);
+      expect(nodeNow(deviceNow)).toBe(deviceNow - 2 * HOUR);
+
+      noteNodeClock(deviceNow + HOUR, deviceNow);
+      restoreNodeClock(records);
+      expect(nodeNow(deviceNow)).toBe(deviceNow + HOUR);
+    } finally {
+      await destroyDatabase().catch(() => undefined);
+      resetLocalStoreForTests();
+    }
+  });
+});
+
 describe("the remembered node TTL", () => {
   beforeEach(() => {
     globalThis.indexedDB = new IDBFactory();
     resetLocalStoreForTests();
+    forgetNodeClockForTests();
   });
 
   afterEach(async () => {

@@ -209,3 +209,25 @@ describe("ending a session", () => {
     expect(app.store.loadUsers().length).toBe(usersBefore);
   });
 });
+
+describe("the node's clock in its answers", () => {
+  // Messages carry this node's clock as `createdAt`. A client judges retention by it (`serverTime`), since its
+  // own clock may be hours from the host's off-grid.
+  it("stamps /api/bootstrap and /api/config with the time it answered", async () => {
+    const app = await makeApp();
+    const session = await newSession(app);
+
+    const before = Date.now();
+    const bootstrap = (await app.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as { serverTime?: number };
+    const config = (
+      await app.server.inject({ method: "GET", url: "/api/config", headers: { cookie: session.cookie } })
+    ).json() as { serverTime?: number };
+    const after = Date.now();
+
+    for (const stamp of [bootstrap.serverTime, config.serverTime]) {
+      expect(Number.isSafeInteger(stamp)).toBe(true);
+      expect(stamp).toBeGreaterThanOrEqual(before);
+      expect(stamp).toBeLessThanOrEqual(after);
+    }
+  });
+});

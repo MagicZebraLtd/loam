@@ -18,8 +18,58 @@ export const RETENTION_PRUNE_INTERVAL_MS = 60_000;
 /** The `sync` store record that remembers the node's retention for an offline start. */
 export const RETENTION_RECORD_ID = "retention";
 
-/** What {@link RETENTION_RECORD_ID} holds: the node TTL last reported, or none (messages are kept). */
-export type RetentionRecord = { id: typeof RETENTION_RECORD_ID; messageTtlMs?: number };
+/**
+ * What {@link RETENTION_RECORD_ID} holds: the node TTL last reported, or none (messages are kept), and how far
+ * the node's clock was from this device's when it last said (see {@link noteNodeClock}).
+ */
+export type RetentionRecord = { id: typeof RETENTION_RECORD_ID; messageTtlMs?: number; nodeClockLeadMs?: number };
+
+/**
+ * The node's clock minus this device's, from the node's last stamped answer. Every `createdAt` is the node's
+ * stamp, and a host's clock is often wrong off-grid (a Raspberry Pi has no battery clock), so retention is
+ * judged by the node's clock: by this device's, a host two hours behind made every new message look two
+ * hours old, and a one-hour retention removed it from the screen the moment it arrived.
+ */
+let nodeClockLeadMs: number | undefined;
+
+/** A lead worth keeping: a whole number of milliseconds. */
+function usableLead(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+
+/**
+ * Record the node's clock from an answer it stamped (`serverTime` on `/api/bootstrap` and `/api/config`).
+ * The answer's travel time is in the result, which is seconds against retentions of minutes and more. An
+ * answer with no stamp (an older node) changes nothing.
+ */
+export function noteNodeClock(serverTime: number | undefined, deviceNow = Date.now()): void {
+  if (typeof serverTime === "number" && Number.isSafeInteger(serverTime) && serverTime > 0) {
+    nodeClockLeadMs = serverTime - deviceNow;
+  }
+}
+
+/**
+ * The time by the node's clock, as near as this device knows it: its own clock moved by the node's last
+ * reported lead, or its own clock alone before the node has said (an older node, or an offline start with
+ * nothing remembered).
+ */
+export function nodeNow(deviceNow = Date.now()): number {
+  return deviceNow + (nodeClockLeadMs ?? 0);
+}
+
+/** Use the lead remembered from an earlier visit until the node answers, for an offline start. */
+export function restoreNodeClock(records: readonly { id: string }[]): void {
+  if (nodeClockLeadMs !== undefined) {
+    return;
+  }
+  const record = records.find((entry) => entry.id === RETENTION_RECORD_ID) as Partial<RetentionRecord> | undefined;
+  nodeClockLeadMs = usableLead(record?.nodeClockLeadMs);
+}
+
+/** Forget the node's clock, so one test's node can't set the next one's time. */
+export function forgetNodeClockForTests(): void {
+  nodeClockLeadMs = undefined;
+}
 
 /**
  * How long a message still marked as streaming is spared. The node finishes or finalizes a stream well within
@@ -39,10 +89,17 @@ export function cachedRetentionTtl(records: readonly { id: string }[]): number |
   return usableTtl(record?.messageTtlMs);
 }
 
-/** Remember the node TTL for the next (possibly offline) start; best effort, like the other `sync` records. */
+/**
+ * Remember the node TTL and the node's clock lead for the next (possibly offline) start; best effort, like the
+ * other `sync` records.
+ */
 export async function persistRetentionTtl(messageTtlMs: number | undefined): Promise<void> {
   const ttl = usableTtl(messageTtlMs);
-  const record: RetentionRecord = { id: RETENTION_RECORD_ID, ...(ttl !== undefined ? { messageTtlMs: ttl } : {}) };
+  const record: RetentionRecord = {
+    id: RETENTION_RECORD_ID,
+    ...(ttl !== undefined ? { messageTtlMs: ttl } : {}),
+    ...(nodeClockLeadMs !== undefined ? { nodeClockLeadMs } : {}),
+  };
   await putRecord("sync", record).catch(() => undefined);
 }
 
@@ -68,10 +125,11 @@ export function retentionTtlFor(
  * an expired post and the reactions on any expired message. A reply still streaming is spared, as on the node,
  * for up to {@link STREAMING_SPARE_MS}.
  *
- * `now` is the later of this device's clock and the newest `createdAt` it holds (a server stamp), which catches
- * a slow clock up to the last message this device saw. A device that is offline with a slow clock can still
- * keep a message past the node's TTL, by up to how slow its clock runs. A clock that runs fast prunes early,
- * which only removes the copy sooner.
+ * Callers pass {@link nodeNow} as `clockNow`: the node's clock as this device estimates it. `now` is the later
+ * of that and the newest `createdAt` held (a node stamp), which catches a slow estimate up to the last message
+ * this device saw. Before the node has reported its clock (an older node, or an offline start with nothing
+ * remembered) the estimate is this device's own clock: a slow one can keep a message past the node's TTL by
+ * up to how slow it runs, and a fast one prunes early.
  */
 export function expiredMessageIds(
   messages: readonly Message[],

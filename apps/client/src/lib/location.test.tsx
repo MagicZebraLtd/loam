@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { act } from "preact/test-utils";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LocationProvider, useLocation, type Location } from "./location";
 
@@ -17,13 +17,13 @@ function Probe() {
   return <p className="probe">{seen.url}</p>;
 }
 
-function mount(): HTMLDivElement {
+function mount(reload?: () => void): HTMLDivElement {
   const container = document.createElement("div");
   document.body.appendChild(container);
   mounted.push(container);
   act(() => {
     render(
-      <LocationProvider>
+      <LocationProvider reload={reload}>
         <Probe />
       </LocationProvider>,
       container,
@@ -144,6 +144,38 @@ describe("LocationProvider (fragment routes)", () => {
     window.location.hash = "#/people";
     await settle();
     expect(seen?.path).toBe("/people");
+  });
+
+  // A join link opened in a tab that already shows LOAM changes only the fragment, so the browser loads
+  // nothing and the start-up code that reads `#k=` never runs. Without a reload the key was thrown away.
+  it("loads the page again when a join link arrives in a tab that is already open", async () => {
+    for (const fragment of ["#k=hostkey", "#k=hostkey&a=admincode", "#i=invite", "#l=linkcode&k=hostkey"]) {
+      window.history.replaceState(null, "", "/#/channels");
+      const reload = vi.fn();
+      const container = mount(reload);
+
+      window.location.hash = fragment;
+      await settle();
+
+      expect(reload, fragment).toHaveBeenCalled();
+      // Left as it arrived, for the start-up code to read after the reload.
+      expect(window.location.hash, fragment).toBe(fragment);
+      render(null, container);
+    }
+  });
+
+  it("does not reload for a route, for another fragment, or for a join link the page loaded with", async () => {
+    window.history.replaceState(null, "", "/#k=hostkey");
+    const reload = vi.fn();
+    mount(reload);
+    await settle();
+
+    window.location.hash = "#/search?k=v";
+    await settle();
+    window.location.hash = "#top";
+    await settle();
+
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("keeps the same location object across renders while the route stays the same", async () => {
