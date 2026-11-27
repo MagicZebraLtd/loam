@@ -69,7 +69,15 @@ import {
 import { clearRecentReactions } from "./lib/reactions";
 import { clearAssistantAcks } from "./lib/assistant-ack";
 import { isAssistantDestinationChanged, withAssistantDestination } from "./lib/assistant-destination";
-import { cachedRetentionTtl, expiredMessageIds, persistRetentionTtl, RETENTION_PRUNE_INTERVAL_MS } from "./lib/retention";
+import {
+  cachedRetentionTtl,
+  expiredMessageIds,
+  nodeNow,
+  noteNodeClock,
+  persistRetentionTtl,
+  restoreNodeClock,
+  RETENTION_PRUNE_INTERVAL_MS,
+} from "./lib/retention";
 import { publishSearchChange } from "./lib/search-results";
 import { reconcileRoster, sortUsers } from "./lib/roster";
 import { createLivenessWatchdog, type LivenessWatchdog } from "./lib/ws-liveness";
@@ -285,6 +293,8 @@ async function fetchConfigJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Config> 
       throw new Error(t("app.configUnrecognised"));
     }
 
+    noteNodeClock(config.serverTime);
+
     return config;
   } finally {
     window.clearTimeout(timeout);
@@ -315,6 +325,8 @@ async function fetchTunnelledConfigJson(timeoutMs = REQUEST_TIMEOUT_MS): Promise
     if (!config) {
       throw new Error(t("app.configUnrecognised"));
     }
+
+    noteNodeClock(config.serverTime);
 
     return config;
   } finally {
@@ -1022,7 +1034,7 @@ function LoamApp() {
       return;
     }
     setMessages((previous) => {
-      const expired = expiredMessageIds(previous, channelsRef.current, nodeTtlMs, Date.now());
+      const expired = expiredMessageIds(previous, channelsRef.current, nodeTtlMs, nodeNow());
       if (!expired.size) {
         return previous;
       }
@@ -1807,7 +1819,8 @@ function LoamApp() {
           // device may have been away when the node's reaper deleted them (docs/07).
           const rememberedTtl = cachedRetentionTtl(cachedSync);
           setCachedNodeTtlMs(rememberedTtl);
-          const expiredAtStart = expiredMessageIds(cachedMessages, cachedChannels, rememberedTtl, Date.now());
+          restoreNodeClock(cachedSync);
+          const expiredAtStart = expiredMessageIds(cachedMessages, cachedChannels, rememberedTtl, nodeNow());
           const keptMessages = expiredAtStart.size
             ? cachedMessages.filter((message) => !expiredAtStart.has(message.id))
             : cachedMessages;

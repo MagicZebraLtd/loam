@@ -34,8 +34,11 @@
 > keeps an IndexedDB copy like any member's browser, until the reset reaches it (at once when it is
 > connected, otherwise at its next connect to the same address). On an encrypted node, ephemeral ones
 > included, a browser that opens LOAM over loopback is told to keep none (`hostNoLocalCache` in
-> `/api/bootstrap`, see below), so only a copy an older version wrote is left, and the next visit deletes
-> it. A browser that opens the node by its LAN address is an ordinary member's browser. (3) **Copies under an earlier
+> `/api/bootstrap`, see below), so only a copy an older version wrote is left, and the next visit to that same
+> address deletes it. `loamnet`'s own link moved from `localhost` to `127.0.0.1`, so a copy an older version
+> left under `localhost` is no longer visited: clear the site data for `localhost` in the browser's settings.
+> Don't open that address to clear it: the link moved because another account on the computer can answer for
+> `localhost`, and its page would be able to read that copy. A browser that opens the node by its LAN address is an ordinary member's browser. (3) **Copies under an earlier
 > address** (above). (4) **OS backups** of the host's data folder. (5) Browser history and address-bar
 > suggestions (see "What a wipe cannot reach" below). (6) **Log lines already written** (a terminal's
 > scrollback, a file the operator sends the log to). A request line names the matched route pattern

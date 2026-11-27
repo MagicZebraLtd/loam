@@ -185,7 +185,8 @@ admin area.
 | **Private and short-lived** | approved first, unless they scan the code on the host's own screen | random names and pictures | disappear after an hour on the host and on connected phones (by default) | encrypted under a key that exists only while LOAM runs |
 | **Choose every setting myself** | your choice | your choice | your choice | encrypted unless you turn it off |
 
-A Private network also only accepts encrypted connections and doesn't show who is online. On a
+A Private network also only accepts encrypted connections and doesn't show who is online. Every network
+hosted from the Android app accepts only encrypted connections, whichever kind it is. On a
 computer, the same settings live in the admin area as **security profiles**
 ([docs/09](docs/09-security-profiles.md)).
 
@@ -205,7 +206,9 @@ computer, the same settings live in the admin area as **security profiles**
   scanning gets much less. On a network that doesn't require encryption, their sign-in cookie travels
   unencrypted, so anyone listening on the Wi-Fi can copy it, then read their messages and send messages as
   them, and their pictures and files travel unencrypted too. Scanning the code avoids that. A network that
-  requires encryption (the Private one does) refuses anyone who didn't join by the code ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
+  requires encryption (a Private one, and every network hosted from the Android app) asks anyone who typed the
+  address to scan the code instead. That is not a lock on who may join: the key in the code is public, and who
+  gets in is the network's join setting ([docs/08](docs/08-transport-security.md)). Why not HTTPS: a hotspot with no internet
   can't get a certificate, so LOAM serves plain HTTP and encrypts inside the app instead, using the
   [noble](https://paulmillr.com/noble/) libraries and the host key carried in the code. It has had no
   outside security audit yet.

@@ -412,6 +412,7 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
   const switchedToSetupCode = next.admin.bootstrap === "setupCode" && ctx.appConfig.admin.bootstrap !== "setupCode";
   const switchedAwayFromSetupCode =
     ctx.appConfig.admin.bootstrap === "setupCode" && next.admin.bootstrap !== "setupCode";
+  const bootstrapChanged = next.admin.bootstrap !== ctx.appConfig.admin.bootstrap;
   ctx.appConfig = next;
   // `required` (set directly, or by the hardened profile) is checked when a socket connects; a socket that
   // connected under `optional` without a bound session would otherwise keep receiving every event, in the
@@ -460,10 +461,13 @@ export function commitAdminConfig(ctx: AppContext, next: LoamConfig): "ok" | "fa
     // This host device pins the effective strategy to `hostDevice` (its launcher's per-boot token — see
     // `effectiveAdminBootstrap`). The PATCH is persisted as the operator's intent (it applies the moment
     // this data dir runs without a host token), but minting/advertising a setup code or passphrase claim
-    // here would announce a claim path that can never succeed on this device.
-    ctx.server.log.warn(
-      `admin.bootstrap "${next.admin.bootstrap}" saved, but this host device enforces "hostDevice": the setting takes effect only where no host token is minted`,
-    );
+    // here would announce a claim path that can never succeed on this device. Said only for a save that
+    // changed the setting: every other save on a `loamnet` or Android node would repeat it.
+    if (bootstrapChanged) {
+      ctx.server.log.warn(
+        `admin.bootstrap "${next.admin.bootstrap}" saved, but this host device enforces "hostDevice": the setting takes effect only where no host token is minted`,
+      );
+    }
   } else if (switchedToSetupCode && ctx.adminSetupCode === undefined) {
     ctx.adminSetupCode = makeAdminSetupCode();
     ctx.server.log.info(`Admin setup code (single use): ${ctx.adminSetupCode}`);

@@ -3,6 +3,7 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "framework": "vite",
+  "ignoreCommand": "sh scripts/vercel-ignore.sh",
   "cleanUrls": true,
   "headers": [
     {

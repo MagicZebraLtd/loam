@@ -4,7 +4,45 @@ All notable changes to LOAM are recorded here. LOAM is a local-first, off-grid m
 `README.md` and `MISSION.md`). Format loosely follows [Keep a Changelog](https://keepachangelog.com);
 the project is pre-1.0, so the surface can still change. Dates are UTC.
 
-## [Unreleased]
+## [0.8.0] - 2026-11-27
+
+A security and privacy release: the fixes from November's security reviews, external and internal, and from a
+release-readiness review of the result. Every network hosted from the Android app now accepts only
+encrypted connections, the desktop app moves to Electron 45, and addresses carry the screen after `#/`. The
+Google Play bundle is `versionCode` 14.
+
+### Before you update
+- **Android hosts: on a network that keeps its data, you come back as a new person.** The app now opens LOAM
+  at `http://127.0.0.1:3000` instead of `http://localhost:3000`, and a browser keeps a sign-in per address.
+  After the update you see the Welcome screen again and get a new name. You are admin again at once. Your
+  old record stays in People with your old name, your direct messages and the private channels you owned.
+  Before updating, hand each private channel you own to another member (Members, Make owner), so they can
+  invite you back afterwards. After updating, an admin can still pass a channel's ownership to someone who is
+  already in it. A Private and short-lived network starts empty every time, so nothing changes there.
+  Members who joined by scanning the code keep their identity. The desktop app is not affected. (docs/04)
+- **Phone-hosted networks: members who typed the address get a new identity** once they scan the code, and a
+  typed address now only shows the scan screen. A laptop that can't scan opens the whole join link from the
+  host's share screen ("Share or copy the link"). (docs/08)
+- **`loamnet`: "Open on this device" is now `http://127.0.0.1:<port>`**, not `http://localhost:<port>`. To
+  your browser that is a different site, so there you are a new person until you use the admin link again,
+  and your old admin identity stays behind with the old address. The earlier version also kept an unencrypted
+  copy of what it showed under `localhost`, on `--encrypt` nodes too: clear the site data for `localhost` in
+  the browser's settings. Don't open the old address to do it. The link moved because another account on
+  the same computer can answer for `localhost`. (docs/14)
+- **`loamnet` users update from 0.6.0**, since 0.7.0 was not published to npm. Everything under 0.7.0 below
+  is new to you as well, and members are asked to agree to the rules once more.
+- **Mesh mail does not cross between this version and 0.3.0 to 0.7.x**, in either direction. Update every
+  node that exchanges it together. Public sync between an updated node and one still on 0.7.0 keeps working.
+- **Reload any LOAM tab left open across the update.** An open tab keeps working, but it runs the old app
+  until it is reloaded, and it can't message the assistant.
+- **An Emergency Reset now turns sync off** on every kind of network, and it stays off until an admin turns
+  it on again. See "Sync after a reset" in docs/02.
+- **Assistant settings that are now refused.** On a phone-hosted network, an `http://` address on another
+  computer (use `https://`). On every network, a service that answers with a redirect. On a Private network,
+  a `.localhost` name. An admin who moved a chat service to another address earlier has to enter its key
+  again.
+- **How to update.** Google Play updates the Android app by itself. The APK from GitHub and the desktop app
+  are installed over the old one by hand. For `loamnet`: `npm install -g loamnet`.
 
 ### Security
 - **A reply can no longer test whether a post exists in a channel you can't see.** A reply naming a post in
@@ -275,19 +313,70 @@ the project is pre-1.0, so the surface can still change. Dates are UTC.
   launcher's switch; the desktop app keeps the network's own transport setting. (docs/24)
 - **The terminal UI's diagnostics drop every address's query and fragment**, where a code or a search term
   can sit.
+- **An Emergency Reset turns sync off, on every kind of network.** A reset empties this network's record of
+  what it deleted, so a linked network would have handed every public post straight back at its next round.
+  The reset now turns sync off and keeps the list of linked networks. After a restart the sync token may be
+  gone too, since it is not kept in the copy of the settings a restart begins from. The admin Sync panel says
+  why sync is off, and it stays off until an admin turns it on again or removes every linked network. The
+  linked networks keep their own copies of the public channels. (docs/02, docs/11)
+- **Linking two networks by a code always ends with a sync token.** If the network showing the code had no
+  token and no other linked network, it makes one and hands it over in the sealed answer, so a pair linked by
+  code never syncs without one. The admin Sync panel warns when sync is on with no token. (docs/11)
+- **Requests from other websites are refused.** A page on another site, open in a member's browser, could
+  send that browser to a LOAM address. A request that changes something is now refused when it comes from
+  another origin (403), and a form-style body is refused whatever its origin (415). (docs/12)
+- **Browsers are told to keep no copy of what the node answers**, pictures included (`Cache-Control:
+  no-store` on every `/api/` response). A page can't clear the browser's own cache, so an Emergency Reset
+  could not reach what a browser had cached. (docs/02)
+- **On an encrypted `loamnet` network, a browser on the host computer keeps no local copy** of messages. It
+  kept one unencrypted, beside the encrypted database. (docs/02, docs/14)
+- **Phones and browsers drop their cached messages once the network's retention has passed**, at start and
+  every minute, including while away from the host. Retention is judged by the host's clock, which the node
+  now reports to its members, since a member's clock and the host's can be hours apart off-grid. (docs/07)
+- **A member can hold at most 16 live connections, one address 64, and a node 1,024.** Further ones are
+  refused. When a save makes a network require encryption, connections that aren't encrypted are closed at
+  once. (docs/12)
+- **A ban holds across a restart of the host.** A banned member's sign-in was removed from the database but
+  not from memory, so after a restart their next visit made them a new, unbanned person. (docs/20)
+- **A banned member can't become admin** with an admin link or code. (docs/12)
+- **Android host: LOAM's own screen loads from `127.0.0.1`, never `localhost`,** which another app on the
+  phone could answer for. See "Before you update" for what this does to the host's own identity. (docs/04)
 
 ### Changed
+- **The admin page saves only what you changed.** It sent the whole form, so two admins, or an admin and the
+  terminal UI, could undo each other's changes. It also re-reads the settings when they change elsewhere.
 - **Addresses show the screen after `#/`** (`http://node/#/dm/<id>`, `#/admin?section=llm`). Old addresses
   and bookmarks still open.
 - **Developer Mode under `loamnet` needs an explicit non-production `NODE_ENV`.** `LOAM_DEV_MODE=1` alone no
   longer turns encryption off there. (docs/14)
-- **The desktop app runs on Electron 45.3.0.** (docs/24)
+- **The desktop app runs on Electron 45** (it was 44). (docs/24)
 - **A tagged release only ships a signed and notarized Mac app.** Without the Apple secrets a tag build fell
   back to ad-hoc signing, and an ad-hoc signed update can't read the keychain item the signed app made, which
   locks the host out of an encrypted network. A tag build now fails instead; a manual build keeps the
   fallback. The Android and desktop workflows also publish to a Release one after the other. (docs/24)
+- **Android host: a passphrase that creates a database is asked for twice,** so a typing slip can't lock a
+  new network. The recovery screens are translated, with the technical text behind Details. (docs/04)
 
 ### Fixed
+- **A join link opened in a tab that already shows LOAM now joins.** With addresses now ending in `#/…`,
+  pasting the whole link over the address changed only the part after `#`, the browser loaded nothing, and
+  the key was dropped. A laptop that typed a phone-hosted network's address first could not get in that way.
+- **A wrong clock no longer hides new messages on a network with a retention time.** Clients began removing
+  expired messages by their own clock. A host whose clock was behind (a Raspberry Pi has no battery clock)
+  made every new message look old, and it vanished from members' screens within a minute. (docs/07)
+- **A channel with hundreds of pictures no longer locks a member out for a minute.** Members who joined by
+  the code send every request through one address, one request per picture, and it shared the 300 a minute
+  meant for everything else. It now has its own, larger allowance. (docs/08)
+- **An Emergency Reset on a network set up only by `config.json` no longer stops that file being read.** The
+  reset stored the whole running configuration in the database, where it overrode every later edit to the
+  file: a new panic token or a stricter join setting was ignored. Only the sync pause is stored now. (docs/02)
+- **Android host: choosing a new encryption setting on a running network waits for the next start.** It took
+  effect at once: Ephemeral deleted the live database and its pictures, and Passphrase showed the host screen
+  as locked while the network kept serving. (docs/04)
+- **The on-device assistant no longer stops with "Context is full"** after a dozen or so turns: the chat's
+  history is cut to what the model can hold. (docs/06)
+- **`loamnet` says plainly when it can't open the database.** A wrong passphrase, or `--encrypt` on a
+  database that isn't encrypted, ended in a stack trace. Nothing on disk was changed then or is now. (docs/14)
 - **Photos from iPhones and Safari now send.** Safari, and so every browser on iOS, can't write WebP: asked
   for it, it hands back a PNG, which for a camera photo is far over the 256 KB limit, so nearly every photo
   failed. A picture now counts only when it comes back in the type asked for; where WebP is missing it is

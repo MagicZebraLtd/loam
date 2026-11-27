@@ -13,7 +13,7 @@
  * on `&`: so a route's own query must never use the names `k`, `a`, `i` or `l`.
  */
 import { createContext, type ComponentChildren } from "preact";
-import { useContext, useLayoutEffect, useMemo, useState } from "preact/hooks";
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 
 /** What `useLocation` hands a component: the current route and the way to change it. */
 export interface Location {
@@ -52,6 +52,18 @@ export function routeFromAddress(): string {
   return route;
 }
 
+/** The fragment parameters `main.tsx` reads once, at page load: a join link's key, admin, invite and link codes. */
+const STARTUP_FRAGMENT_PARAMS = ["k", "a", "i", "l"];
+
+/** Whether `hash` is a join link's fragment (`#k=…`, `#k=…&a=…`) rather than a route. */
+function carriesStartupParameter(hash: string): boolean {
+  if (hash.startsWith("#/")) {
+    return false;
+  }
+  const params = new URLSearchParams(hash.slice(1));
+  return STARTUP_FRAGMENT_PARAMS.some((name) => params.has(name));
+}
+
 /** Split a route into its path (trailing slashes dropped) and its query, the way `preact-iso` did. */
 function parseRouteUrl(url: string): { path: string; query: Record<string, string> } {
   try {
@@ -67,21 +79,44 @@ function parseRouteUrl(url: string): { path: string; query: Record<string, strin
  * Holds the current route for everything under it. Follows back, forward and a fragment edited by hand
  * (`popstate` and `hashchange`; one fragment change fires both, and the second changes nothing).
  */
-export function LocationProvider({ children }: { children?: ComponentChildren }) {
+export function LocationProvider({
+  children,
+  reload = () => window.location.reload(),
+}: {
+  children?: ComponentChildren;
+  /** Loads the page again. The browser's own by default; a test passes its own. */
+  reload?: () => void;
+}) {
   const [url, setUrl] = useState(routeFromAddress);
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
 
   useLayoutEffect(() => {
     /** Take the route from the address the browser moved to. */
     function follow(): void {
       setUrl(routeFromAddress());
     }
-    addEventListener("popstate", follow);
-    addEventListener("hashchange", follow);
+    /**
+     * The address moved while the page was open. A join link opened in a tab that already shows LOAM (pasted
+     * over the address, or tapped) changes only the fragment, so the browser loads nothing and `main.tsx`,
+     * which reads `#k=` and the other start-up parameters once at page load, never sees them. Load the page
+     * again and leave the fragment for it. Only a move does this, never the first look at the address below,
+     * so a fragment the start-up code left in place can't reload the page in a loop.
+     */
+    function moved(): void {
+      if (carriesStartupParameter(window.location.hash)) {
+        reloadRef.current();
+        return;
+      }
+      follow();
+    }
+    addEventListener("popstate", moved);
+    addEventListener("hashchange", moved);
     // The address may have moved between the first render and this subscription.
     follow();
     return () => {
-      removeEventListener("popstate", follow);
-      removeEventListener("hashchange", follow);
+      removeEventListener("popstate", moved);
+      removeEventListener("hashchange", moved);
     };
   }, []);
 

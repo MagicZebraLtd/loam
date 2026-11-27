@@ -51,7 +51,10 @@ That browser is an ordinary tab no launcher injects into, so the node itself tel
 on an encrypted network (`--encrypt`, any mode) `/api/bootstrap` answers a loopback caller with
 `hostNoLocalCache: true`, and the client then keeps no IndexedDB, as the desktop and Android hosts' own
 windows do under `window.__loamHostNoLocalCache` (review 2026-11-07 F-029). It remembers the hint in
-localStorage, so the next page load refuses before it hydrates, and deletes a copy it held from before. On
+localStorage, so the next page load refuses before it hydrates, and deletes a copy it held from before at that same
+address. The link the terminal opens moved from `localhost` to `127.0.0.1`, so a copy an older version left
+under `localhost` is not reached that way: clear the site data for `localhost` in the browser's settings, and
+don't open that address to do it (another account on the computer can answer for `localhost`). On
 an unencrypted network the browser caches as any joiner's does (the database beside it is in the clear
 anyway). The browser's own history and address-bar suggestions are outside LOAM's reach.
 

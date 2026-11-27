@@ -297,7 +297,8 @@
               </div>
               <p class="fineprint">
                 The Mac app is signed and notarized by Apple. The Windows installer isn't signed yet, so Windows asks
-                you to confirm it once. Windows and Linux builds are for 64-bit Intel or AMD computers.
+                you to confirm it once. Windows and Linux builds are for 64-bit Intel or AMD computers. The Mac app needs
+                macOS 13 or newer and the Windows app needs Windows 10 or newer.
               </p>
             </article>
           </div>
@@ -420,7 +421,7 @@
               <p>
                 A phone hotspot admits a limited number of devices, set by the phone. For a larger group,
                 host from a laptop or Raspberry Pi on a router. To join two LOAM networks, the host shows a
-                single-use link code, the other host scans it, and their public channels join up. Direct
+                single-use link code, the other phone scans it during setup, and their public channels join up. Direct
                 messages and private channels stay where they are.
               </p>
             </div>
@@ -465,7 +466,7 @@
             </li>
             <li class="feature reveal">
               <h3>An assistant, if you want one</h3>
-              <p>Run a small AI model on the host phone, use Ollama or another model server on a computer nearby, or connect an online service such as OpenRouter or OpenAI. An online service gets the messages people write to the assistant, and both the admin page and the assistant's chat say so. Off unless you turn it on.</p>
+              <p>Run a small AI model on the host phone, use Ollama or another model server on a computer nearby, or connect an online service such as OpenRouter or OpenAI. An online service gets the messages people write to the assistant, and both the admin page and the assistant's chat say so. When the host is a phone, a model server on another computer has to use https. Off unless you turn it on.</p>
             </li>
           </ul>
         </div>
@@ -494,7 +495,7 @@
             </li>
             <li>
               <strong>Encrypted connections</strong>
-              <span>Joining by the code encrypts everything between your phone and the host, pictures and files included, so someone listening on the Wi-Fi can't read it.</span>
+              <span>Joining by the code encrypts what you post and receive, pictures and files included, so someone listening on the Wi-Fi can't read it. The network's name and public settings still load unencrypted.</span>
             </li>
             <li>
               <strong>Encrypted storage</strong>
@@ -502,7 +503,7 @@
             </li>
             <li>
               <strong>Emergency reset</strong>
-              <span>Press and hold to erase the network on the host and tell every connected phone to clear its copy. The Android app then closes, ready to start again. A network you linked keeps its own copy of the public channels.</span>
+              <span>Press and hold to erase the network on the host and tell every connected phone to clear its copy. The Android app then closes, ready to start again. A network you linked keeps its own copy of the public channels, and the <a href="/privacy">privacy policy</a> lists what else a reset can't reach.</span>
             </li>
             <li>
               <strong>For adults, and here's why</strong>
@@ -549,7 +550,8 @@
               <summary>Does everyone need to install LOAM?</summary>
               <p>
                 No, only the host. Everyone else scans the code and LOAM opens in their browser. Any phone, tablet
-                or laptop with a browser can join, iPhones included.
+                or laptop with a browser can join, iPhones included. A laptop that can't scan opens the join link
+                the host shares.
               </p>
             </details>
             <details class="faq-item" id="faq-internet">
@@ -565,7 +567,7 @@
             <details class="faq-item" id="faq-encryption">
               <summary>Is it end-to-end encrypted?</summary>
               <p>
-                No. Joining by the code encrypts everything between your phone and the host, pictures and files
+                No. Joining by the code encrypts what you post and receive, pictures and files
                 included, so someone else on the Wi-Fi can't read it. The host can, the same way a chat server can. That's what lets the host
                 moderate, and it can keep messages encrypted on disk under a key that stays on that device. So the
                 person you trust is whoever runs the host.
@@ -577,7 +579,7 @@
                 less. On a network that doesn't require encrypted connections, their sign-in cookie travels
                 unencrypted, so anyone listening on the Wi-Fi can copy it, then read their messages and send
                 messages as them. Their pictures and files travel unencrypted too.
-                Scanning the code keeps the cookie, pictures and files encrypted, and a host that requires encrypted connections asks them to
+                Scanning the code keeps the sign-in, pictures and files encrypted, and a host that requires encrypted connections asks them to
                 scan it. The <a href="https://github.com/MagicZebraLtd/loam/blob/master/docs/08-transport-security.md" rel="noreferrer">security notes</a> have the details.
               </p>
             </details>

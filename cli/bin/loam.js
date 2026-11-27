@@ -422,6 +422,29 @@ try {
     console.error(`\n${error.message}`);
     process.exit(1);
   }
+  // The database is there but didn't open: with --encrypt, nearly always a mistyped passphrase. The server's
+  // own message is written for the phone and desktop apps, so say it in this command's terms. Nothing was
+  // changed on disk in either case.
+  if (error?.code === "db_encryption_unreadable") {
+    console.error(
+      `\nLOAM couldn't open the database in ${dataDir}. Nothing was changed.\n` +
+        (encrypted
+          ? "Check the passphrase and start again. Without it the messages can't be read: to start a new\n" +
+            "network instead, move that folder aside or pass another --data-dir."
+          : "The file may be damaged, or encrypted (start with --encrypt and its passphrase). To start a new\n" +
+            "network instead, move that folder aside or pass another --data-dir."),
+    );
+    process.exit(1);
+  }
+  // An unencrypted database where --encrypt was asked for. LOAM won't serve it as if it were encrypted.
+  if (error?.code === "db_encryption_plaintext_unconverted") {
+    console.error(
+      `\nThe database in ${dataDir} is not encrypted, so LOAM won't open it with --encrypt. Nothing was changed.\n` +
+        "Start without --encrypt (and without LOAM_DB_KEY) to keep using it, or pass another --data-dir for\n" +
+        "a new encrypted network.",
+    );
+    process.exit(1);
+  }
   throw error;
 } finally {
   delete process.env.LOAM_DB_KEY;

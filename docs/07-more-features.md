@@ -44,10 +44,18 @@ its own initiative and a top-level decision, not a quick add.
 > (review 2026-11-07 F-030): `NetworkConfig.messageTtlMs` carries the effective node TTL, the client
 > remembers it in its local store (`lib/retention.ts`), and drops held messages past min(channel TTL, node
 > TTL), with the replies and reactions the node deletes alongside them, at start (before anything renders,
-> even offline), whenever the TTL or a channel changes, and every 60 s. Its "now" is the later of the device
-> clock and the newest server stamp it holds, which catches a slow clock up to the last message the device
-> saw; a device offline with a slow clock can still keep a message past the TTL by up to how slow it runs. A
-> fast clock prunes early. A message still marked as streaming is spared for 15 minutes at most, so a
+> even offline), whenever the TTL or a channel changes, and every 60 s. Its "now" is the node's clock as the device
+> estimates it: `/api/config` carries `serverTime` (not `/api/bootstrap`, which is never sealed: a member who
+> joined by the code takes the time only from a sealed answer), the client keeps the difference from its own
+> clock (`noteNodeClock`) and adds it to its own clock (`nodeNow`). The difference is remembered with the TTL
+> for an offline start, where it is used only if it puts the node behind the device: a remembered one is as
+> old as the last visit, and if the device's clock has been corrected since, one that put the node ahead
+> would expire messages early. Every `createdAt` is the node's stamp, and a host's clock is often wrong off-grid (a Raspberry
+> Pi has no battery clock): judged by the device's own clock, a host two hours behind made every new message
+> look two hours old, and a one-hour retention removed it from the screen as it arrived. The later of that
+> estimate and the newest node stamp held is used. Before the node has reported its clock (an older node, an
+> offline start with nothing remembered) the estimate is the device's own clock, where a slow one can keep a
+> message past the TTL by up to how slow it runs and a fast one prunes early. A message still marked as streaming is spared for 15 minutes at most, so a
 > snapshot from before the device lost touch still expires. A device that never opens LOAM again keeps its copy until it does.
 
 A per-channel/global `retentionMs` config + a periodic reaper (`DELETE FROM messages WHERE created_at <

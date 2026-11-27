@@ -226,8 +226,10 @@ describe("MessageComposer", () => {
       render(composer("You are timed out"), host);
       await tick();
       render(composer(), host);
-      // Effects run after paint.
+      // Effects run after paint: Preact's frame timer schedules them and a second, zero-delay timer runs them.
+      // On a stalled machine the frame timer and this wait come due together, so take one more turn.
       await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
       expect(textarea.value).toBe("line one\nline two\nline three");

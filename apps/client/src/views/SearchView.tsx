@@ -11,7 +11,7 @@ import { t } from "../i18n";
 import { fetchJson } from "../lib/api";
 import { markdownToPlainText } from "../lib/markdown";
 import { bodyFor, displayTime } from "../lib/message-format";
-import { RETENTION_PRUNE_INTERVAL_MS } from "../lib/retention";
+import { nodeNow, RETENTION_PRUNE_INTERVAL_MS } from "../lib/retention";
 import {
   applySearchChange,
   pruneExpiredResults,
@@ -110,7 +110,7 @@ export function SearchView({
   /** `rows` less what has passed its retention now. */
   function pruned(rows: Message[]): Message[] {
     const retention = retentionRef.current;
-    return pruneExpiredResults(rows, retention.channels, retention.nodeTtlMs, Date.now(), retention.heldMessages);
+    return pruneExpiredResults(rows, retention.channels, retention.nodeTtlMs, nodeNow(), retention.heldMessages);
   }
 
   /**

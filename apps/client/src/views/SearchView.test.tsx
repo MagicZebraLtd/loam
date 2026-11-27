@@ -384,18 +384,18 @@ describe("SearchView keeps its results in step with the app", () => {
   });
 
   it("stops listening when it unmounts", async () => {
-    // Preact 11 runs an unmounted component's effect cleanups after the next paint (see test-setup.ts), so
-    // let the previous test's finish first, and this one's after it unmounts.
-    const afterPaint = (): Promise<unknown> => new Promise((resolve) => setTimeout(resolve, 60));
-    await afterPaint();
-    expect(subscriptions.active).toBe(0);
+    // Preact 11 runs an unmounted component's effect cleanups after the next paint (see test-setup.ts). A
+    // busy machine can run that later than any fixed wait, so wait for the count itself: first for the
+    // previous test's cleanups, then for this one's.
+    const noneListening = (): Promise<void> =>
+      vi.waitFor(() => expect(subscriptions.active).toBe(0), { timeout: 5000 });
+    await noneListening();
     mount();
     await flush();
     expect(subscriptions.active).toBe(1);
 
     unmountAll();
-    await afterPaint();
 
-    expect(subscriptions.active).toBe(0);
+    await noneListening();
   });
 });
