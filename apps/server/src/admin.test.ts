@@ -252,6 +252,30 @@ describe("host-device admin bootstrap", () => {
     expect((await claim(second.cookie, "guess")).statusCode).toBe(403);
   });
 
+  it("hostDevice: a save warns about the stored bootstrap setting only when that save changed it", async () => {
+    const logs: string[] = [];
+    const app = await makeApp(undefined, {
+      hostToken: HOST_TOKEN,
+      logger: true,
+      logStream: { write: (line) => void logs.push(line) },
+    });
+    const admin = await newSession(app);
+    expect((await claim(app, admin.cookie, HOST_TOKEN)).statusCode).toBe(200);
+    const save = (payload: Record<string, unknown>) =>
+      app.server.inject({ method: "PATCH", url: "/api/admin/config", headers: { cookie: admin.cookie }, payload });
+    const warnings = () => logs.filter((line) => line.includes("takes effect only where no host token is minted"));
+
+    // Renaming the network says nothing about who becomes admin.
+    expect((await save({ node: { name: "Riverside" } })).statusCode).toBe(200);
+    expect(warnings()).toHaveLength(0);
+
+    expect((await save({ admin: { bootstrap: "setupCode" } })).statusCode).toBe(200);
+    expect(warnings()).toHaveLength(1);
+
+    expect((await save({ node: { name: "Riverside Relief" } })).statusCode).toBe(200);
+    expect(warnings()).toHaveLength(1);
+  });
+
   it("hostDevice: the host token counts only from loopback; from a LAN address it is a wrong secret", async () => {
     // The host phone's notifications go to whoever presented the token (`hostDeviceUserId`): a DM to that
     // person reaches this hook, so an empty list proves the LAN claim did not make them the host's person.

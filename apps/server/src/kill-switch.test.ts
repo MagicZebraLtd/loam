@@ -420,6 +420,69 @@ describe("kill switch", () => {
     expect(bodiesInMainFileAlone("after.db")).not.toContain("ROLLED_BACK_BY_A_POWER_CUT");
   });
 
+  // A node set up only by config.json has no stored config, so the file is what it reads at every start. The
+  // reset stored the whole running config to keep sync paused, and from then on edits to the file (a new
+  // panic token after the old one was used, a stricter join policy) were ignored without a word.
+  it("keeps reading config.json after a reset on a node that never saved its settings", async () => {
+    const { app, dataDir } = await makeApp({ killSwitch: { enabled: true }, node: { name: "Before the reset" } });
+    const admin = await newSession(app);
+    expect(app.store.getConfigValue("config")).toBeUndefined();
+
+    const reset = await app.server.inject({
+      method: "POST",
+      url: "/api/admin/kill-switch",
+      headers: { cookie: admin.cookie },
+      payload: { confirm: "wipe" },
+    });
+    expect(reset.statusCode).toBe(200);
+    // Sync was off, so there is nothing to keep paused and nothing is stored.
+    expect(app.store.getConfigValue("config")).toBeUndefined();
+
+    writeFileSync(
+      join(dataDir, "config.json"),
+      JSON.stringify({ killSwitch: { enabled: true }, node: { name: "Renamed in config.json" }, access: { joinPolicy: "approval" } }),
+    );
+    const next = await reopenApp(app, dataDir);
+    const bootstrap = (await next.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as {
+      networkConfig: { nodeName: string; joinPolicy: string };
+    };
+    expect(bootstrap.networkConfig.nodeName).toBe("Renamed in config.json");
+    expect(bootstrap.networkConfig.joinPolicy).toBe("approval");
+  });
+
+  it("stores only the sync pause after a reset on such a node, so sync stays off and the file still rules the rest", async () => {
+    const fileConfig = {
+      killSwitch: { enabled: true },
+      node: { name: "Before the reset" },
+      sync: { enabled: true, peers: [{ url: "http://192.0.2.10:3000" }] },
+    };
+    const { app, dataDir } = await makeApp(fileConfig);
+    const admin = await newSession(app);
+    expect(app.store.getConfigValue("config")).toBeUndefined();
+
+    const reset = await app.server.inject({
+      method: "POST",
+      url: "/api/admin/kill-switch",
+      headers: { cookie: admin.cookie },
+      payload: { confirm: "wipe" },
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(JSON.parse(app.store.getConfigValue("config") ?? "null")).toEqual({ sync: { enabled: false } });
+
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({ ...fileConfig, node: { name: "Renamed in config.json" } }));
+    const next = await reopenApp(app, dataDir);
+    const bootstrap = (await next.server.inject({ method: "GET", url: "/api/bootstrap" })).json() as {
+      networkConfig: { nodeName: string };
+    };
+    expect(bootstrap.networkConfig.nodeName).toBe("Renamed in config.json");
+    const nextAdmin = await newSession(next);
+    const stored = (
+      await next.server.inject({ method: "GET", url: "/api/admin/config", headers: { cookie: nextAdmin.cookie } })
+    ).json() as { sync: { enabled: boolean; peers: unknown[] } };
+    expect(stored.sync.enabled).toBe(false);
+    expect(stored.sync.peers).toHaveLength(1);
+  });
+
   it("leaves no pre-reset host key in the checkpointed plaintext file, so a power cut after the reset cannot bring the old join QR back", async () => {
     const { app, dataDir } = await makeApp({ killSwitch: { enabled: true } });
     const admin = await newSession(app);

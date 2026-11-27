@@ -80,10 +80,11 @@ export function createKillSwitch(ctx: AppContext) {
    * The durable note it leaves is what the admin Sync panel and every later boot report, until an admin turns
    * sync on again.
    */
-  function pauseSyncForReset(): void {
+  /** @returns whether sync was on, and so was turned off here */
+  function pauseSyncForReset(): boolean {
     const sync = ctx.appConfig.sync;
     if (!sync.enabled) {
-      return;
+      return false;
     }
     ctx.appConfig = ctx.lifecycle.withSyncPausedByReset(ctx.appConfig);
     if (!ctx.lifecycle.noteSyncPausedByReset(sync.token !== undefined)) {
@@ -93,6 +94,7 @@ export function createKillSwitch(ctx: AppContext) {
       "Kill switch: sync turned off (peers kept), so the linked networks can't hand the wiped public posts back. " +
         "They keep their own copies; turn sync on again from the admin Sync panel when you choose.",
     );
+    return true;
   }
 
   /** The actual kill-switch work, split out so {@link executeKillSwitch} can guarantee `wipeInProgress`
@@ -112,7 +114,7 @@ export function createKillSwitch(ctx: AppContext) {
     notifyHostOfReset();
     // Sync goes off before anything is deleted, in every branch below (they persist the paused config or carry
     // it in the wipe journal): the wipe empties the tombstones and provenance that would refuse a re-import.
-    pauseSyncForReset();
+    const syncPausedNow = pauseSyncForReset();
     // Whether this run committed the `{ phase: "delete-pending", config }` wipe journal to disk. EVERY branch
     // writes it before its first destructive step, so a `wipeAll()` or reopen that throws can never leave the
     // node locked in memory only, with the next boot serving the original messages. It decides what an
@@ -430,10 +432,17 @@ export function createKillSwitch(ctx: AppContext) {
               "finish it.",
           );
         }
+        const hadStoredConfig = ctx.store.getConfigValue("config") !== undefined;
         ctx.store.wipeAll();
         // wipeAll keeps the `config` row, which still has sync on: store the paused config (pauseSyncForReset)
-        // in the same file before the checkpoint below makes both durable.
-        ctx.store.setConfigValue("config", JSON.stringify(ctx.appConfig));
+        // in the same file before the checkpoint below makes both durable. A node that never saved its
+        // settings has no row and reads config.json at every start. Storing the whole running config there
+        // would make every later edit to that file a no-op (the row wins), so it gets the pause alone.
+        if (hadStoredConfig) {
+          ctx.store.setConfigValue("config", JSON.stringify(ctx.appConfig));
+        } else if (syncPausedNow) {
+          ctx.store.setConfigValue("config", JSON.stringify({ sync: { enabled: false } }));
+        }
         // `secure_delete` zeroed what wipeAll just deleted, but pages an older build freed without it (rows
         // deleted before this node was upgraded) still hold their content until reused. VACUUM rewrites the
         // file from the live rows alone, so none of those pages survive the checkpoint below either.

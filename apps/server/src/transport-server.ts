@@ -1063,6 +1063,14 @@ export async function registerTransportHooks(ctx: AppContext): Promise<void> {
   });
 }
 
+/**
+ * The tunnel's own budget per address. A member who joined by the code sends every request through it, one
+ * per picture included, so it has to hold what the routes behind it allow for themselves (600 attachment and
+ * 300 avatar reads a minute, `routes-users.ts`) with the 300 every other request shares on top. Those inner
+ * routes still count their own caps; requests to the rest are limited by this number alone.
+ */
+export const TUNNEL_REQUESTS_PER_MINUTE = 1200;
+
 /** Register the handshake, sealed resume, logout, and path-hiding tunnel routes. */
 export function registerTransportRoutes(ctx: AppContext): void {
   /**
@@ -1347,7 +1355,11 @@ export function registerTransportRoutes(ctx: AppContext): void {
   // `onSend` hook then seals, so status, headers, and body (base64 → binary images tunnel losslessly)
   // are all ciphertext on the wire. Replay protection rides the same `{ s, b }` envelope as any sealed
   // request (the `s` is checked in preValidation before this handler runs).
-  ctx.server.post("/api/transport/tunnel", { bodyLimit: ctx.LARGE_BODY_LIMIT }, async (request, reply) => {
+  const tunnelRoute = {
+    bodyLimit: ctx.LARGE_BODY_LIMIT,
+    config: { rateLimit: { max: TUNNEL_REQUESTS_PER_MINUTE, timeWindow: "1 minute" } },
+  };
+  ctx.server.post("/api/transport/tunnel", tunnelRoute, async (request, reply) => {
     // Only a request whose body was actually sealed (so preValidation resolved a session key) may
     // tunnel — refuse a plaintext hit so the endpoint can never dispatch on an attacker-supplied path
     // outside an authenticated session.

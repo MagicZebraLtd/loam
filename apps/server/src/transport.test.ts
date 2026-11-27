@@ -21,6 +21,7 @@ import {
   teardownApps,
   tunnelInner,
 } from "./test-support/app-harness.js";
+import { TUNNEL_REQUESTS_PER_MINUTE } from "./transport-server.js";
 
 afterEach(teardownApps);
 
@@ -837,6 +838,28 @@ describe("transport encryption transparent round-trip", () => {
     const desc = JSON.parse(opened as string) as { status: number; contentType: string; bodyB64: string };
     return { status: desc.status, contentType: desc.contentType, body: Buffer.from(desc.bodyB64, "base64") };
   }
+
+  // A member who joined by the code sends everything through the tunnel, pictures included: one request
+  // each. Under the 300 a minute every other route shares, opening a channel with a few hundred pictures used
+  // up the minute and then refused that member's own posts.
+  it("gives the tunnel a budget of its own, above the one the other routes share", async () => {
+    const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
+    const session = await openSession(app);
+    await resumeIdentity(app, session, 1);
+
+    let seq = 2;
+    for (let sent = 0; sent < 350; sent += 1) {
+      const res = await tunnel(app, session, seq, { m: "GET", p: "/api/channels" });
+      expect(res.statusCode, `tunnelled request ${sent + 1}`).toBe(200);
+      seq += 1;
+    }
+    // The budget is still a limit.
+    for (let sent = 350; sent < TUNNEL_REQUESTS_PER_MINUTE; sent += 1) {
+      await tunnel(app, session, seq, { m: "GET", p: "/api/channels" });
+      seq += 1;
+    }
+    expect((await tunnel(app, session, seq, { m: "GET", p: "/api/channels" })).statusCode).toBe(429);
+  }, 60_000);
 
   it("tunnels a GET so the real path and response never appear on the wire", async () => {
     const app = await makeApp({ security: { profile: "custom", transportEncryption: "required" } });
